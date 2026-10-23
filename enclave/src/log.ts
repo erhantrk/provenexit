@@ -48,7 +48,7 @@ const stdoutSink: Sink = (line) => {
 export class Logger {
   readonly #tag: string;
   readonly #sink: Sink;
-  constructor(tag: "plr-router" | "plr-host", sink: Sink = stdoutSink) {
+  constructor(tag: "plr-router" | "plr-host" | "plr-vpn", sink: Sink = stdoutSink) {
     this.#tag = tag;
     this.#sink = sink;
   }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stops the stack started by scripts/dev-up.sh (routers, mock TDX hosts, LLMs, near-sandbox) and removes its
+# Stops the stack started by scripts/dev-up.sh (routers, VPN exits, mock TDX hosts, LLMs, near-sandbox) and removes its
 # run state. Signal-free: it drops a stop file that the stack process polls.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -12,6 +12,9 @@
  *
  * Proxy log lines (`plr-attack[<kind>]: …`) are content-free except where the attack itself succeeds in
  * stealing plaintext — which the scenarios assert never happens.
+ *
+ * The attestation attacks (`attestationTamperer`) and the HTTP helpers are shared with the VPN-exit attackers
+ * in ./vpn-attacks.ts (SPEC-VPN §9.3).
  */
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -32,10 +35,10 @@ export interface AttackProxy {
 
 /** Bounds: the router accepts ≤ 1 MiB requests; attestation responses are a few KiB. */
 const MAX_REQ = 2 * 1024 * 1024;
-const MAX_ATTESTATION = 256 * 1024;
+export const MAX_ATTESTATION = 256 * 1024;
 const HOP_BY_HOP = new Set(["connection", "keep-alive", "transfer-encoding", "upgrade", "proxy-connection", "te", "trailer", "host", "content-length"]);
 
-function readAll(stream: NodeJS.ReadableStream, max: number): Promise<Buffer> {
+export function readAll(stream: NodeJS.ReadableStream, max: number): Promise<Buffer> {
   return new Promise((ok, fail) => {
     const chunks: Buffer[] = [];
     let n = 0;
@@ -52,7 +55,7 @@ function readAll(stream: NodeJS.ReadableStream, max: number): Promise<Buffer> {
   });
 }
 
-function fwdHeaders(h: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
+export function fwdHeaders(h: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
   const out: http.OutgoingHttpHeaders = {};
   for (const [k, v] of Object.entries(h)) if (v !== undefined && !HOP_BY_HOP.has(k.toLowerCase())) out[k] = v;
   return out;
@@ -92,18 +95,18 @@ class SseSplitter {
   }
 }
 
-interface Upstream {
+export interface Upstream {
   host: string;
   port: number;
 }
 
-function upstreamOf(url: string): Upstream {
+export function upstreamOf(url: string): Upstream {
   const u = new URL(url);
   if (u.protocol !== "http:") throw new Error("attack proxy: upstream must be http");
   return { host: u.hostname.replace(/^\[|\]$/g, ""), port: Number(u.port || 80) };
 }
 
-function request(up: Upstream, method: string, path: string, headers: http.OutgoingHttpHeaders, body: Buffer | null): Promise<http.IncomingMessage> {
+export function request(up: Upstream, method: string, path: string, headers: http.OutgoingHttpHeaders, body: Buffer | null): Promise<http.IncomingMessage> {
   return new Promise((ok, fail) => {
     const req = http.request({ host: up.host, port: up.port, method, path, headers, agent: false }, ok);
     req.on("error", fail);
@@ -111,23 +114,29 @@ function request(up: Upstream, method: string, path: string, headers: http.Outgo
   });
 }
 
-/**
- * Starts an attacking proxy for `kind` in front of `upstreamUrl` on 127.0.0.1 (ephemeral port).
- * @param log receives content-free event lines
- */
-export async function startAttackProxy(kind: AttackKind, upstreamUrl: string, log: (line: string) => void): Promise<AttackProxy> {
-  const up = upstreamOf(upstreamUrl);
-  const say = (s: string) => log(`plr-attack[${kind}]: ${s}\n`);
+/** Attestation-response attacks shared by the router and the VPN-exit proxies. */
+export type AttestationAttack = "mitm-key" | "replay-quote" | "none";
 
-  // mitm-key state: the attacker's key and the genuine router keys it last saw.
+export interface AttestationTamperer {
+  /** Serves `GET /v1/attestation…` (forwarded upstream, rewritten / replayed according to the attack). */
+  handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void>;
+  /** mitm-key: the attacker's X25519 key pair. */
+  readonly mitm: { sk: Uint8Array; pk: Uint8Array };
+  /** mitm-key: the genuine (x25519, ed25519) keys of the last swapped response, if any. */
+  realKeys(): { xp: Uint8Array; ep: Uint8Array } | null;
+}
+
+/**
+ * `mitm-key` rewrites `x25519` in 200 attestation responses to the attacker's key; `replay-quote` caches the
+ * first 200 response and serves it for every later nonce; `none` forwards unchanged.
+ */
+export function attestationTamperer(kind: AttestationAttack, up: Upstream, say: (s: string) => void): AttestationTamperer {
   const mitmSk = x25519.utils.randomSecretKey();
   const mitmPk = x25519.getPublicKey(mitmSk);
-  let realXp: Uint8Array | null = null;
-  let realEp: Uint8Array | null = null;
-  // replay-quote state
+  let real: { xp: Uint8Array; ep: Uint8Array } | null = null;
   let cached: { status: number; headers: http.OutgoingHttpHeaders; body: Buffer } | null = null;
 
-  async function handleAttestation(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     if (kind === "replay-quote" && cached) {
       say("replayed cached attestation");
       res.writeHead(cached.status, { ...cached.headers, "content-length": String(cached.body.length) });
@@ -140,8 +149,7 @@ export async function startAttackProxy(kind: AttackKind, upstreamUrl: string, lo
     if (r.statusCode === 200 && kind === "mitm-key") {
       const o = JSON.parse(body.toString("utf8")) as Record<string, unknown>;
       if (isHex(o.x25519, 32) && isHex(o.ed25519, 32)) {
-        realXp = fromHex(o.x25519, 32);
-        realEp = fromHex(o.ed25519, 32);
+        real = { xp: fromHex(o.x25519, 32), ep: fromHex(o.ed25519, 32) };
         o.x25519 = toHex(mitmPk);
         body = Buffer.from(JSON.stringify(o));
         say("swapped x25519 in attestation response");
@@ -155,6 +163,20 @@ export async function startAttackProxy(kind: AttackKind, upstreamUrl: string, lo
     res.end(body);
   }
 
+  return { handle, mitm: { sk: mitmSk, pk: mitmPk }, realKeys: () => real };
+}
+
+/**
+ * Starts an attacking proxy for `kind` in front of `upstreamUrl` on 127.0.0.1 (ephemeral port).
+ * @param log receives content-free event lines
+ */
+export async function startAttackProxy(kind: AttackKind, upstreamUrl: string, log: (line: string) => void): Promise<AttackProxy> {
+  const up = upstreamOf(upstreamUrl);
+  const say = (s: string) => log(`plr-attack[${kind}]: ${s}\n`);
+  const att = attestationTamperer(kind === "mitm-key" || kind === "replay-quote" ? kind : "none", up, say);
+  const mitmSk = att.mitm.sk;
+  const mitmPk = att.mitm.pk;
+
   /** mitm-key: try to open the client's request with the attacker key; relay re-encrypted if it worked. */
   async function handleMitmChat(req: http.IncomingMessage, res: http.ServerResponse, body: Buffer): Promise<void> {
     let env: { v: number; att_nonce: string; epk: string; ct: string };
@@ -163,21 +185,22 @@ export async function startAttackProxy(kind: AttackKind, upstreamUrl: string, lo
     } catch {
       return void pipeThrough(req, res, body);
     }
-    if (!realXp || !realEp || !isHex(env.att_nonce, 32) || !isHex(env.epk, 32) || typeof env.ct !== "string") {
+    const real = att.realKeys();
+    if (!real || !isHex(env.att_nonce, 32) || !isHex(env.epk, 32) || typeof env.ct !== "string") {
       say("chat request not decryptable (no attestation seen)");
       return void pipeThrough(req, res, body);
     }
     const attNonce = fromHex(env.att_nonce, 32);
     let opened: ReturnType<typeof serverOpen>;
     try {
-      opened = serverOpen({ xs: mitmSk, xp: mitmPk, ep: realEp, attNonce, epk: fromHex(env.epk, 32), ct: Buffer.from(env.ct, "base64") });
+      opened = serverOpen({ xs: mitmSk, xp: mitmPk, ep: real.ep, attNonce, epk: fromHex(env.epk, 32), ct: Buffer.from(env.ct, "base64") });
     } catch {
       say("could not decrypt the request with the attacker key; forwarding unchanged");
       return void pipeThrough(req, res, body);
     }
     // The attack worked: this is what a client without attestation checks would leak.
     say(`STOLEN prompt: ${Buffer.from(opened.plaintext).toString("utf8")}`);
-    const sealed = clientSeal({ xp: realXp, ep: realEp, attNonce, plaintext: opened.plaintext });
+    const sealed = clientSeal({ xp: real.xp, ep: real.ep, attNonce, plaintext: opened.plaintext });
     const fwd = Buffer.from(JSON.stringify({ v: 1, att_nonce: env.att_nonce, epk: toHex(sealed.epk), ct: Buffer.from(sealed.ct).toString("base64") }));
     const r = await request(up, "POST", req.url!, { ...fwdHeaders(req.headers), "content-type": "application/json", "content-length": String(fwd.length) }, fwd);
     res.writeHead(r.statusCode ?? 502, fwdHeaders(r.headers));
@@ -261,7 +284,7 @@ export async function startAttackProxy(kind: AttackKind, upstreamUrl: string, lo
     void (async () => {
       if (req.method === "GET" && path === "/v1/attestation") {
         req.resume();
-        return handleAttestation(req, res);
+        return att.handle(req, res);
       }
       const body = req.method === "POST" ? await readAll(req, MAX_REQ) : (req.resume(), null);
       if (req.method === "POST" && path === "/v1/private/chat" && body) {

@@ -3,7 +3,7 @@
  * registry, then sends an end-to-end encrypted chat request and authenticates the streamed reply and its
  * signed receipt. Fails closed: any failure throws `PlrError(code)` and returns no partial answer.
  */
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   FrameReader,
   MockVerifier,
@@ -15,7 +15,6 @@ import {
   isValidP256Pub,
   parseJsonIntegers,
   toHex,
-  verifyAttestation,
   verifyReceipt,
   fromHex,
   type AttestationBundle,
@@ -31,6 +30,7 @@ import { BodyTooLargeError, Deadline, fail, parseJsonBytes, readBodyLimited, rou
 import { SseParser } from "./sse.js";
 import { verifyReceiptAnchored, type AnchoredReceipt } from "./anchored.js";
 import { isPlainObject, raceAbort } from "./util.js";
+import { AttestationCache, type AttestationSession } from "./attestation.js";
 
 export interface ChatResult {
   content: string;
@@ -79,13 +79,6 @@ const MAX_STREAM_BYTES = 64 * 1024 * 1024;
 const MAX_FRAMES = 1_000_000;
 const DEFAULT_TIMEOUTS: PrivateClientTimeouts = { attestMs: 15_000, idleMs: 120_000, requestMs: 600_000 };
 
-interface Session {
-  verified: VerifiedRouter;
-  attNonce: Uint8Array;
-  at: number;
-  routerBase: string;
-}
-
 /** Wraps an error thrown by the caller's `onDelta` so it is re-thrown unchanged. */
 class CallbackError {
   constructor(readonly error: unknown) {}
@@ -117,13 +110,10 @@ function timeoutValue(v: unknown, dflt: number): number {
 export class PrivateClient {
   readonly routerUrl: string;
   readonly registry: RegistryReader;
-  readonly #trustedRoot: Uint8Array;
   readonly #verifier: QuoteVerifier;
   readonly #fetch: typeof fetch;
   readonly #timeouts: PrivateClientTimeouts;
-  readonly #clock: () => number;
-  #session: Session | undefined;
-  #pending: Promise<Session> | undefined;
+  readonly #attestation: AttestationCache;
 
   constructor(o: PrivateClientOptions) {
     if (!isPlainObject(o)) fail("E_BAD_INPUT", "options required");
@@ -132,8 +122,8 @@ export class PrivateClient {
     if (typeof r !== "object" || r === null) fail("E_BAD_INPUT", "registry required");
     this.registry = o.registry;
     if (!isValidP256Pub(o.trustedRoot)) fail("E_ROOT_UNTRUSTED", "trustedRoot must be a valid 64-byte P-256 key");
-    this.#trustedRoot = o.trustedRoot.slice();
-    this.#verifier = o.verifier ?? new MockVerifier(this.#trustedRoot);
+    const trustedRoot = o.trustedRoot.slice();
+    this.#verifier = o.verifier ?? new MockVerifier(trustedRoot);
     const f = o.fetch ?? globalThis.fetch;
     if (typeof f !== "function") fail("E_BAD_INPUT", "fetch unavailable");
     this.#fetch = f;
@@ -143,7 +133,14 @@ export class PrivateClient {
       idleMs: timeoutValue(t.idleMs, DEFAULT_TIMEOUTS.idleMs),
       requestMs: timeoutValue(t.requestMs, DEFAULT_TIMEOUTS.requestMs),
     };
-    this.#clock = o.clock ?? (() => performance.now());
+    this.#attestation = new AttestationCache({
+      fetchBundle: (nonce) => this.#fetchAttestation(nonce),
+      verifier: this.#verifier,
+      registry: this.registry,
+      trustedRoot,
+      ttlMs: VERIFIED_TTL_MS,
+      clock: o.clock ?? (() => performance.now()),
+    });
   }
 
   /** Root kind of the configured verifier ("MOCK" | "INTEL"). */
@@ -153,12 +150,12 @@ export class PrivateClient {
 
   /** Fetches and verifies a fresh attestation (new random nonce every call). @throws PlrError */
   async attest(): Promise<VerifiedRouter> {
-    return (await this.#attest()).verified;
+    return (await this.#attestation.attest()).verified;
   }
 
   /** The current verification if it is younger than 60 s, else a fresh one. @throws PlrError */
   async ensureVerified(): Promise<VerifiedRouter> {
-    return (await this.#currentSession()).verified;
+    return (await this.#attestation.current()).verified;
   }
 
   /**
@@ -208,17 +205,17 @@ export class PrivateClient {
 
   /** Forgets the cached verification; the next chat re-attests. */
   invalidate(): void {
-    this.#session = undefined;
+    this.#attestation.invalidate();
   }
 
   /** Encrypted chat (SPEC §6.3) with full stream and receipt verification. @throws PlrError */
   async chat(req: ChatRequest, o: ChatOptions = {}): Promise<ChatResult> {
     const plaintext = encodeChatPlaintext(req); // validate before any network traffic
     try {
-      const session = await this.#currentSession();
+      const session = await this.#attestation.current();
       return await this.#chatOnce(session, plaintext, o);
     } catch (e) {
-      this.#session = undefined; // fail closed: never reuse a verification after a failed session
+      this.#attestation.invalidate(); // fail closed: never reuse a verification after a failed session
       if (e instanceof CallbackError) throw e.error;
       if (isPlrError(e)) throw e;
       throw new PlrError("E_BAD_RESPONSE");
@@ -228,37 +225,6 @@ export class PrivateClient {
   }
 
   // ---------------------------------------------------------------- attestation
-
-  async #currentSession(): Promise<Session> {
-    const s = this.#session;
-    if (s !== undefined && s.routerBase === this.routerUrl && this.#clock() - s.at < VERIFIED_TTL_MS) return s;
-    // Share one in-flight attestation between concurrent callers.
-    this.#pending ??= this.#attest().finally(() => {
-      this.#pending = undefined;
-    });
-    return this.#pending;
-  }
-
-  async #attest(): Promise<Session> {
-    const nonce = new Uint8Array(randomBytes(32));
-    try {
-      const bundle = await this.#fetchAttestation(nonce);
-      const verified = await verifyAttestation({
-        bundle,
-        nonce,
-        verifier: this.#verifier,
-        registry: this.registry,
-        trustedRoot: this.#trustedRoot,
-      });
-      const session: Session = { verified, attNonce: nonce, at: this.#clock(), routerBase: this.routerUrl };
-      this.#session = session;
-      return session;
-    } catch (e) {
-      this.#session = undefined;
-      if (isPlrError(e)) throw e;
-      throw new PlrError("E_BAD_RESPONSE");
-    }
-  }
 
   async #fetchAttestation(nonce: Uint8Array): Promise<AttestationBundle> {
     const deadline = new Deadline(this.#timeouts.attestMs);
@@ -298,7 +264,7 @@ export class PrivateClient {
 
   // ---------------------------------------------------------------- chat
 
-  async #chatOnce(session: Session, plaintext: Uint8Array, o: ChatOptions): Promise<ChatResult> {
+  async #chatOnce(session: AttestationSession, plaintext: Uint8Array, o: ChatOptions): Promise<ChatResult> {
     const v = session.verified;
     const { epk, ct, th, kS2c } = clientSeal({ xp: v.x25519, ep: v.ed25519, attNonce: session.attNonce, plaintext });
     const reqHash = createHash("sha256").update(ct).digest();

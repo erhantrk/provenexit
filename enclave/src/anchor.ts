@@ -1,5 +1,7 @@
 /**
- * Registration (SPEC §5, §7) and receipt anchoring (SPEC §8).
+ * Registration (SPEC §5, §7) and receipt anchoring (SPEC §8), shared by the LLM router and the VPN exit
+ * (SPEC-VPN §5: same `register_instance` / `anchor_receipts` on the VPN registry; only the receipt kind differs,
+ * and the Anchorer only ever sees leaf hashes).
  *
  * - At boot the router obtains a quote over `key_hash ‖ SHA256("PLR-v1/register" ‖ contract_id)` and calls
  *   `register_instance`. On failure it keeps serving (clients refuse an unregistered instance), logs only the
@@ -12,16 +14,18 @@
  *   chain disagrees with the local log, anchoring halts (fail closed: no proofs are served for it).
  */
 import { anchorMessage, equalBytes, fromHex, registrationNonce, toHex, type Attester } from "@plr/shared";
-import type { RouterKeys } from "./keys.js";
+import type { EnclaveKeys } from "./keys.js";
 import { Logger, code as codeField, codeOf, hex as hexField, type Code } from "./log.js";
 import type { AnchorView, RegistryWriter } from "./near.js";
-import type { ReceiptLog } from "./receipts.js";
+import type { LeafLog } from "./receipts.js";
 
 export interface AnchorerOptions {
   chain: RegistryWriter;
   attester: Attester;
-  keys: RouterKeys;
-  receipts: ReceiptLog;
+  /** The instance keys (router or VPN exit). */
+  keys: EnclaveKeys;
+  /** The instance receipt log (any receipt kind: only leaf hashes are anchored). */
+  receipts: LeafLog;
   composeBytes: Uint8Array;
   log?: Logger;
   /** Anchor period (SPEC: PLR_ANCHOR_INTERVAL_MS, default 3000). */

@@ -13,11 +13,14 @@ import {
   fromHex,
   isHex,
   isReceipt,
+  isVpnReceipt,
   receiptLeaf,
   verifyMerkleProof,
+  vpnReceiptLeaf,
   type AnchorRecord,
   type Receipt,
   type RegistryReader,
+  type VpnReceipt,
 } from "@plr/shared";
 import { isPlainObject } from "./util.js";
 
@@ -85,6 +88,20 @@ async function chainAnchor(registry: RegistryReader, id: number): Promise<Anchor
  */
 export async function verifyReceiptAnchored(p: { receipt: Receipt; reply: unknown; registry: RegistryReader }): Promise<AnchoredReceipt> {
   if (!isReceipt(p.receipt)) throw new PlrError("E_BAD_INPUT", "malformed receipt");
+  return verifyLeafAnchored({ seq: p.receipt.seq, keyHash: p.receipt.key_hash, leaf: receiptLeaf(p.receipt), reply: p.reply, registry: p.registry });
+}
+
+/**
+ * Same as {@link verifyReceiptAnchored} for a PLR-VPN-v1 session receipt (SPEC-VPN §5, leaf = `vpnReceiptLeaf`),
+ * against the VPN registry.
+ */
+export async function verifyVpnReceiptAnchored(p: { receipt: VpnReceipt; reply: unknown; registry: RegistryReader }): Promise<AnchoredReceipt> {
+  if (!isVpnReceipt(p.receipt)) throw new PlrError("E_BAD_INPUT", "malformed receipt");
+  return verifyLeafAnchored({ seq: p.receipt.seq, keyHash: p.receipt.key_hash, leaf: vpnReceiptLeaf(p.receipt), reply: p.reply, registry: p.registry });
+}
+
+/** Core check for any receipt kind: the leaf at chain-derived position `seq − first_seq` of the chain's root. */
+async function verifyLeafAnchored(p: { seq: number; keyHash: string; leaf: Uint8Array; reply: unknown; registry: RegistryReader }): Promise<AnchoredReceipt> {
   const reply = parseProofReply(p.reply);
   const anchor = await chainAnchor(p.registry, reply.anchor_id);
   if (anchor === null) throw new PlrError("E_NOT_ANCHORED", "anchor not on chain");
@@ -92,9 +109,9 @@ export async function verifyReceiptAnchored(p: { receipt: Receipt; reply: unknow
     throw new PlrError("E_ANCHOR_MISMATCH", why);
   };
   if (anchor.id !== reply.anchor_id) mismatch("anchor id");
-  if (anchor.key_hash !== p.receipt.key_hash) mismatch("anchor belongs to another instance");
+  if (anchor.key_hash !== p.keyHash) mismatch("anchor belongs to another instance");
   if (!isUint(anchor.first_seq) || !isUint(anchor.count) || anchor.count < 1) mismatch("on-chain anchor shape");
-  const seq = p.receipt.seq;
+  const seq = p.seq;
   // Chain-derived position. `seq - first_seq` is only meaningful if seq lies inside the anchored range.
   if (seq < anchor.first_seq || seq - anchor.first_seq >= anchor.count) mismatch("receipt seq outside the anchored batch");
   const index = seq - anchor.first_seq;
@@ -102,7 +119,7 @@ export async function verifyReceiptAnchored(p: { receipt: Receipt; reply: unknow
   if (reply.first_seq !== anchor.first_seq || reply.count !== size || reply.index !== index) mismatch("router batch position");
   if (reply.root !== anchor.root) mismatch("router root");
   const ok = verifyMerkleProof(
-    receiptLeaf(p.receipt),
+    p.leaf,
     index,
     size,
     reply.proof.map((h) => fromHex(h, 32)),

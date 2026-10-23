@@ -38,3 +38,26 @@ export {
   verifyAttestation, CHECKS, MAX_APP_COMPOSE_BYTES,
   type AttestationBundle, type VerifiedRouter, type VerifyAttestationParams,
 } from "./policy.js";
+
+// PLR-VPN-v1 (SPEC-VPN §9.1)
+export {
+  VPN_DOMAIN, TUNNEL, FRAME, FRAME_RULES, MAX_CONNECT_PAYLOAD, TUNNEL_STEP_TIMEOUT_MS, TUNNEL_IDLE_TIMEOUT_MS,
+  isTunnelDir, frameAllowed, type TunnelDir, type FrameType,
+} from "./tunnel/constants.js";
+export { deriveTunnel, encodeHello, parseHello, tunnelClientInit, tunnelServerInit, type TunnelKeys } from "./tunnel/keys.js";
+export { TunnelWriter, TunnelReader, type TunnelFrame } from "./tunnel/frames.js";
+export {
+  CONNECT_ERR_CODES, isConnectErrCode, encodeConnect, parseConnect, encodeConnectErr, parseConnectErr,
+  encodeReceiptPayload, parseReceiptPayload, type ConnectErrCode,
+} from "./tunnel/payloads.js";
+export {
+  vpnReceiptMessage, signVpnReceipt, verifyVpnReceipt, vpnReceiptLeaf, isVpnReceipt, type VpnReceipt,
+} from "./receipts/vpn-receipt.js";
+export { parseIpv4, parseIpv6, formatIpv4, formatIpv6, isIpLiteral, MAX_IPV6_TEXT_LEN } from "./net/ip.js";
+export {
+  classifyIp, egressAllowed, egressIdentity, validateDestination, isEgressPolicy, isDnsName, isPort, MAX_DNS_NAME_LEN,
+  type IpClass, type EgressPolicy,
+} from "./net/egress.js";
+export {
+  SOCKS, SOCKS_REP, parseSocksGreeting, parseSocksRequest, encodeSocksReply, socksReplyFor, type SocksRequest,
+} from "./net/socks5.js";

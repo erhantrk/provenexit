@@ -13,6 +13,10 @@ import { ReceiptLog } from "../src/receipts.js";
 import { composeBytes, makeCompose } from "../src/compose.js";
 import { DEFAULT_ANCHOR_DEPOSIT, loadConfig } from "../src/config.js";
 import { ROUTER_ENV_ALLOWLIST } from "../src/mock-tdx/host.js";
+import { VpnKeys } from "../src/vpn/keys.js";
+import { VpnReceiptLog } from "../src/vpn/receipts.js";
+import { composeBytes as vpnComposeBytesOf, makeVpnCompose } from "../src/compose.js";
+import { verifyVpnReceipt, vpnReceiptLeaf } from "@plr/shared";
 
 const CONTRACT = "registry.test.near";
 const COMPOSE = composeBytes(makeCompose({ kind: "mock", modelSha256: "11".repeat(32), runtime: "node", bundleSha256: "22".repeat(32), entry: "router.bundle.mjs", runtimeSha256: "33".repeat(32), nodeSha256: "33".repeat(32) }));
@@ -232,5 +236,30 @@ describe("anchor storage deposit", () => {
     expect(t.lines.some((l) => l.includes("anchor_failed") && l.includes("code=E_DEPOSIT"))).toBe(true);
     await t.anchorer.anchorOnce();
     expect(t.receipts.anchoredCount).toBe(2);
+  });
+});
+
+describe("VPN exit registration + anchoring (SPEC-VPN §5: same Anchorer, VPN receipts)", () => {
+  it("registers the exit and anchors VPN receipt leaves; proofs verify against the on-chain root", async () => {
+    const compose = vpnComposeBytesOf(makeVpnCompose({ bundleSha256: "44".repeat(32), nodeSha256: "55".repeat(32), allowLoopback: false }));
+    const root = MockRoot.generate();
+    const attester = new MockTdxAttester({ root, composeBytes: compose });
+    const keys = VpnKeys.generate();
+    const receipts = new VpnReceiptLog();
+    const chain = new FakeChain();
+    const lines: string[] = [];
+    const anchorer = new Anchorer({ chain, attester, keys, receipts, composeBytes: compose, log: new Logger("plr-vpn", (l) => lines.push(l)) });
+    expect(await anchorer.register()).toBe(true);
+    expect(lines).toContain(`plr-vpn: registered key_hash=${toHex(keys.keyHash)}`);
+    const issued = [0, 1, 2].map((i) => receipts.issue({ th: randomBytes(32), composeHash: randomBytes(32), keyHash: keys.keyHash, tsOpenMs: 1000 + i, tsCloseMs: 900, sign: (r) => keys.signVpnReceipt(r) }));
+    for (const [i, { receipt, sig }] of issued.entries()) {
+      expect(receipt.seq).toBe(i);
+      expect(receipt.ts_close_ms).toBe(receipt.ts_open_ms); // clock stepped back: clamped, never open > close
+      expect(verifyVpnReceipt(receipt, sig, keys.ed25519)).toBe(true);
+    }
+    await anchorer.anchorOnce();
+    expect(chain.anchors).toHaveLength(1);
+    const p = receipts.proof(1)!;
+    expect(verifyMerkleProof(vpnReceiptLeaf(issued[1]!.receipt), p.index, p.count, p.proof.map((h) => fromHex(h, 32)), fromHex(chain.anchors[0]!.root, 32))).toBe(true);
   });
 });

@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # Leaves a local PLR stack running for manual use:
-#   near-sandbox (registry deployed, fresh MOCK ROOT) + honest router launched and measured by the mock TDX host.
-# Writes .run/stack.env (PLR_ROUTER_URL, PLR_NEAR_RPC, PLR_REGISTRY, PLR_TRUSTED_ROOT, …) for the `plr` CLI:
+#   near-sandbox (LLM registry + VPN registry deployed, fresh MOCK ROOT) + honest router and honest production
+#   VPN exit (PLR-VPN-v1), both launched and measured by the mock TDX host and registered on their registry.
+# Writes .run/stack.env (PLR_ROUTER_URL, PLR_NEAR_RPC, PLR_REGISTRY, PLR_TRUSTED_ROOT, PLR_VPN_URL,
+# PLR_VPN_REGISTRY, PLR_VPN_COMPOSE_HASH, …) for the `plr` CLI:
 #   set -a; . .run/stack.env; set +a; node client/dist/cli.js verify
+#   node client/dist/cli.js vpn verify; node client/dist/cli.js vpn   # SOCKS5 on 127.0.0.1:18180
 # Stop with scripts/dev-down.sh.
 #
 # Env: PLR_LLM=llama|mock (default llama: real Qwen 0.5B), PLR_RPC_PORT (default 3030),
-#      PLR_ROUTER_PORT (default 18100), PLR_EXTRA=evil-logger,mitm-key,… (extra attack routers),
+#      PLR_ROUTER_PORT (default 18100), PLR_EXIT_PORT (default 18200, the VPN exit),
+#      PLR_EXTRA=evil-logger,mitm-key,vpn-honest-test,vpn-evil-logger,vpn-mitm-key,… (extra routers / exits),
+#      PLR_DESTINATION=1 (also start a local HTTP test destination; port in PLR_DEST_PORT),
 #      PLR_SKIP_BUILD=1 (skip scripts/build.sh).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,12 +29,16 @@ fi
 [[ "${PLR_SKIP_BUILD:-0}" == 1 ]] || scripts/build.sh
 mkdir -p "$RUN"
 rm -f "$STOP_FILE"
+DEST_ARG=""
+[[ "${PLR_DESTINATION:-0}" == 1 ]] && DEST_ARG="--destination"
 
 node e2e/dist/stack-cli.js up \
   --llm "${PLR_LLM:-llama}" \
   --rpc-port "${PLR_RPC_PORT:-3030}" \
   --router-port "${PLR_ROUTER_PORT:-18100}" \
+  --exit-port "${PLR_EXIT_PORT:-18200}" \
   ${PLR_EXTRA:+--extra "$PLR_EXTRA"} \
+  ${DEST_ARG:+"$DEST_ARG"} \
   --env-out "$ENV_FILE" --stop-file "$STOP_FILE" </dev/null >"$LOG" 2>&1 &
 PID=$!
 disown "$PID" 2>/dev/null || true
@@ -40,6 +49,8 @@ for _ in $(seq 1 1200); do
     printf '\n✔ stack ready:\n'; grep -v '^#' "$ENV_FILE" | sed 's/^/    /'
     printf '\n  use it:   set -a; . %s; set +a; node client/dist/cli.js verify\n' "$ENV_FILE"
     printf '  OpenAI:   node client/dist/cli.js proxy   # then point any OpenAI SDK at http://127.0.0.1:18787/v1\n'
+    printf '  VPN:      node client/dist/cli.js vpn verify; node client/dist/cli.js vpn   # SOCKS5 socks5h://127.0.0.1:18180\n'
+    printf '            curl --proxy socks5h://127.0.0.1:18180 https://example.com\n'
     printf '  stop:     scripts/dev-down.sh\n'
     exit 0
   fi

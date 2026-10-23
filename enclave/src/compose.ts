@@ -1,8 +1,10 @@
 /**
- * `app-compose.json` (SPEC §4): canonical serialisation (used by the build) and strict parsing (used by the
- * mock TDX host and the router). Verifiers hash the bytes received; this module never re-serialises
- * something it was given.
+ * `app-compose.json` (SPEC §4, SPEC-VPN §2): canonical serialisation (used by the build) and strict parsing
+ * (used by the mock TDX host, the router and the VPN exit). Two services share the canonical form and are told
+ * apart by `name`: `plr-router` (LLM router) and `plr-vpn` (VPN exit). Verifiers hash the bytes received; this
+ * module never re-serialises something it was given.
  */
+import { readFileSync } from "node:fs";
 import { PlrError, isHex } from "@plr/shared";
 
 /** Upper bound for a compose document (SPEC §7: app_compose ≤ 8 KiB). */
@@ -80,9 +82,10 @@ export function makeCompose(p: {
   return c;
 }
 
-/** Canonical bytes of a compose object. */
-export function composeBytes(c: AppCompose): Uint8Array {
-  validateCompose(c);
+/** Canonical bytes of a compose object (either service; validated against its exact schema). */
+export function composeBytes(c: AppCompose | VpnCompose): Uint8Array {
+  if (c.name === "plr-vpn") validateVpnCompose(c);
+  else validateCompose(c);
   return new TextEncoder().encode(canonicalJson(c as unknown as Json));
 }
 
@@ -109,12 +112,8 @@ function validateCompose(c: unknown): asserts c is AppCompose {
   if (typeof r.entry !== "string" || !ENTRY_RE.test(r.entry)) bad("router.entry");
 }
 
-/**
- * Strictly parses compose bytes: size-bounded, fatal UTF-8, exact schema, and the bytes MUST already be in
- * canonical form (a non-canonical document is refused rather than silently normalised).
- * @throws PlrError E_BAD_INPUT
- */
-export function parseCompose(bytes: Uint8Array): AppCompose {
+/** Size-bounded, fatal UTF-8 JSON decode of compose bytes. */
+function decodeCompose(bytes: Uint8Array): { text: string; obj: unknown } {
   if (!(bytes instanceof Uint8Array) || bytes.length === 0 || bytes.length > MAX_COMPOSE_BYTES) bad("size");
   let text: string;
   try {
@@ -128,7 +127,98 @@ export function parseCompose(bytes: Uint8Array): AppCompose {
   } catch {
     bad("not JSON");
   }
+  return { text, obj };
+}
+
+function requireCanonical(obj: unknown, text: string): void {
+  if (canonicalJson(obj as Json) !== text) bad("not canonical");
+}
+
+/**
+ * Strictly parses router compose bytes: size-bounded, fatal UTF-8, exact schema, and the bytes MUST already be
+ * in canonical form (a non-canonical document is refused rather than silently normalised).
+ * @throws PlrError E_BAD_INPUT
+ */
+export function parseCompose(bytes: Uint8Array): AppCompose {
+  const { text, obj } = decodeCompose(bytes);
   validateCompose(obj);
-  if (canonicalJson(obj as unknown as Json) !== text) bad("not canonical");
+  requireCanonical(obj, text);
   return obj;
+}
+
+// ------------------------------------------------------------------------------------------- VPN (SPEC-VPN §2)
+
+/** The only entry file name of a VPN exit bundle (SPEC-VPN §2). */
+export const VPN_ENTRY = "vpn.bundle.mjs";
+
+/** SPEC-VPN §2 schema (exact keys, no extras). `deny_private` is always true. */
+export interface VpnCompose {
+  manifest_version: 1;
+  name: "plr-vpn";
+  policy: { disk: "none"; egress: { allow_loopback: boolean; deny_private: true }; logs: "none" };
+  vpn: { bundle_sha256: string; entry: typeof VPN_ENTRY; node_sha256: string };
+}
+
+export type ComposeService = "router" | "vpn";
+
+function validateVpnCompose(c: unknown): asserts c is VpnCompose {
+  if (!exactKeys(c, ["manifest_version", "name", "policy", "vpn"])) bad("top-level keys");
+  if (c.manifest_version !== 1) bad("manifest_version");
+  if (c.name !== "plr-vpn") bad("name");
+  const pol = c.policy;
+  if (!exactKeys(pol, ["disk", "egress", "logs"])) bad("policy keys");
+  if (pol.disk !== "none" || pol.logs !== "none") bad("policy");
+  const eg = pol.egress;
+  if (!exactKeys(eg, ["allow_loopback", "deny_private"])) bad("policy.egress keys");
+  if (typeof eg.allow_loopback !== "boolean") bad("policy.egress.allow_loopback");
+  if (eg.deny_private !== true) bad("policy.egress.deny_private");
+  const v = c.vpn;
+  if (!exactKeys(v, ["bundle_sha256", "entry", "node_sha256"])) bad("vpn keys");
+  if (!isHex(v.bundle_sha256, 32)) bad("vpn.bundle_sha256");
+  if (!isHex(v.node_sha256, 32)) bad("vpn.node_sha256");
+  if (v.entry !== VPN_ENTRY) bad("vpn.entry");
+}
+
+/** Builds a VPN compose object from its variable parts (validated). */
+export function makeVpnCompose(p: { bundleSha256: string; nodeSha256: string; allowLoopback: boolean }): VpnCompose {
+  const c: VpnCompose = {
+    manifest_version: 1,
+    name: "plr-vpn",
+    policy: { disk: "none", egress: { allow_loopback: p.allowLoopback, deny_private: true }, logs: "none" },
+    vpn: { bundle_sha256: p.bundleSha256, entry: VPN_ENTRY, node_sha256: p.nodeSha256 },
+  };
+  validateVpnCompose(c);
+  return c;
+}
+
+/**
+ * Strictly parses VPN compose bytes (same rules as {@link parseCompose}: bounded, fatal UTF-8, exact schema,
+ * canonical). @throws PlrError E_BAD_INPUT
+ */
+export function parseVpnCompose(bytes: Uint8Array): VpnCompose {
+  const { text, obj } = decodeCompose(bytes);
+  validateVpnCompose(obj);
+  requireCanonical(obj, text);
+  return obj;
+}
+
+/**
+ * Which service a compose document describes, from its `name` (the discriminator). Only a dispatch hint: the
+ * document must still be parsed strictly with {@link parseCompose} / {@link parseVpnCompose}.
+ * @throws PlrError E_BAD_INPUT
+ */
+export function composeService(bytes: Uint8Array): ComposeService {
+  const { obj } = decodeCompose(bytes);
+  if (typeof obj !== "object" || obj === null || Array.isArray(obj)) bad("not an object");
+  const name = (obj as Record<string, unknown>).name;
+  if (name === "plr-router") return "router";
+  if (name === "plr-vpn") return "vpn";
+  bad("name");
+}
+
+/** Reads a compose file once (bounded). */
+export function readCompose(path: string): Uint8Array {
+  const buf = readFileSync(path);
+  if (buf.length > MAX_COMPOSE_BYTES) throw new Error("E_COMPOSE_SIZE");
+  return new Uint8Array(buf);
 }

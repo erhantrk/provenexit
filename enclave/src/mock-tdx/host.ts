@@ -9,6 +9,10 @@
  * child processes, running exactly the bytes it measured.
  *
  * The router never sees the ROOT or AK private keys: it can only ask for quotes through the socket.
+ *
+ * VPN exits (SPEC-VPN §2): a `plr-vpn` compose is launched by `measureVpnBoot` / `launchVpn` — no LLM; the node
+ * runtime and the exit bundle are measured, and the exit runs under the same isolation flags as the router
+ * (network allowed: it is an exit). `composeServiceOf` tells the two apart for a CLI.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -20,7 +24,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MockRoot, MockTdxAttester, fromHex, isHex, toHex, type TdxEvent } from "@plr/shared";
-import { MAX_COMPOSE_BYTES, parseCompose, type AppCompose } from "../compose.js";
+import { MAX_COMPOSE_BYTES, composeService, parseCompose, parseVpnCompose, type AppCompose, type ComposeService, type VpnCompose } from "../compose.js";
 import { Logger, code, hex } from "../log.js";
 
 import { HostError } from "./errors.js";
@@ -198,6 +202,79 @@ export async function measureBoot(spec: MeasureSpec & { root: MockRoot }): Promi
   };
 }
 
+/** Which service a compose file describes (`router` | `vpn`); a dispatch hint only (measurement re-parses strictly). */
+export function composeServiceOf(composePath: string): ComposeService {
+  const bytes = readBounded(composePath, MAX_COMPOSE_BYTES, "E_COMPOSE");
+  try {
+    return composeService(bytes);
+  } catch {
+    throw new HostError("E_COMPOSE");
+  }
+}
+
+export interface VpnMeasureSpec {
+  /** Path of the VPN app-compose.json to launch. */
+  composePath: string;
+  /** Exit bundle; default `<dir of compose>/vpn.bundle.mjs`. */
+  bundlePath?: string;
+  /** Launch the TD with the DEBUG attribute. */
+  debug?: boolean;
+  /** Node executable for the exit (default: this process's); must match `vpn.node_sha256`. */
+  nodePath?: string;
+  /** Hash cache for repeated measurements (harnesses). `launchVpn` never uses it. */
+  runtimeCache?: RuntimeHashCache;
+}
+
+export interface MeasuredVpnBoot {
+  service: "vpn";
+  compose: VpnCompose;
+  composeBytes: Uint8Array;
+  composeHash: string;
+  bundlePath: string;
+  /** The exact bundle bytes that were measured (the host runs these, not the file on disk). */
+  bundleBytes: Uint8Array;
+  nodeRuntime: RuntimeClosure;
+  attester: MockTdxAttester;
+  eventLog: TdxEvent[];
+  osMeasurement: string;
+  debug: boolean;
+}
+
+/**
+ * Measures a VPN exit launch (SPEC-VPN §2): strict canonical VPN compose, exit bundle hash, node runtime closure
+ * (→ HostError E_COMPOSE / E_BUNDLE_ENTRY / E_MEASUREMENT_MISMATCH), then the per-boot attester and §3 event log.
+ */
+export async function measureVpnBoot(spec: VpnMeasureSpec & { root: MockRoot }): Promise<MeasuredVpnBoot> {
+  const composeBytes = readBounded(spec.composePath, MAX_COMPOSE_BYTES, "E_COMPOSE");
+  let compose: VpnCompose;
+  try {
+    compose = parseVpnCompose(composeBytes);
+  } catch {
+    throw new HostError("E_COMPOSE");
+  }
+  const bundlePath = resolve(spec.bundlePath ?? join(dirname(spec.composePath), compose.vpn.entry));
+  if (basename(bundlePath) !== compose.vpn.entry) throw new HostError("E_BUNDLE_ENTRY");
+  const bundleBytes = readBounded(bundlePath, MAX_BUNDLE_BYTES, "E_BUNDLE");
+  if (!digestEq(sha256Hex(bundleBytes), compose.vpn.bundle_sha256)) throw new HostError("E_MEASUREMENT_MISMATCH");
+  const nodeRuntime = await measureRuntime(spec.nodePath ?? process.execPath, spec.runtimeCache ? { cache: spec.runtimeCache } : {});
+  if (!digestEq(nodeRuntime.digest, compose.vpn.node_sha256)) throw new HostError("E_MEASUREMENT_MISMATCH");
+  const debug = spec.debug === true;
+  const attester = new MockTdxAttester({ root: spec.root, composeBytes, debug });
+  return {
+    service: "vpn",
+    compose,
+    composeBytes,
+    composeHash: toHex(attester.composeHash),
+    bundlePath,
+    bundleBytes,
+    nodeRuntime,
+    attester,
+    eventLog: attester.eventLog,
+    osMeasurement: toHex(attester.osMeasurement),
+    debug,
+  };
+}
+
 // ------------------------------------------------------------------------------------------- quote socket
 
 const MAX_QUOTE_REQ = 4096;
@@ -313,6 +390,23 @@ export const ROUTER_ENV_ALLOWLIST = [
   "PLR_ROUTER_HOST",
 ] as const;
 
+/**
+ * Exit env keys the host forwards (SPEC-VPN: registration + anchoring on the VPN registry, listen host/port).
+ * Never NODE_OPTIONS or anything that could inject code.
+ */
+export const EXIT_ENV_ALLOWLIST = [
+  "PLR_NEAR_RPC",
+  "PLR_REGISTRY",
+  "PLR_VPN_REGISTRY",
+  "PLR_OPERATOR_ID",
+  "PLR_OPERATOR_KEY",
+  "PLR_REGISTER_DEPOSIT",
+  "PLR_ANCHOR_DEPOSIT",
+  "PLR_ANCHOR_INTERVAL_MS",
+  "PLR_VPN_HOST",
+  "PLR_VPN_PORT",
+] as const;
+
 export function freePort(): Promise<number> {
   return new Promise((ok, fail) => {
     const s = net.createServer();
@@ -369,11 +463,14 @@ async function terminate(c: ChildProcess | null): Promise<void> {
  * compose), no child processes, no worker threads, no native addons. `--disallow-code-generation-from-strings`
  * forbids eval/new Function.
  */
-export function routerNodeFlags(compose: AppCompose, privDir: string): string[] {
+export function routerNodeFlags(compose: AppCompose | VpnCompose, privDir: string): string[] {
   const flags = ["--disallow-code-generation-from-strings", "--no-addons"];
   if (compose.policy.disk === "none") flags.unshift("--permission", `--allow-fs-read=${privDir}`);
   return flags;
 }
+
+/** The VPN exit runs under exactly the router's isolation (SPEC-VPN §2); Node's permission model leaves network alone. */
+export const exitNodeFlags = routerNodeFlags;
 
 /**
  * llama-server flags. Prompt caching is fully off: no KV-cache reuse between requests (`--no-cache-prompt`,
@@ -506,6 +603,109 @@ export async function launch(o: LaunchOptions): Promise<HostHandle> {
       exited(l).then(() => 1),
     ]).then((c) => stop(c));
     return { boot, socketPath, llmPort, router: r, llm: l, done, stop: () => stop(0) };
+  } catch (e) {
+    log.info("launch_failed", { code: code(e instanceof HostError ? e.code : "E_LAUNCH") });
+    await cleanup();
+    throw e;
+  }
+}
+
+// ------------------------------------------------------------------------------------------- VPN exit launch
+
+export interface VpnLaunchOptions extends VpnMeasureSpec {
+  root: MockRoot;
+  /** Host state directory (a private 0700 `tdx-*` subdirectory is created inside it). */
+  runDir: string;
+  /** Exit listen port (0 = ephemeral; the exit prints its URL). Default: PLR_VPN_PORT from `exitEnv`, else 18200. */
+  exitPort?: number;
+  /** Extra exit configuration (NEAR, anchor interval, listen host/port). Only allowlisted keys are passed. */
+  exitEnv?: Readonly<Record<string, string | undefined>>;
+  /** Receives host + exit output lines. Default: process stdout. */
+  output?: (chunk: string) => void;
+  /** Aborts a launch in progress; rejects with HostError E_ABORTED after tearing down what was started. */
+  signal?: AbortSignal;
+}
+
+export interface VpnHostHandle {
+  boot: MeasuredVpnBoot;
+  socketPath: string;
+  exit: ChildProcess;
+  /** Resolves with the exit code once the host has shut everything down. */
+  done: Promise<number>;
+  stop(): Promise<number>;
+}
+
+/**
+ * Measures and launches a VPN exit: no LLM; the measured exit bundle runs on the verified node copy with the
+ * router's isolation flags and `PLR_TDX_SOCKET`. If the exit process exits, the host stops (fail closed).
+ */
+export async function launchVpn(o: VpnLaunchOptions): Promise<VpnHostHandle> {
+  const out = o.output ?? ((s: string) => void process.stdout.write(s));
+  const log = new Logger("plr-host", (line) => out(line + "\n"));
+  let boot: MeasuredVpnBoot;
+  try {
+    boot = await measureVpnBoot(o);
+  } catch (e) {
+    log.info("launch_refused", { code: code(e instanceof HostError ? e.code : "E_MEASUREMENT") });
+    throw e;
+  }
+  checkAborted(o.signal);
+  log.info("measured", {
+    compose_hash: hex(boot.composeHash),
+    os_measurement: hex(boot.osMeasurement),
+    bundle_sha256: hex(boot.compose.vpn.bundle_sha256),
+    debug: boot.debug,
+  });
+
+  const priv = await mkdtemp(join(resolve(o.runDir), "tdx-"));
+  await chmod(priv, 0o700);
+  const socketPath = join(priv, "q.sock");
+  const bundleCopy = join(priv, boot.compose.vpn.entry);
+  const composeCopy = join(priv, "app-compose.json");
+  // Run exactly the measured bytes (no TOCTOU between hashing and loading).
+  await writeFile(bundleCopy, boot.bundleBytes, { mode: 0o400, flag: "wx" });
+  await writeFile(composeCopy, boot.composeBytes, { mode: 0o400, flag: "wx" });
+
+  let quote: { close(): Promise<void> } | null = null;
+  let exit: ChildProcess | null = null;
+  const cleanup = async () => {
+    await terminate(exit);
+    await quote?.close();
+    await rm(priv, { recursive: true, force: true });
+  };
+
+  try {
+    const nodeRt = await installRuntime(boot.nodeRuntime, await mkdtemp(join(priv, "node-")), boot.compose.vpn.node_sha256);
+    log.info("runtimes_verified", { node_sha256: hex(boot.compose.vpn.node_sha256) });
+    quote = await startQuoteServer(socketPath, boot.attester);
+    checkAborted(o.signal);
+
+    const env: Record<string, string> = {};
+    for (const k of EXIT_ENV_ALLOWLIST) {
+      const v = o.exitEnv?.[k];
+      if (typeof v === "string" && v !== "") env[k] = v;
+    }
+    Object.assign(env, nodeRt.env, { PLR_TDX_SOCKET: socketPath, PLR_APP_COMPOSE_PATH: composeCopy });
+    if (o.exitPort !== undefined) env.PLR_VPN_PORT = String(o.exitPort);
+    exit = spawn(nodeRt.exe, [...exitNodeFlags(boot.compose, priv), bundleCopy], { stdio: ["ignore", "pipe", "pipe"], env, cwd: priv });
+    exit.on("error", () => undefined);
+    exit.stdout!.setEncoding("utf8").on("data", (s: string) => out(s));
+    exit.stderr!.setEncoding("utf8").on("data", (s: string) => out(s));
+    log.info("exit_started", { pid: exit.pid ?? 0 });
+
+    const x = exit;
+    let stopping: Promise<number> | null = null;
+    const stop = (exitCode = 0): Promise<number> => {
+      stopping ??= cleanup().then(() => {
+        log.info("stopped", { code_num: exitCode });
+        return exitCode;
+      });
+      return stopping;
+    };
+    const done = exited(x)
+      .then(() => ((x.exitCode ?? 1) === 0 ? 0 : 1))
+      .then((c) => stop(c));
+    return { boot, socketPath, exit: x, done, stop: () => stop(0) };
   } catch (e) {
     log.info("launch_failed", { code: code(e instanceof HostError ? e.code : "E_LAUNCH") });
     await cleanup();

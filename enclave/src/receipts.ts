@@ -1,6 +1,9 @@
 /**
- * Per-instance receipt log (SPEC §8). Only receipt leaf hashes are retained, in memory; sequence numbers are
- * contiguous from 0. Anchored batches are recorded so inclusion proofs can be served (SPEC §6.4).
+ * Per-instance receipt logs (SPEC §8, SPEC-VPN §5). Only receipt leaf hashes are retained, in memory; sequence
+ * numbers are contiguous from 0. Anchored batches are recorded so inclusion proofs can be served (SPEC §6.4).
+ *
+ * `LeafLog` is receipt-kind agnostic (it is what the `Anchorer` drives); `ReceiptLog` issues LLM router receipts,
+ * `VpnReceiptLog` (`vpn/receipts.ts`) issues VPN session receipts.
  */
 import { merkleProof, merkleRoot, receiptLeaf, toHex, type Receipt } from "@plr/shared";
 
@@ -23,7 +26,7 @@ export interface ProofResponse {
 /** Maximum receipts per anchor batch (contract bound, SPEC §7). */
 export const MAX_BATCH = 10_000;
 
-export class ReceiptLog {
+export class LeafLog {
   readonly #leaves: Uint8Array[] = [];
   readonly #batches: AnchoredBatch[] = [];
   #anchored = 0;
@@ -38,20 +41,15 @@ export class ReceiptLog {
     return this.#anchored;
   }
 
-  /** Allocates the next seq, signs the receipt and retains only its leaf hash. */
-  issue(p: { th: Uint8Array; reqHash: Uint8Array; respHash: Uint8Array; composeHash: Uint8Array; keyHash: Uint8Array; sign: (r: Receipt) => string; nowMs: number }): { receipt: Receipt; sig: string } {
-    const receipt: Receipt = {
-      v: 1,
-      th: toHex(p.th),
-      req_hash: toHex(p.reqHash),
-      resp_hash: toHex(p.respHash),
-      compose_hash: toHex(p.composeHash),
-      key_hash: toHex(p.keyHash),
-      seq: this.#leaves.length,
-      ts_ms: Math.floor(p.nowMs),
-    };
-    const sig = p.sign(receipt);
-    this.#leaves.push(receiptLeaf(receipt));
+  /**
+   * Allocates the next seq: `build(seq)` makes the receipt, `sign` signs it, and only `leaf(receipt)` is retained.
+   * Nothing is recorded if any step throws.
+   */
+  protected append<R>(build: (seq: number) => R, sign: (r: R) => string, leaf: (r: R) => Uint8Array): { receipt: R; sig: string } {
+    const receipt = build(this.#leaves.length);
+    const sig = sign(receipt);
+    const h = leaf(receipt);
+    this.#leaves.push(h);
     return { receipt, sig };
   }
 
@@ -102,5 +100,26 @@ export class ReceiptLog {
       }
     }
     return null;
+  }
+}
+
+/** LLM router receipts (SPEC §8). */
+export class ReceiptLog extends LeafLog {
+  /** Allocates the next seq, signs the receipt and retains only its leaf hash. */
+  issue(p: { th: Uint8Array; reqHash: Uint8Array; respHash: Uint8Array; composeHash: Uint8Array; keyHash: Uint8Array; sign: (r: Receipt) => string; nowMs: number }): { receipt: Receipt; sig: string } {
+    return this.append<Receipt>(
+      (seq) => ({
+        v: 1,
+        th: toHex(p.th),
+        req_hash: toHex(p.reqHash),
+        resp_hash: toHex(p.respHash),
+        compose_hash: toHex(p.composeHash),
+        key_hash: toHex(p.keyHash),
+        seq,
+        ts_ms: Math.floor(p.nowMs),
+      }),
+      p.sign,
+      receiptLeaf,
+    );
   }
 }

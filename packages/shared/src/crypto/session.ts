@@ -37,8 +37,11 @@ export function deriveSession(p: { shared: Uint8Array; attNonce: Uint8Array; epk
   return keys;
 }
 
-/** X25519 with any failure (invalid / low-order point, all-zero output) mapped to E_DECRYPT. */
-function ecdh(sk: Uint8Array, pk: Uint8Array): Uint8Array {
+/**
+ * X25519 with any failure (invalid / low-order point, all-zero output) mapped to E_DECRYPT.
+ * Internal (also used by the VPN tunnel key schedule); not exported from the package index.
+ */
+export function ecdh(sk: Uint8Array, pk: Uint8Array): Uint8Array {
   let shared: Uint8Array;
   try {
     shared = x25519.getSharedSecret(sk, pk);

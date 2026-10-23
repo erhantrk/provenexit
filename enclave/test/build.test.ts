@@ -1,17 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { parseCompose } from "../src/compose.js";
+import { parseCompose, parseVpnCompose } from "../src/compose.js";
 
 const ENCLAVE = resolve(import.meta.dirname, "..");
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 
+/** Every file under `dir` (relative paths, sorted). */
+function walk(dir: string, rel = ""): string[] {
+  return readdirSync(join(dir, rel)).sort().flatMap((f) => {
+    const r = rel ? `${rel}/${f}` : f;
+    return statSync(join(dir, r)).isDirectory() ? walk(dir, r) : [r];
+  });
+}
+
 function build(out: string): Record<string, string> {
   execFileSync(process.execPath, [join(ENCLAVE, "build.mjs"), "--out", out], { cwd: ENCLAVE, stdio: "pipe" });
-  return Object.fromEntries(readdirSync(out).sort().map((f) => [f, sha(readFileSync(join(out, f)))]));
+  return Object.fromEntries(walk(out).map((f) => [f, sha(readFileSync(join(out, f)))]));
 }
 
 describe("reproducible build (SPEC §4)", () => {
@@ -23,6 +31,9 @@ describe("reproducible build (SPEC §4)", () => {
       expect(Object.keys(ha)).toEqual([
         "app-compose.evil-logger.llama.json", "app-compose.evil-logger.mock.json", "app-compose.json",
         "app-compose.llama.json", "app-compose.mock.json", "build-info.json", "evil-logger.bundle.mjs", "router.bundle.mjs",
+        "vpn-exit/vpn-evil-logger/app-compose.json", "vpn-exit/vpn-evil-logger/vpn.bundle.mjs",
+        "vpn-exit/vpn-honest/app-compose.json", "vpn-exit/vpn-honest/vpn.bundle.mjs",
+        "vpn-exit/vpn-honest-test/app-compose.json", "vpn-exit/vpn-honest-test/vpn.bundle.mjs",
       ]);
       expect(hb).toEqual(ha);
 
@@ -42,6 +53,22 @@ describe("reproducible build (SPEC §4)", () => {
       expect(ha["app-compose.mock.json"]).not.toBe(ha["app-compose.evil-logger.mock.json"]);
       const info = JSON.parse(readFileSync(join(a, "build-info.json"), "utf8"));
       expect(info.variants.honest.compose.mock.compose_hash).toBe(ha["app-compose.mock.json"]);
+
+      // VPN exit builds (SPEC-VPN §2), recorded under "vpn" without touching the router keys.
+      expect(Object.keys(info).sort()).toEqual(["llm", "runtime", "variants", "vpn"]);
+      for (const [v, loopback] of [["vpn-honest", false], ["vpn-honest-test", true], ["vpn-evil-logger", true]] as const) {
+        const dir = `vpn-exit/${v}`;
+        const c = parseVpnCompose(new Uint8Array(readFileSync(join(a, dir, "app-compose.json")))); // strict + canonical
+        expect(c.vpn.bundle_sha256).toBe(ha[`${dir}/vpn.bundle.mjs`]);
+        expect(c.policy.egress).toEqual({ allow_loopback: loopback, deny_private: true });
+        expect(info.vpn[v]).toEqual({
+          dir, bundle: `${dir}/vpn.bundle.mjs`, bundle_sha256: ha[`${dir}/vpn.bundle.mjs`], allow_loopback: loopback,
+          compose: { file: `${dir}/app-compose.json`, compose_hash: ha[`${dir}/app-compose.json`] },
+        });
+      }
+      expect(ha["vpn-exit/vpn-honest/vpn.bundle.mjs"]).toBe(ha["vpn-exit/vpn-honest-test/vpn.bundle.mjs"]);
+      expect(ha["vpn-exit/vpn-honest/app-compose.json"]).not.toBe(ha["vpn-exit/vpn-honest-test/app-compose.json"]);
+      expect(ha["vpn-exit/vpn-honest/vpn.bundle.mjs"]).not.toBe(ha["vpn-exit/vpn-evil-logger/vpn.bundle.mjs"]);
     } finally {
       rmSync(a, { recursive: true, force: true });
       rmSync(b, { recursive: true, force: true });

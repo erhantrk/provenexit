@@ -8,8 +8,12 @@ on-chain in Merkle batches.
 
 The protocol is specified in [`SPEC.md`](SPEC.md) (frozen, authoritative). This README is the tour.
 
+The same machinery also runs a **provably no-logs VPN exit** (PLR-VPN-v1, [`SPEC-VPN.md`](SPEC-VPN.md)): a SOCKS5
+proxy on your machine that only tunnels to an exit whose measured code is approved in a second NEAR registry —
+see [*PLR-VPN*](#plr-vpn--a-provably-no-logs-vpn-exit-proxy-mode).
+
 ```
-bash scripts/demo.sh        # builds everything, runs the whole story with a real Qwen 0.5B model
+bash scripts/demo.sh        # builds everything, runs the whole story with a real Qwen 0.5B model (+ the VPN story)
 ```
 
 ---
@@ -109,9 +113,9 @@ directory for the secret prompt.
 |---|---|
 | [`packages/shared`](packages/shared) `@plr/shared` | the protocol: quote parsing, event log, key binding, session crypto, frames, receipts, Merkle, `verifyAttestation` |
 | [`contracts/near`](contracts/near) | the registry contract (Rust, near-sdk 5.29): allowlist, on-chain quote verification, anchoring |
-| [`enclave`](enclave) `@plr/enclave` | the router bundle, the mock TDX host, the mock LLM, the ⚠️ evil-logger demo build |
-| [`client`](client) `@plr/client` | `PrivateClient`, `NearRegistry`, the `plr` CLI and the OpenAI-compatible proxy |
-| [`e2e`](e2e) | the SPEC §13 harness (`startStack`), network attackers, the dev-stack CLI, the locked e2e tests |
+| [`enclave`](enclave) `@plr/enclave` | the router bundle, the VPN exit bundles, the mock TDX host, the mock LLM, the ⚠️ evil-logger demo builds |
+| [`client`](client) `@plr/client` | `PrivateClient`, `VpnClient`, `NearRegistry`, the `plr` CLI, the OpenAI-compatible proxy and the SOCKS5 proxy |
+| [`e2e`](e2e) | the SPEC §13 / SPEC-VPN §9.3 harness (`startStack`), network attackers, the dev-stack CLI, the locked e2e tests |
 
 ---
 
@@ -129,7 +133,11 @@ It builds everything, starts a fresh near-sandbox with the registry, has the own
 launches the honest router (measured by the mock host, real Qwen) plus an evil-logger build and a MITM proxy,
 then runs `plr verify` (every check ✔), `plr chat` (streamed answer + verified receipt + on-chain anchor), and
 the refusals: evil build → `E_COMPOSE_NOT_ALLOWED`, MITM → `E_REPORT_DATA_KEYS`, owner revocation →
-`E_COMPOSE_NOT_ALLOWED` then service restored by re-approval. Everything is stopped on exit.
+`E_COMPOSE_NOT_ALLOWED` then service restored by re-approval. It then runs the VPN story: `plr vpn verify`
+against the VPN registry, a fetch through the SOCKS5 proxy and the attested tunnel to a local destination (test
+build), evil exit and MITM refused, revocation, the production exit refusing `127.0.0.1` and
+`169.254.169.254`, and — only if the machine is online — `https://example.com` through the production exit.
+Everything is stopped on exit.
 
 A stack to play with:
 
@@ -186,6 +194,134 @@ Receipt anchoring: `await client.verifyAnchored(result.receipt)` fetches the rou
 it against `get_anchor` on-chain, taking the batch position **from the chain** (`index = seq − first_seq`,
 `size = count`, `root`); router values that disagree are refused with `E_ANCHOR_MISMATCH` (`E_NOT_ANCHORED`
 until the batch is on-chain).
+
+---
+
+## PLR-VPN — a provably no-logs VPN exit (proxy mode)
+
+`plr vpn` runs a local SOCKS5 proxy (`socks5h://127.0.0.1:18180`, CONNECT only, remote DNS). For **every new
+connection** it checks the exit against a second, independent NEAR registry (the *VPN registry*: same contract,
+same root, its own allowlist) and only then opens an end-to-end encrypted tunnel to the exit's attested key. The
+exit (`plr-vpn` build, `127.0.0.1:18200` by default) runs under the same mock TDX host as the router, with no LLM.
+
+```
+  app ──SOCKS5──► plr vpn :18180 ──── per connection: attestation (cached ≤ 60 s) + registry re-check ────┐
+  (curl, browser)  VpnClient          GET /v1/tunnel (Upgrade: plr-vpn/1)                                 │
+                     │  hello(att_nonce, epk) → X25519 + HKDF → ChaCha20-Poly1305 frames (seq, direction)   │
+                     ▼                                                                                     ▼
+  host / network (UNTRUSTED): sees only ciphertext ─────► TD: plr-vpn exit ── resolves + dials by IP ──► destination
+                                                              egress policy, no logs, signed session receipts
+```
+
+### What it proves
+
+Before a single byte leaves your machine (SPEC-VPN §1, §7):
+
+1. the exit is the **approved, measured `plr-vpn` build** in a non-debug TD — the same SPEC §9 checks as the
+   router (table above), against the **VPN registry**; a router build is not a VPN build and vice versa;
+2. the tunnel is end-to-end encrypted to the attested X25519 key: the operator, host and network see only
+   ciphertext and cannot read, modify, reorder, truncate or reflect it undetected (`E_DECRYPT`, `E_TRUNCATED`:
+   a cut stream is never a clean EOF — in either direction: if the client→exit stream is cut or tampered, the
+   exit aborts the destination connection with a TCP RST, never a FIN). A hello is accepted once, and only for
+   an attestation nonce the exit itself issued (≤ 2 h old), so a recorded tunnel cannot be replayed to re-run
+   the request or to splice the replay's frames into the live tunnel;
+3. the approved code **retains nothing**: no destination, DNS name, IP, port, byte count or payload is logged,
+   written, put in a receipt or on-chain. Session receipts carry only the transcript hash, compose/key hash,
+   a sequence number and open/close timestamps, and are anchored on the VPN registry in Merkle batches;
+4. destinations are resolved **by the exit** (remote DNS) — the client never looks them up;
+5. the exit refuses loopback, private, link-local (incl. `169.254.169.254` cloud metadata), CGNAT, multicast
+   and reserved targets — every resolved address is checked, IPv4 embedded in IPv6 included — so it cannot be
+   turned against the host's own services (`E_EGRESS_DENIED`). Beyond the SPEC-VPN §6 table it also refuses
+   host-only services that sit in public address space (Azure WireServer `168.63.129.16`) and the exit's own
+   interface addresses, in any spelling;
+6. revocation on-chain applies to the **very next connection**, even while an attestation is cached.
+
+The e2e suite (`e2e/test/vpn.test.ts`) runs each of these against a real near-sandbox: honest exit (receipts
+verified and anchored), evil exit that logs destinations (`E_COMPOSE_NOT_ALLOWED`, destination never contacted),
+MITM key swap (`E_REPORT_DATA_KEYS`), replayed attestation (`E_NONCE`), tampered / truncated tunnel, revocation,
+production egress policy, unregistered instance, and a scan of the exit's output and the run directory for the
+destination and payload.
+
+### What it does not prove
+
+- **The exit sees your destinations.** Any VPN exit must know the host/port it connects to and relays the
+  bytes. PLR-VPN proves the approved code does not *keep* them — not that it never sees them.
+- **"No logs" covers the attested code, not the operator's network.** The exit resolves names with the host's
+  resolver (plaintext DNS) and dials over a NIC the host controls. So the **operator** — not only the exit's
+  ISP — can observe the upstream leg without touching the measured code: DNS queries, destination IP:port,
+  timing, the TLS SNI, and every byte of plain-HTTP traffic. PLR-VPN proves the approved exit code retains
+  nothing; it does not stop the operator's host from watching the exit's own traffic to destinations. Use
+  HTTPS (ideally with ECH) for anything sensitive. (Possible later revision: DoH/DoT from inside the TD to a
+  pinned resolver.)
+- **TLS is still needed for content.** For `https://` the exit relays TLS ciphertext; for plain `http://` the
+  exit code processes the plaintext (it never stores it). The destination sees the exit's IP.
+- **Metadata.** Timing and sizes of tunnelled traffic are visible to the operator and the network (no padding,
+  no cover traffic). Your own IP is visible to the exit operator's network.
+- **Proxy mode only.** Only what you send through the SOCKS5 proxy is protected: TCP CONNECT, no UDP (no QUIC,
+  no WebRTC media, no system-wide tunnel). Use `socks5h` (or "proxy DNS") so names are not resolved locally.
+- Everything listed for the router applies too: **MOCK ROOT, not Intel** in this milestone; the registry owner
+  decides which builds are approved; the RPC endpoint is trusted; mock-host limitations.
+
+### Quickstart
+
+```sh
+PLR_LLM=mock scripts/dev-up.sh          # chain + both registries + honest router :18100 + production VPN exit :18200
+set -a; . .run/stack.env; set +a        # adds PLR_VPN_URL, PLR_VPN_REGISTRY, PLR_VPN_COMPOSE_HASH
+node client/dist/cli.js vpn verify      # every check, ✔/✘, against the VPN registry
+node client/dist/cli.js vpn             # ✔ VPN exit verified …  ✔ SOCKS5 proxy on socks5h://127.0.0.1:18180
+curl --proxy socks5h://127.0.0.1:18180 https://example.com     # (another terminal; needs the machine online)
+scripts/dev-down.sh
+```
+
+Client env: `PLR_VPN_URL` (default `http://127.0.0.1:18200`), `PLR_VPN_REGISTRY`, `PLR_NEAR_RPC`,
+`PLR_TRUSTED_ROOT`, `PLR_VPN_SOCKS_PORT` (default 18180), `PLR_VPN_ATTEST_TTL_MS` (default 60000; 0 = a fresh
+attestation for every connection — the registry is re-checked on every connection regardless).
+
+Browser / app settings — SOCKS v5 host `127.0.0.1`, port `18180`, **remote DNS**:
+
+- **Firefox**: Settings → Network Settings → *Manual proxy configuration* → SOCKS Host `127.0.0.1` Port
+  `18180`, *SOCKS v5*, tick **Proxy DNS when using SOCKS v5**; set `media.peerconnection.enabled = false` in
+  `about:config` (WebRTC/UDP bypasses any SOCKS proxy).
+- **Chrome / Chromium**: `--proxy-server="socks5://127.0.0.1:18180"` (Chrome always resolves names through a
+  SOCKS5 proxy); add `--host-resolver-rules="MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"` to make any local lookup fail.
+- **curl**: `--proxy socks5h://127.0.0.1:18180` (`socks5://` without the `h` would resolve locally);
+  **git**: `git config --global http.proxy socks5h://127.0.0.1:18180`; most CLIs honour
+  `ALL_PROXY=socks5h://127.0.0.1:18180`.
+
+If the exit fails verification, `plr vpn` does not start (and `plr vpn verify` prints the failing check); if a
+later connection fails the registry re-check, that connection gets SOCKS5 reply `0x02` and nothing is sent.
+Programmatic use: `new VpnClient({ exitUrl, registry: new NearRegistry({ rpcUrl, contractId }), trustedRoot })`,
+`await client.connect(host, port)` → a `Duplex` with `receipt()`; `startVpn({ port, client })` for the proxy.
+
+Builds (`enclave/build.mjs`): `vpn-honest` (production: `allow_loopback: false`), `vpn-honest-test` (loopback
+allowed so tests and the demo can reach a local destination — a different compose hash, so it can never pass as
+production), and ⚠️ `vpn-evil-logger` (prints destinations and the first relayed bytes; never approved).
+
+### Running it in the cloud (Phala dstack) — costs
+
+| item | cost |
+|---|---|
+| VPN exit, Phala Cloud `tdx.small` (1 vCPU / 2 GB is plenty for a relay) | ≈ $0.06/h (≈ $44/month) |
+| LLM router + Qwen 0.5B, `tdx.medium` | ≈ $0.12/h (≈ $88/month) |
+| Phala free credit | $20 ≈ 2 weeks of the exit alone, ≈ 4–5 days of both |
+| NEAR storage per registry deployment (≈ 217 KB wasm + state, 1 NEAR / 100 KB staked, refundable) | ≈ 2–3 NEAR locked |
+| NEAR gas: `register_instance` (daily) and `anchor_receipts` batches | fractions of a milli-NEAR per tx |
+
+For mainnet, raise `PLR_ANCHOR_INTERVAL_MS` to about 10 minutes (`600000`; local default 3 s for the exit):
+one `anchor_receipts` transaction per interval covers every receipt since the last one, so a longer interval
+cuts gas and storage proportionally at the price of a later anchoring proof. Swap the MOCK root for Intel exactly
+as described in *Swapping in real TDX* (`set_root("INTEL", …)` on the VPN registry as well).
+
+### Next step: WireGuard with the attested key
+
+Proxy mode protects what you point at the SOCKS proxy. A full-tunnel VPN can reuse everything here: WireGuard's
+static keys are Curve25519, so the exit's **attested X25519 key** (already bound into `report_data` and
+registered on-chain) can be the WireGuard server's static public key. The client verifies the attestation and
+the registry exactly as today, then configures that key as the peer; WireGuard's Noise IK handshake proves the
+peer holds the matching private key, which only the measured code has. Inside the TD a userspace WireGuard
+(`wireguard-go` / `boringtun`) terminates the tunnel and applies the same egress policy to IP packets (UDP
+included); a new compose (`plr-vpn-wg`) is approved like any other build. The remaining work is packet-level
+egress filtering, DNS inside the tunnel and per-peer receipts.
 
 ---
 
@@ -268,8 +404,10 @@ and the proxy take any `RegistryReader` unchanged. The router side needs the mat
 |---|---|
 | llama-server / mock LLM | `127.0.0.1:18080` / `:18081` by SPEC; the mock host picks a free port by default |
 | router | `127.0.0.1:18100` (dev-up), ephemeral in tests and the demo |
+| VPN exit | `127.0.0.1:18200` (dev-up), ephemeral in tests and the demo |
 | client proxy | `127.0.0.1:18787` |
-| near-sandbox RPC | `127.0.0.1:3030` (dev-up), ephemeral in tests and the demo |
+| client SOCKS5 (`plr vpn`) | `127.0.0.1:18180` (the demo also uses 18181 for the production exit) |
+| near-sandbox RPC | `127.0.0.1:3030` (dev-up), ephemeral in tests and the demo; LLM registry `registry.<root>`, VPN registry `vpnregistry.<root>` |
 | run state | `.run/<id>/` (chain home under `near/`), host sockets in `.run/<id>-host/`; removed on stop (`PLR_KEEP_RUN=1` keeps them) |
 
 The harness and the dev stack run every long-lived process under a "lifeline" that leads its own process

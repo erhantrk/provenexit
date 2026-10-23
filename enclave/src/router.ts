@@ -7,13 +7,14 @@
  */
 import http from "node:http";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { QUOTE, equalBytes, isHex, fromHex, sealFrame, toHex, type Attester, type TdxEvent } from "@plr/shared";
-import { HttpError, onlyParams, parseUrl, readBody, securityHeaders, sendError, sendJson } from "./http-util.js";
+import { sealFrame, toHex, type Attester } from "@plr/shared";
+import { HttpError, onlyParams, parseUrl, readBody, securityHeaders, sendError } from "./http-util.js";
 import type { RouterKeys } from "./keys.js";
 import type { LlmClient } from "./llm.js";
 import { Logger, codeOf, route as routeField } from "./log.js";
 import type { ReceiptLog } from "./receipts.js";
-import { MAX_BODY_BYTES, parseChatEnvelope, parseChatPlaintext, parseUintParam, toBase64, type ChatRequest } from "./validate.js";
+import { commonRoutes, type RouteHandler } from "./service-routes.js";
+import { MAX_BODY_BYTES, parseChatEnvelope, parseChatPlaintext, toBase64, type ChatRequest } from "./validate.js";
 
 export interface RouterOptions {
   attester: Attester;
@@ -35,7 +36,6 @@ export interface RouterOptions {
 }
 
 const TEXT = new TextEncoder();
-const MAX_QUOTE_BYTES = QUOTE.MAX_LEN;
 
 function frameLine(seq: number, ct: Uint8Array): string {
   return `data: {"seq":${seq},"ct":"${toBase64(ct)}"}\n\n`;
@@ -65,39 +65,8 @@ export function createRouter(o: RouterOptions): http.Server {
   const maxSeen = o.maxSeenEpks ?? 1_000_000;
   const composeBytes = o.composeBytes.slice();
   const composeHash = sha256(composeBytes);
-  const composeText = new TextDecoder("utf-8", { fatal: true }).decode(composeBytes);
-  const xpHex = toHex(o.keys.x25519);
-  const epHex = toHex(o.keys.ed25519);
   const seenEpks = new Set<string>();
   let inflight = 0;
-
-  async function attestation(req: http.IncomingMessage, res: http.ServerResponse, query: URLSearchParams): Promise<void> {
-    if (req.method !== "GET") throw new HttpError(405, "E_BAD_REQUEST");
-    const nonceHex = onlyParams(query, ["nonce"]).get("nonce");
-    if (!isHex(nonceHex, 32)) throw new HttpError(400, "E_BAD_REQUEST");
-    const rd = o.keys.reportData(fromHex(nonceHex, 32));
-    let quote: Uint8Array;
-    let eventLog: TdxEvent[];
-    try {
-      ({ quote, eventLog } = await o.attester.getQuote(rd));
-    } catch {
-      throw new HttpError(503, "E_UPSTREAM");
-    }
-    // Sanity check on what the quote service returned: it must quote exactly our report_data.
-    if (!(quote instanceof Uint8Array) || quote.length < QUOTE.SIGNED_LEN || quote.length > MAX_QUOTE_BYTES) {
-      throw new HttpError(503, "E_UPSTREAM");
-    }
-    if (!equalBytes(quote.subarray(QUOTE.OFF.REPORT_DATA, QUOTE.OFF.REPORT_DATA + 64), rd)) throw new HttpError(503, "E_UPSTREAM");
-    sendJson(res, 200, {
-      v: "PLR-v1",
-      root_kind: "MOCK",
-      quote: toHex(quote),
-      event_log: eventLog,
-      app_compose: composeText,
-      x25519: xpHex,
-      ed25519: epHex,
-    });
-  }
 
   async function chat(req: http.IncomingMessage, res: http.ServerResponse, query: URLSearchParams): Promise<void> {
     if (req.method !== "POST") throw new HttpError(405, "E_BAD_REQUEST");
@@ -204,31 +173,12 @@ export function createRouter(o: RouterOptions): http.Server {
     res.end(frameLine(seq, fin));
   }
 
-  function proof(req: http.IncomingMessage, res: http.ServerResponse, query: URLSearchParams): void {
-    if (req.method !== "GET") throw new HttpError(405, "E_BAD_REQUEST");
-    const seqStr = onlyParams(query, ["seq"]).get("seq") ?? null;
-    let seq: number;
-    try {
-      seq = parseUintParam(seqStr);
-    } catch {
-      throw new HttpError(400, "E_BAD_REQUEST");
-    }
-    const p = o.receipts.proof(seq);
-    if (!p) throw new HttpError(404, "E_NOT_ANCHORED");
-    sendJson(res, 200, p);
-  }
-
-  function healthz(req: http.IncomingMessage, res: http.ServerResponse, query: URLSearchParams): void {
-    if (req.method !== "GET" && req.method !== "HEAD") throw new HttpError(405, "E_BAD_REQUEST");
-    onlyParams(query, []);
-    sendJson(res, 200, { ok: true });
-  }
-
-  const routes: Record<string, (req: http.IncomingMessage, res: http.ServerResponse, q: URLSearchParams) => void | Promise<void>> = {
-    "/v1/attestation": attestation,
+  const common = commonRoutes({ attester: o.attester, keys: o.keys, composeBytes, receipts: o.receipts });
+  const routes: Record<string, RouteHandler> = {
+    "/v1/attestation": common.attestation,
     "/v1/private/chat": chat,
-    "/v1/receipts/proof": proof,
-    "/healthz": healthz,
+    "/v1/receipts/proof": common.proof,
+    "/healthz": common.healthz,
   };
 
   const server = http.createServer({ maxHeaderSize: 16 * 1024 }, (req, res) => {

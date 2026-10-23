@@ -1,5 +1,5 @@
 /**
- * Error codes of PLR-v1 (SPEC §2, §3, §6, §7, §9) plus a few library-internal codes.
+ * Error codes of PLR-v1 (SPEC §2, §3, §6, §7, §9) and PLR-VPN-v1 (SPEC-VPN §8), plus a few library-internal codes.
  *
  * Error messages never contain request/response content: a `PlrError` carries only a code and an
  * optional static, content-free detail string.
@@ -41,6 +41,11 @@ export const ERROR_CODES = [
   "E_REPORT_DATA",
   "E_SEQ",
   "E_ANCHOR_SIG",
+  // VPN exit (SPEC-VPN §8)
+  "E_EGRESS_DENIED",
+  "E_DNS",
+  "E_CONNECT_FAILED",
+  "E_TUNNEL_PROTOCOL",
 ] as const;
 
 export type PlrErrorCode = (typeof ERROR_CODES)[number];

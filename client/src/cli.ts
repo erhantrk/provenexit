@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 /**
- * `plr` CLI (SPEC §12): `plr verify` | `plr chat "<prompt>"` | `plr chat` / `plr chat -` (prompt from stdin) | `plr proxy`.
+ * `plr` CLI (SPEC §12): `plr verify` | `plr chat "<prompt>"` | `plr chat` / `plr chat -` (prompt from stdin) | `plr proxy`;
+ * VPN (SPEC-VPN §9.2): `plr vpn` (local SOCKS5 on 127.0.0.1:18180) | `plr vpn verify`.
  * Reading the prompt from stdin is recommended: argv is visible to other local users (`ps`) and lands in
  * shell history.
  * Config via env: PLR_ROUTER_URL, PLR_NEAR_RPC, PLR_REGISTRY, PLR_TRUSTED_ROOT (128 hex);
  * optional PLR_PROXY_PORT (default 18787) and PLR_PROXY_HOST (default 127.0.0.1).
+ * VPN env: PLR_VPN_URL, PLR_VPN_REGISTRY, PLR_NEAR_RPC, PLR_TRUSTED_ROOT; optional PLR_VPN_SOCKS_PORT (default 18180),
+ * PLR_VPN_ATTEST_TTL_MS (default 60000).
  */
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -13,6 +16,9 @@ import { NearRegistry, checkRpcUrl } from "./near-registry.js";
 import { PrivateClient } from "./client.js";
 import { startProxy } from "./proxy.js";
 import { TracingRegistry, checkLines, formatCheckLine } from "./verify-report.js";
+import { recheckRegistry, type AttestationSession } from "./attestation.js";
+import { VpnClient, VPN_ATTEST_TTL_MS } from "./vpn/client.js";
+import { startVpn } from "./vpn/socks5-server.js";
 
 export interface CliIo {
   out: (s: string) => void;
@@ -28,7 +34,23 @@ export interface CliConfig {
   proxyHost: string;
 }
 
-const DEFAULTS = { router: "http://127.0.0.1:18100", rpc: "http://127.0.0.1:3030", proxyPort: 18787, proxyHost: "127.0.0.1" };
+export interface VpnCliConfig {
+  exitUrl: string;
+  rpcUrl: string;
+  contractId: string;
+  trustedRoot: Uint8Array;
+  socksPort: number;
+  attestTtlMs: number;
+}
+
+const DEFAULTS = {
+  router: "http://127.0.0.1:18100",
+  rpc: "http://127.0.0.1:3030",
+  proxyPort: 18787,
+  proxyHost: "127.0.0.1",
+  vpnExit: "http://127.0.0.1:18200",
+  vpnSocksPort: 18180,
+};
 
 /** Max prompt read from stdin (the router's request limit is 1 MiB of ciphertext). */
 export const MAX_STDIN_PROMPT = 512 * 1024;
@@ -37,41 +59,78 @@ const CHAT_USAGE = `usage: plr chat              read the prompt from stdin (rec
        plr chat -            same
        plr chat "<prompt>"   prompt as an argument (visible in \`ps\` and shell history)`;
 
-const USAGE = `usage: plr verify | plr chat [-|"<prompt>"] | plr proxy
+const VPN_USAGE = `usage: plr vpn             verify the VPN exit, then serve a local SOCKS5 proxy (remote DNS) on
+                            socks5h://127.0.0.1:${DEFAULTS.vpnSocksPort}, e.g.  curl --proxy socks5h://127.0.0.1:${DEFAULTS.vpnSocksPort} https://example.com
+       plr vpn verify      print every attestation + registry check of the VPN exit (✔/✘)
+env:   PLR_VPN_URL       VPN exit URL (default ${DEFAULTS.vpnExit})
+       PLR_VPN_REGISTRY  VPN registry contract account id (required; a separate deployment from PLR_REGISTRY)
+       PLR_NEAR_RPC      (default ${DEFAULTS.rpc}; https, or http to a loopback host only)
+       PLR_TRUSTED_ROOT  pinned attestation root, 128 hex (required)
+       PLR_VPN_SOCKS_PORT (default ${DEFAULTS.vpnSocksPort}), PLR_VPN_ATTEST_TTL_MS (default ${VPN_ATTEST_TTL_MS}; 0 = attest every connection)`;
+
+const USAGE = `usage: plr verify | plr chat [-|"<prompt>"] | plr proxy | plr vpn [verify]
        plr chat reads the prompt from stdin when no argument (or "-") is given — recommended, since argv is
        visible to other local processes and saved in shell history.
 env:   PLR_ROUTER_URL (default ${DEFAULTS.router})
        PLR_NEAR_RPC   (default ${DEFAULTS.rpc}; https, or http to a loopback host only)
        PLR_REGISTRY   registry contract account id (required)
        PLR_TRUSTED_ROOT  pinned attestation root, 128 hex (required)
-       PLR_PROXY_PORT (default ${DEFAULTS.proxyPort}), PLR_PROXY_HOST (default ${DEFAULTS.proxyHost})`;
+       PLR_PROXY_PORT (default ${DEFAULTS.proxyPort}), PLR_PROXY_HOST (default ${DEFAULTS.proxyHost})
+vpn:   ${VPN_USAGE.replace(/\n/g, "\n       ")}`;
 
 export class ConfigError extends Error {}
 
-/** Reads and validates the env config. Fails closed: no trusted root ⇒ no default. */
-export function loadConfig(env: Record<string, string | undefined>): CliConfig {
-  const contractId = env.PLR_REGISTRY;
-  if (contractId === undefined || contractId === "") throw new ConfigError("PLR_REGISTRY is required");
+function trustedRootFrom(env: Record<string, string | undefined>): Uint8Array {
   const rootHex = env.PLR_TRUSTED_ROOT;
   if (!isHex(rootHex, 64)) throw new ConfigError("PLR_TRUSTED_ROOT must be 128 lowercase hex chars");
   const trustedRoot = fromHex(rootHex, 64);
   if (!isValidP256Pub(trustedRoot)) throw new ConfigError("PLR_TRUSTED_ROOT is not a valid P-256 public key");
+  return trustedRoot;
+}
+
+function rpcUrlFrom(env: Record<string, string | undefined>): string {
   const rpcUrl = env.PLR_NEAR_RPC || DEFAULTS.rpc;
   try {
     checkRpcUrl(rpcUrl);
   } catch {
     throw new ConfigError("PLR_NEAR_RPC must be an https URL (plain http only to a loopback host: the RPC decides the registry checks)");
   }
-  const portStr = env.PLR_PROXY_PORT ?? String(DEFAULTS.proxyPort);
-  if (!/^\d{1,5}$/.test(portStr) || Number(portStr) > 65535) throw new ConfigError("PLR_PROXY_PORT must be a port number");
+  return rpcUrl;
+}
+
+function portFrom(env: Record<string, string | undefined>, name: string, dflt: number): number {
+  const portStr = env[name] ?? String(dflt);
+  if (!/^\d{1,5}$/.test(portStr) || Number(portStr) > 65535) throw new ConfigError(`${name} must be a port number`);
+  return Number(portStr);
+}
+
+/** Reads and validates the env config. Fails closed: no trusted root ⇒ no default. */
+export function loadConfig(env: Record<string, string | undefined>): CliConfig {
+  const contractId = env.PLR_REGISTRY;
+  if (contractId === undefined || contractId === "") throw new ConfigError("PLR_REGISTRY is required");
+  const trustedRoot = trustedRootFrom(env);
+  const rpcUrl = rpcUrlFrom(env);
+  const proxyPort = portFrom(env, "PLR_PROXY_PORT", DEFAULTS.proxyPort);
   return {
     routerUrl: env.PLR_ROUTER_URL || DEFAULTS.router,
     rpcUrl,
     contractId,
     trustedRoot,
-    proxyPort: Number(portStr),
+    proxyPort,
     proxyHost: env.PLR_PROXY_HOST || DEFAULTS.proxyHost,
   };
+}
+
+/** VPN env config (SPEC-VPN §9.2). Fails closed: the VPN registry and the trusted root have no default. */
+export function loadVpnConfig(env: Record<string, string | undefined>): VpnCliConfig {
+  const contractId = env.PLR_VPN_REGISTRY;
+  if (contractId === undefined || contractId === "") throw new ConfigError("PLR_VPN_REGISTRY is required");
+  const trustedRoot = trustedRootFrom(env);
+  const rpcUrl = rpcUrlFrom(env);
+  const socksPort = portFrom(env, "PLR_VPN_SOCKS_PORT", DEFAULTS.vpnSocksPort);
+  const ttlStr = env.PLR_VPN_ATTEST_TTL_MS ?? String(VPN_ATTEST_TTL_MS);
+  if (!/^\d{1,7}$/.test(ttlStr) || Number(ttlStr) > 3_600_000) throw new ConfigError("PLR_VPN_ATTEST_TTL_MS must be 0..3600000");
+  return { exitUrl: env.PLR_VPN_URL || DEFAULTS.vpnExit, rpcUrl, contractId, trustedRoot, socksPort, attestTtlMs: Number(ttlStr) };
 }
 
 function errCode(e: unknown): string {
@@ -133,6 +192,136 @@ async function cmdChat(prompt: string, client: PrivateClient, io: CliIo, writeDe
   }
 }
 
+/** Build name and egress policy from the verified compose (its bytes were checked against the quote). */
+function composeSummary(appCompose: string): { name: string; egress: string; testBuild: boolean } {
+  try {
+    const j = JSON.parse(appCompose) as { name?: unknown; policy?: { egress?: { allow_loopback?: unknown; deny_private?: unknown } } };
+    const eg = j.policy?.egress;
+    const name = typeof j.name === "string" ? j.name : "?";
+    if (typeof eg !== "object" || eg === null) return { name, egress: "(no VPN egress policy)", testBuild: false };
+    const testBuild = eg.allow_loopback === true;
+    return { name, egress: `deny_private=${String(eg.deny_private)} allow_loopback=${String(eg.allow_loopback)}`, testBuild };
+  } catch {
+    return { name: "?", egress: "(unparseable)", testBuild: false };
+  }
+}
+
+function printVpnSummary(io: CliIo, s: AttestationSession): void {
+  const v = s.verified;
+  const c = composeSummary(s.appCompose);
+  io.out(`  root:            ${v.rootKind} ROOT${v.rootKind === "MOCK" ? " (local test root, NOT Intel)" : ""}`);
+  io.out(`  build:           ${c.name} · egress ${c.egress}${c.testBuild ? "  ⚠ TEST BUILD (loopback egress allowed)" : ""}`);
+  io.out(`  compose hash:    ${toHex(v.composeHash)}`);
+  io.out(`  OS measurement:  ${toHex(v.osMeasurement)}`);
+  io.out(`  key hash:        ${toHex(v.keyHash)}`);
+  io.out(`  exit x25519:     ${toHex(v.x25519)}`);
+  io.out(`  exit ed25519:    ${toHex(v.ed25519)}`);
+}
+
+const RECHECK_LINE = "registry re-check before each connection (compose, OS, instance)";
+
+async function cmdVpnVerify(cfg: VpnCliConfig, registry: TracingRegistry, client: VpnClient, io: CliIo): Promise<number> {
+  io.out(`PLR VPN verify`);
+  io.out(`  exit:     ${client.exitUrl}`);
+  io.out(`  registry: ${registry.contractId} on ${registry.chain} (${cfg.rpcUrl})`);
+  io.out(`  pinned root: ${client.rootKind} ROOT ${toHex(cfg.trustedRoot)}`);
+  io.out("");
+  let session: AttestationSession;
+  try {
+    session = await client.attestSession();
+  } catch (e) {
+    for (const l of checkLines(e, registry.lastCall)) io.out(formatCheckLine(l));
+    io.out(`  · ${RECHECK_LINE}  (not checked)`);
+    io.out("");
+    io.out(`✘ REFUSED — ${errCode(e)}. No connection would be tunnelled through this exit.`);
+    return 1;
+  }
+  for (const l of checkLines(undefined)) io.out(formatCheckLine(l));
+  try {
+    await recheckRegistry(registry, session.verified);
+    io.out(`  ✔ ${RECHECK_LINE}`);
+  } catch (e) {
+    io.out(`  ✘ ${RECHECK_LINE}  [${errCode(e)}]`);
+    io.out("");
+    io.out(`✘ REFUSED — ${errCode(e)}. No connection would be tunnelled through this exit.`);
+    return 1;
+  }
+  io.out(`  ✔ destinations resolved by the exit (remote DNS); the client never resolves them`);
+  io.out("");
+  io.out(`✔ VERIFIED`);
+  printVpnSummary(io, session);
+  try {
+    const inst = await registry.inner.getInstance(toHex(session.verified.keyHash));
+    if (inst === null) {
+      io.out(`  on-chain instance: (none — registration expired since verification)`);
+    } else {
+      io.out(`  on-chain instance:`);
+      io.out(`    operator:      ${inst.operator}`);
+      io.out(`    registered at: ${new Date(inst.registered_at_ms).toISOString()}`);
+      io.out(`    expires at:    ${new Date(inst.expires_at_ms).toISOString()}`);
+      io.out(`    next seq:      ${inst.next_seq}`);
+    }
+  } catch {
+    io.out(`  on-chain instance: (registry unavailable)`);
+  }
+  return 0;
+}
+
+async function cmdVpn(cfg: VpnCliConfig, client: VpnClient, io: CliIo, untilStopped: () => Promise<void>): Promise<number> {
+  let session: AttestationSession;
+  try {
+    session = await client.attestSession();
+  } catch (e) {
+    io.err(`✘ VPN exit verification failed: ${errCode(e)} — SOCKS5 proxy not started (run \`plr vpn verify\` for every check)`);
+    return 1;
+  }
+  let p;
+  try {
+    p = await startVpn({ port: cfg.socksPort, host: "127.0.0.1", client });
+  } catch {
+    io.err(`✘ could not listen on 127.0.0.1:${cfg.socksPort} (PLR_VPN_SOCKS_PORT)`);
+    return 1;
+  }
+  io.out(`✔ VPN exit verified (${session.verified.checks.length} checks against registry ${cfg.contractId}); every new connection re-checks the registry`);
+  printVpnSummary(io, session);
+  io.out(`✔ SOCKS5 proxy (remote DNS, CONNECT only) on ${p.url}`);
+  io.out(`  e.g.  curl --proxy ${p.url} https://example.com`);
+  await untilStopped();
+  await p.close();
+  return 0;
+}
+
+function untilSignal(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const stop = (): void => resolve();
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+}
+
+/** `plr vpn [verify]`. */
+async function runVpn(rest: string[], env: Record<string, string | undefined>, io: CliIo, untilStopped: () => Promise<void>): Promise<number> {
+  const sub = rest[0];
+  if (rest.length > 1 || (sub !== undefined && sub !== "verify")) {
+    io.err(VPN_USAGE);
+    return 2;
+  }
+  let cfg: VpnCliConfig;
+  let registry: TracingRegistry;
+  let client: VpnClient;
+  try {
+    cfg = loadVpnConfig(env);
+    registry = new TracingRegistry(new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.contractId }));
+    client = new VpnClient({ exitUrl: cfg.exitUrl, registry, trustedRoot: cfg.trustedRoot, attestTtlMs: cfg.attestTtlMs });
+  } catch (e) {
+    io.err(`config error: ${e instanceof ConfigError ? e.message : errCode(e)}`);
+    io.err(VPN_USAGE);
+    return 2;
+  }
+  if (sub === "verify") return cmdVpnVerify(cfg, registry, client, io);
+  return cmdVpn(cfg, client, io, untilStopped);
+}
+
 class StdinTooLargeError extends Error {}
 
 /** Reads all of process.stdin as UTF-8 (fatal decoding), refusing more than {@link MAX_STDIN_PROMPT} bytes. */
@@ -171,19 +360,21 @@ async function chatPrompt(rest: string[], readStdin: () => Promise<string>, io: 
   return prompt.trim() === "" ? null : prompt;
 }
 
-/** Runs the CLI; returns the exit code. `proxy` resolves only when the process is signalled. */
+/** Runs the CLI; returns the exit code. `proxy` and `vpn` resolve only when `untilStopped` resolves (default: SIGINT/SIGTERM). */
 export async function runCli(
   argv: string[],
   env: Record<string, string | undefined>,
   io: CliIo = { out: (s) => console.log(s), err: (s) => console.error(s) },
   writeDelta: (s: string) => void = (s) => void process.stdout.write(s),
   readStdin: () => Promise<string> = () => readStdinText(),
+  untilStopped: () => Promise<void> = untilSignal,
 ): Promise<number> {
   const [cmd, ...rest] = argv;
-  if (cmd === undefined || cmd === "-h" || cmd === "--help" || !["verify", "chat", "proxy"].includes(cmd)) {
+  if (cmd === undefined || cmd === "-h" || cmd === "--help" || !["verify", "chat", "proxy", "vpn"].includes(cmd)) {
     io.err(USAGE);
     return 2;
   }
+  if (cmd === "vpn") return runVpn(rest, env, io, untilStopped);
   if (cmd === "chat" && (rest.length > 1 || rest[0] === "-h" || rest[0] === "--help" || rest[0] === "")) {
     io.err(CHAT_USAGE);
     return 2;
@@ -220,11 +411,7 @@ export async function runCli(
   }
   const p = await startProxy({ port: cfg.proxyPort, host: cfg.proxyHost, client });
   io.out(`✔ router verified (${client.rootKind} ROOT); OpenAI-compatible proxy on ${p.url}/v1`);
-  await new Promise<void>((resolve) => {
-    const stop = (): void => resolve();
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
-  });
+  await untilStopped();
   await p.close();
   return 0;
 }

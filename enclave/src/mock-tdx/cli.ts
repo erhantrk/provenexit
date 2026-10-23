@@ -7,10 +7,18 @@
  *   plr-tdx-host measure --compose <app-compose.json> [--bundle <file>] [--llm-file <file>] [--debug]
  *   plr-tdx-host gen-root --out <file>
  *
+ * The compose's `name` selects the service: `plr-router` (above) or `plr-vpn` (SPEC-VPN §2, no LLM):
+ *   plr-tdx-host launch  --compose <vpn app-compose.json> [--bundle <file>] [--run-dir <dir>] [--exit-port N] [--debug]
+ *   plr-tdx-host measure --compose <vpn app-compose.json> [--bundle <file>] [--debug]
+ * For a VPN compose `--exit-port` (default PLR_VPN_PORT, else 18200) is the listen port; `--router-port` is accepted
+ * as an alias. LLM options are refused for a VPN compose; `--state-dir` is accepted and ignored.
+ *
  * Environment:
  *   PLR_MOCK_ROOT_SECRET_FILE  path of the MOCK ROOT secret (64 hex, mode 0600)            [launch, measure]
  *   PLR_NEAR_RPC, PLR_REGISTRY, PLR_OPERATOR_ID, PLR_OPERATOR_KEY, PLR_REGISTER_DEPOSIT, PLR_ANCHOR_DEPOSIT,
  *   PLR_ANCHOR_INTERVAL_MS, PLR_ROUTER_HOST                                     forwarded to the router
+ *   PLR_NEAR_RPC, PLR_VPN_REGISTRY (else PLR_REGISTRY), PLR_OPERATOR_ID, PLR_OPERATOR_KEY, PLR_REGISTER_DEPOSIT,
+ *   PLR_ANCHOR_DEPOSIT, PLR_ANCHOR_INTERVAL_MS, PLR_VPN_HOST, PLR_VPN_PORT                forwarded to a VPN exit
  *
  * `launch` is the default command when the first argument is an option. `measure` prints
  * `{"compose_hash","os_measurement","bundle_sha256","llm_sha256","node_sha256","llm_runtime_sha256"}` (after
@@ -20,7 +28,9 @@
 import { parseArgs } from "node:util";
 import { toHex } from "@plr/shared";
 import { Logger, code } from "../log.js";
-import { HostError, generateRootSecret, launch, loadRootSecret, measureBoot, type HostHandle } from "./host.js";
+import {
+  HostError, composeServiceOf, generateRootSecret, launch, launchVpn, loadRootSecret, measureBoot, measureVpnBoot, type HostHandle, type VpnHostHandle,
+} from "./host.js";
 
 const log = new Logger("plr-host");
 
@@ -55,6 +65,7 @@ async function main(argv: string[]): Promise<void> {
       "run-dir": { type: "string" },
       "state-dir": { type: "string" },
       "router-port": { type: "string" },
+      "exit-port": { type: "string" },
       "llm-port": { type: "string" },
       "llama-server": { type: "string" },
       debug: { type: "boolean", default: false },
@@ -69,6 +80,8 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
   if (!values.compose) fail("E_USAGE");
+  if (composeServiceOf(values.compose) === "vpn") return vpnMain(cmd, values);
+  if (values["exit-port"] !== undefined) fail("E_USAGE");
   const spec = {
     composePath: values.compose,
     ...(values.bundle !== undefined ? { bundlePath: values.bundle } : {}),
@@ -123,6 +136,60 @@ async function main(argv: string[]): Promise<void> {
   if (abort.signal.aborted) process.exit(await handle.stop());
   const exitCode = await handle.done;
   process.exit(exitCode);
+}
+
+type Values = { [k: string]: string | boolean | undefined };
+
+/** `measure` / `launch` of a `plr-vpn` compose. */
+async function vpnMain(cmd: string, values: Values): Promise<void> {
+  const str = (k: string): string | undefined => (typeof values[k] === "string" ? (values[k] as string) : undefined);
+  // No LLM in a VPN TD: LLM options are a usage error, not silently ignored.
+  if (str("llm-file") !== undefined || str("llm-port") !== undefined || str("llama-server") !== undefined) fail("E_USAGE");
+  // `--state-dir` (the router's PLR_RUN_DIR) is accepted and unused: an exit is never told any writable place.
+  const spec = {
+    composePath: str("compose")!,
+    ...(str("bundle") !== undefined ? { bundlePath: str("bundle")! } : {}),
+    debug: values.debug === true,
+  };
+  if (cmd === "measure") {
+    const boot = await measureVpnBoot({ ...spec, root: rootFromEnv() });
+    process.stdout.write(
+      JSON.stringify({
+        service: "vpn",
+        compose_hash: boot.composeHash,
+        os_measurement: boot.osMeasurement,
+        bundle_sha256: boot.compose.vpn.bundle_sha256,
+        node_sha256: boot.compose.vpn.node_sha256,
+        allow_loopback: boot.compose.policy.egress.allow_loopback,
+      }) + "\n",
+    );
+    return;
+  }
+  if (cmd !== "launch") fail("E_USAGE");
+  const root = rootFromEnv();
+  delete process.env.PLR_MOCK_ROOT_SECRET_FILE;
+  const portArg = str("exit-port") ?? str("router-port");
+  let handle: VpnHostHandle | null = null;
+  let stopping = false;
+  const abort = new AbortController();
+  for (const sig of ["SIGTERM", "SIGINT"] as const) {
+    process.on(sig, () => {
+      if (stopping) return;
+      stopping = true;
+      if (handle) void handle.stop().then((c) => process.exit(c));
+      else abort.abort();
+    });
+  }
+  handle = await launchVpn({
+    signal: abort.signal,
+    ...spec,
+    root,
+    runDir: str("run-dir") ?? ".run",
+    ...(portArg !== undefined ? { exitPort: port(portArg, 18200) } : {}),
+    exitEnv: process.env,
+  });
+  if (abort.signal.aborted) process.exit(await handle.stop());
+  process.exit(await handle.done);
 }
 
 process.on("uncaughtException", (e) => fail(e instanceof HostError ? e.code : "E_HOST"));

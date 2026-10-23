@@ -30,16 +30,16 @@ export interface RouterConfig {
   nearConfigError: boolean;
 }
 
-type Env = Readonly<Record<string, string | undefined>>;
+export type Env = Readonly<Record<string, string | undefined>>;
 
 /** 0.01 NEAR: ~7× the storage of one anchor record; the contract refunds what is not used. */
 export const DEFAULT_ANCHOR_DEPOSIT = "10000000000000000000000";
 
-function bad(what: string): never {
+export function bad(what: string): never {
   throw new PlrError("E_BAD_INPUT", `config ${what}`);
 }
 
-function intVar(env: Env, name: string, def: number, min: number, max: number): number {
+export function intVar(env: Env, name: string, def: number, min: number, max: number): number {
   const v = env[name];
   if (v === undefined || v === "") return def;
   if (!/^[0-9]{1,10}$/.test(v)) bad(name);
@@ -48,7 +48,7 @@ function intVar(env: Env, name: string, def: number, min: number, max: number): 
   return n;
 }
 
-const HOST_RE = /^(?:127\.0\.0\.1|0\.0\.0\.0|::1|::|localhost|(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d))$/;
+export const HOST_RE = /^(?:127\.0\.0\.1|0\.0\.0\.0|::1|::|localhost|(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d))$/;
 
 export function loadConfig(env: Env = process.env): RouterConfig {
   const tdxSocket = env.PLR_TDX_SOCKET;
@@ -75,8 +75,12 @@ export function loadConfig(env: Env = process.env): RouterConfig {
   return { tdxSocket, composePath, host, port, llmPort, llmApiKey, anchorIntervalMs, near, nearConfigError };
 }
 
-function loadNear(env: Env): NearConfig | null {
-  const nearVars = ["PLR_NEAR_RPC", "PLR_REGISTRY", "PLR_OPERATOR_ID", "PLR_OPERATOR_KEY"] as const;
+/**
+ * NEAR registration config: all of PLR_NEAR_RPC, the registry (`registryVar`), PLR_OPERATOR_ID and
+ * PLR_OPERATOR_KEY, or none (→ null). @throws PlrError E_BAD_INPUT if partially set or invalid
+ */
+export function loadNear(env: Env, registryVar: string = "PLR_REGISTRY"): NearConfig | null {
+  const nearVars = ["PLR_NEAR_RPC", registryVar, "PLR_OPERATOR_ID", "PLR_OPERATOR_KEY"] as const;
   const set = nearVars.filter((k) => (env[k] ?? "") !== "");
   let near: NearConfig | null = null;
   if (set.length === nearVars.length) {
@@ -88,10 +92,10 @@ function loadNear(env: Env): NearConfig | null {
       bad("PLR_NEAR_RPC");
     }
     if (u.protocol !== "http:" && u.protocol !== "https:") bad("PLR_NEAR_RPC");
-    const contractId = env.PLR_REGISTRY!;
+    const contractId = env[registryVar]!;
     const operatorId = env.PLR_OPERATOR_ID!;
     const operatorKey = env.PLR_OPERATOR_KEY!;
-    if (!NEAR_ACCOUNT_RE.test(contractId)) bad("PLR_REGISTRY");
+    if (!NEAR_ACCOUNT_RE.test(contractId)) bad(registryVar);
     if (!NEAR_ACCOUNT_RE.test(operatorId)) bad("PLR_OPERATOR_ID");
     if (!NEAR_KEY_RE.test(operatorKey)) bad("PLR_OPERATOR_KEY");
     const dep = env.PLR_REGISTER_DEPOSIT || "100000000000000000000000";
@@ -100,7 +104,7 @@ function loadNear(env: Env): NearConfig | null {
     if (!/^[0-9]{1,40}$/.test(anchorDep)) bad("PLR_ANCHOR_DEPOSIT");
     near = { rpcUrl, contractId, operatorId, operatorKey, registerDeposit: BigInt(dep), anchorDeposit: BigInt(anchorDep) };
   } else if (set.length > 0) {
-    bad("NEAR (PLR_NEAR_RPC, PLR_REGISTRY, PLR_OPERATOR_ID, PLR_OPERATOR_KEY must be set together)");
+    bad(`NEAR (PLR_NEAR_RPC, ${registryVar}, PLR_OPERATOR_ID, PLR_OPERATOR_KEY must be set together)`);
   }
   return near;
 }

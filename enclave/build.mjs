@@ -9,7 +9,15 @@
 //   app-compose.json                          = app-compose.mock.json (default local stack)
 //   evil-logger.bundle.mjs                    ⚠️ EVIL demo build: honest source + evil/stealing-llm.ts
 //   app-compose.evil-logger.{mock,llama}.json its compose files (different bundle_sha256 ⇒ different hash)
-//   build-info.json                           every hash above, for harnesses and the demo
+//   vpn-exit/<variant>/vpn.bundle.mjs              VPN exit builds (SPEC-VPN §2), one directory per variant because the
+//   vpn-exit/<variant>/app-compose.json            compose entry is always "vpn.bundle.mjs":
+//                                               vpn-honest       production policy (allow_loopback false)
+//                                               vpn-honest-test  same bundle, allow_loopback true (local tests only;
+//                                                                different compose hash, never passes as production)
+//                                               vpn-evil-logger  ⚠️ honest source + evil/logging-dialer.ts, test policy
+//   build-info.json                           every hash above, for harnesses and the demo (VPN under the "vpn" key:
+//                                             { <variant>: { dir, bundle, bundle_sha256, allow_loopback,
+//                                                            compose: { file, compose_hash } } }, paths relative to OUT)
 //
 // Runtime pins: `router.node_sha256` = runtime closure digest of the node running this build (the host runs the
 // router and the mock LLM with the same node), `llm.runtime_sha256` = closure digest of llama-server
@@ -36,7 +44,7 @@ if (!existsSync(composeModule)) {
   process.stderr.write("build.mjs: dist/compose.js missing — run `tsc -b` first (npm run build does)\n");
   process.exit(1);
 }
-const { makeCompose, composeBytes } = await import(pathToFileURL(composeModule).href);
+const { makeCompose, makeVpnCompose, composeBytes } = await import(pathToFileURL(composeModule).href);
 const { measureRuntime } = await import(pathToFileURL(join(HERE, "dist", "mock-tdx", "runtime.js")).href);
 const LLAMA_SERVER = process.env.PLR_LLAMA_SERVER || "/opt/homebrew/bin/llama-server";
 let nodeRuntime, llamaRuntime;
@@ -82,6 +90,7 @@ async function bundle(entry, outName) {
 }
 
 function writeOut(name, bytes) {
+  mkdirSync(dirname(join(OUT, name)), { recursive: true });
   writeFileSync(join(OUT, name), bytes);
   return sha256(bytes);
 }
@@ -120,10 +129,39 @@ for (const v of variants) {
   }
   info.variants[v.name] = entry;
 }
+
+// VPN exit (SPEC-VPN §2). Bundled once per source; the honest bytes serve both honest variants.
+const vpnBundles = {
+  honest: await bundle("src/vpn/entry.ts", "vpn-exit/vpn.bundle.mjs"),
+  evil: await bundle("evil/vpn-entry.ts", "vpn-exit/vpn.bundle.mjs"),
+};
+const vpnVariants = [
+  { name: "vpn-honest", source: "honest", allowLoopback: false },
+  { name: "vpn-honest-test", source: "honest", allowLoopback: true },
+  { name: "vpn-evil-logger", source: "evil", allowLoopback: true },
+];
+info.vpn = {};
+for (const v of vpnVariants) {
+  const dir = `vpn-exit/${v.name}`;
+  const bundleSha = writeOut(`${dir}/vpn.bundle.mjs`, vpnBundles[v.source]);
+  const cb = composeBytes(makeVpnCompose({ bundleSha256: bundleSha, nodeSha256: nodeRuntime.digest, allowLoopback: v.allowLoopback }));
+  const composeHash = writeOut(`${dir}/app-compose.json`, cb);
+  info.vpn[v.name] = {
+    dir,
+    bundle: `${dir}/vpn.bundle.mjs`,
+    bundle_sha256: bundleSha,
+    allow_loopback: v.allowLoopback,
+    compose: { file: `${dir}/app-compose.json`, compose_hash: composeHash },
+  };
+}
+
 writeFileSync(join(OUT, "build-info.json"), JSON.stringify(info, null, 2) + "\n");
 process.stdout.write(
   `built ${OUT}\n` +
     Object.entries(info.variants)
       .map(([n, v]) => `  ${n.padEnd(12)} bundle ${v.bundle_sha256}  compose(mock) ${v.compose.mock.compose_hash}  compose(llama) ${v.compose.llama.compose_hash}\n`)
+      .join("") +
+    Object.entries(info.vpn)
+      .map(([n, v]) => `  ${n.padEnd(16)} bundle ${v.bundle_sha256}  compose ${v.compose.compose_hash}\n`)
       .join(""),
 );

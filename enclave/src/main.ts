@@ -2,18 +2,17 @@
  * Router boot wiring: read the measured compose, generate keys in memory, self-check the quote service
  * against the compose, serve, then register + anchor if NEAR is configured.
  */
-import { readFileSync } from "node:fs";
 import type http from "node:http";
 import type { AddressInfo } from "node:net";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { randomBytes } from "@noble/hashes/utils.js";
-import { equalBytes, parseQuote, toHex, verifyEventLog } from "@plr/shared";
+import { toHex } from "@plr/shared";
 import { Anchorer } from "./anchor.js";
-import { MAX_COMPOSE_BYTES, parseCompose } from "./compose.js";
+import { installProcessGuards, selfCheckQuote } from "./boot.js";
+import { parseCompose, readCompose } from "./compose.js";
 import type { RouterConfig } from "./config.js";
 import { RouterKeys } from "./keys.js";
 import type { LlmClient } from "./llm.js";
-import { Logger, code, codeOf, hex, url } from "./log.js";
+import { Logger, code, hex, url } from "./log.js";
 import { SocketAttester } from "./mock-tdx/attester.js";
 import { NearRegistryWriter } from "./near.js";
 import { ReceiptLog } from "./receipts.js";
@@ -30,12 +29,7 @@ export interface RunningRouter {
   close(): Promise<void>;
 }
 
-/** Reads the compose file once (bounded). */
-export function readCompose(path: string): Uint8Array {
-  const buf = readFileSync(path);
-  if (buf.length > MAX_COMPOSE_BYTES) throw new Error("E_COMPOSE_SIZE");
-  return new Uint8Array(buf);
-}
+export { readCompose };
 
 /**
  * Boots the router. `llmFor` receives the 127.0.0.1 port of the LLM and returns the client to use.
@@ -48,13 +42,7 @@ export async function bootRouter(cfg: RouterConfig, llmFor: (port: number) => Ll
   const keys = RouterKeys.generate();
   const attester = new SocketAttester(cfg.tdxSocket);
 
-  // Self-check: the quote service must measure exactly the compose we will publish.
-  const probe = keys.reportData(randomBytes(32));
-  const q = await attester.getQuote(probe);
-  const parsed = parseQuote(q.quote);
-  if (!equalBytes(parsed.report.reportData, probe)) throw new Error("E_REPORT_DATA");
-  const measured = verifyEventLog(q.eventLog, parsed.report.rtmr[3]);
-  if (!equalBytes(measured.composeHash, composeHash)) throw new Error("E_COMPOSE_MISMATCH");
+  await selfCheckQuote(attester, keys, composeHash);
 
   const receipts = new ReceiptLog();
   const llmPort = cfg.llmPort ?? DEFAULT_LLM_PORT[compose.llm.kind];
@@ -94,23 +82,4 @@ export async function bootRouter(cfg: RouterConfig, llmFor: (port: number) => Ll
   };
 }
 
-/**
- * Process-level guards for the router process: uncaught errors print only a code (never a message or stack,
- * which could quote request content) and terminate; SIGTERM/SIGINT close cleanly.
- */
-export function installProcessGuards(log: Logger, getRouter: () => RunningRouter | null): void {
-  const fatal = (e: unknown) => {
-    log.info("fatal", { code: codeOf(e) });
-    process.exit(1);
-  };
-  process.on("uncaughtException", fatal);
-  process.on("unhandledRejection", fatal);
-  for (const sig of ["SIGTERM", "SIGINT"] as const) {
-    process.on(sig, () => {
-      const r = getRouter();
-      const t = setTimeout(() => process.exit(0), 2000);
-      t.unref();
-      void (r ? r.close() : Promise.resolve()).finally(() => process.exit(0));
-    });
-  }
-}
+export { installProcessGuards };
