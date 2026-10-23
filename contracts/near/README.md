@@ -7,8 +7,8 @@ registration quotes**, and Ed25519-authorised Merkle anchoring of receipts.
 
 ```sh
 cd contracts/near
-cargo near build non-reproducible-wasm --no-abi   # → target/near/plr_registry.wasm (~210 KB)
-cargo test --release                              # 29 tests, incl. 64 TS-generated registration vectors
+cargo near build non-reproducible-wasm --no-abi   # → target/near/plr_registry.wasm (~230 KB)
+cargo test --release                              # 41 tests, incl. 64 TS-generated registration vectors
 ```
 
 Without network, add `CARGO_NET_OFFLINE=true`.
@@ -29,15 +29,26 @@ Without network, add `CARGO_NET_OFFLINE=true`.
 | `allow_compose(hash)` / `revoke_compose(hash)` / `allow_os(hash)` / `revoke_os(hash)` | owner | idempotent; events `compose_allowed`… |
 | `set_root(kind, p256)` | owner | event `root_set` |
 | `propose_owner(id)` / `accept_owner()` | owner / pending owner | events `owner_proposed`, `owner_accepted` |
+| `approve_operator(account_id, org_id)` / `revoke_operator(account_id)` | owner | SPEC §7 rev 1.2 operator organizations. `org_id` must match `^[a-z0-9][a-z0-9._-]{0,63}$` (ASCII), else `E_BAD_INPUT`. Re-approving changes the org. Revoking an unapproved account is a no-op. Events `operator_approved` `{account_id, org_id, previous_org_id}` / `operator_revoked` `{account_id, previous_org_id}`. Not payable: like the other owner methods, the entry's storage (≈ 110-240 bytes, ≤ 0.0024 NEAR) is paid from the contract balance and released on revoke. Owner-only, so it is not a drain vector |
+| `get_operator(account_id) → org_id \| null` | view | `null` if not approved or `account_id` is malformed |
 | `register_instance(quote, event_log, app_compose, x25519, ed25519) → key_hash` | anyone, `#[payable]` | SPEC §7 steps 1-7; storage deposit required (≈0.0035 NEAR used; ≈6.5 Tgas); excess becomes anchor credit (≤ 0.05 NEAR), the rest is refunded |
 | `anchor_receipts(key_hash, root, first_seq, count, sig) → anchor_id` | anyone, `#[payable]` | storage paid by the attached deposit (excess refunded) or the instance's prepaid anchor credit, else `E_DEPOSIT`; event `receipts_anchored` |
 | `get_anchor_credit(key_hash) → string` | view | remaining prepaid anchor storage (yoctoNEAR); `register_instance` keeps up to 0.05 NEAR of its excess deposit as credit, refunds the rest |
-| views | | `is_allowed(compose_hash, os_measurement)`, `is_compose_allowed(hash)`, `is_os_allowed(hash)`, `get_instance(key_hash)` (null if unknown/expired), `get_root()`, `get_anchor(id)`, `anchor_count()`, `get_owner()`, `get_pending_owner()`, `get_instance_ttl_ms()` |
+| views | | `is_allowed(compose_hash, os_measurement)`, `is_compose_allowed(hash)`, `is_os_allowed(hash)`, `get_instance(key_hash)` (null if unknown/expired; includes `org_id`, the registering operator's org looked up live at read time, or null), `get_root()`, `get_anchor(id)`, `anchor_count()`, `get_owner()`, `get_pending_owner()`, `get_instance_ttl_ms()` |
 
 Views never panic on malformed input: a malformed or all-zero hash is simply "not allowed" / `null`.
 
 Re-registering the same keys refreshes `expires_at_ms` (and compose/OS) but keeps `operator`, `registered_at_ms` and
 `next_seq`. It adds no storage, so it needs no deposit; a deposit attached to a refresh tops up the anchor credit.
+
+Organizations are metadata for clients (two-hop routing requires `entry.org_id != exit.org_id`, SPEC-VPN). They do
+not gate `register_instance` or `anchor_receipts`: an unapproved account can still register, and its instances report
+`org_id: null`.
+
+**State layout (rev 1.2):** the `operators` map was added as the last field of the contract state and the last
+`StorageKey` variant. A contract deployed before rev 1.2 cannot be upgraded in place by code redeploy alone, because
+the borsh state would not deserialize. Redeploy it fresh, or add a migration. There is no migration method, since no
+pre-rev-1.2 deployment exists outside local sandboxes.
 
 ## Error codes (panic message = `CODE` or `CODE: static detail`; caller input is never echoed)
 

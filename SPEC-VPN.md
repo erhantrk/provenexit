@@ -92,9 +92,9 @@ deliver any part of it. An unknown type ⇒ `E_TUNNEL_PROTOCOL`.
 
 | type | name | dir | payload |
 |---|---|---|---|
-| 1 | CONNECT | c2s | JSON `{"host":"<domain or IP literal>","port":<1..65535>}` (≤ 512 bytes) |
+| 1 | CONNECT | c2s | JSON `{"host":"<domain or IP literal>","port":<1..65535>}` (≤ 512 bytes; senders pad with trailing spaces to exactly 512) |
 | 2 | CONNECT_OK | s2c | empty |
-| 3 | CONNECT_ERR | s2c | JSON `{"code":"E_..."}` |
+| 3 | CONNECT_ERR | s2c | JSON `{"code":"E_..."}` (senders pad with trailing spaces to exactly 32 bytes) |
 | 4 | DATA | both | 1..16384 bytes |
 | 5 | FIN | both | empty — sender will send no more DATA (half-close) |
 | 6 | RECEIPT | s2c | JSON `{"receipt":{…§5},"sig":"<128 hex>"}` |

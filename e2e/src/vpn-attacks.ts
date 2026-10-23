@@ -8,8 +8,9 @@
  * - `vpn-truncate-stream` forwards CONNECT_OK and the first s2c DATA frame, then closes the client socket
  *                         (no FIN frame ever reaches the client).
  *
- * The tunnel cannot be decrypted by the proxy: it parses only the u32be frame lengths (SPEC-VPN §4.2) and knows
- * the frame *types* only from the state machine (s2c frame 0 = CONNECT_OK, s2c frame 1 = the first DATA frame).
+ * The tunnel cannot be decrypted by the proxy: it forwards the 33-byte `server_hello` (SPEC-VPN §4.1) untouched,
+ * then parses only the u32be frame lengths (§4.2) and knows the frame *types* only from the state machine
+ * (s2c frame 0 = CONNECT_OK, s2c frame 1 = the first DATA frame).
  * Proxy log lines (`plr-attack[<kind>]: …`) are content-free: no destination, payload, address or port.
  */
 import http from "node:http";
@@ -30,17 +31,29 @@ const UPGRADE_TIMEOUT_MS = 15_000;
 
 /**
  * Splits the s2c byte stream into wire frames by length only and lets `onFrame` decide what to forward.
+ * The first `skip` bytes (the handshake v2 `server_hello`) go to `onRaw` unchanged and are not frames.
  * A length outside the SPEC range switches to raw pass-through (the client rejects it anyway).
  */
 class FrameCutter {
   #buf: Buffer = Buffer.alloc(0);
   #index = 0;
   #raw = false;
+  #skip: number;
   constructor(
     private readonly onFrame: (index: number, wire: Buffer) => void,
     private readonly onRaw: (b: Buffer) => void,
-  ) {}
+    skip = 0,
+  ) {
+    this.#skip = skip;
+  }
   push(chunk: Buffer): void {
+    if (this.#skip > 0) {
+      const n = Math.min(this.#skip, chunk.length);
+      this.#skip -= n;
+      this.onRaw(chunk.subarray(0, n));
+      chunk = chunk.subarray(n);
+      if (chunk.length === 0) return;
+    }
     if (this.#raw) return this.onRaw(chunk);
     this.#buf = this.#buf.length === 0 ? chunk : Buffer.concat([this.#buf, chunk]);
     while (this.#buf.length >= 4) {
@@ -93,7 +106,7 @@ export async function startVpnAttackProxy(kind: VpnAttackKind, upstreamUrl: stri
     // c2s: untouched.
     if (clientHead.length > 0) upstream.write(clientHead);
     client.pipe(upstream);
-    // s2c: frame-length parsing only.
+    // s2c: the server_hello untouched, then frame-length parsing only.
     let cut = false;
     const cutter = new FrameCutter(
       (i, wire) => {
@@ -115,6 +128,7 @@ export async function startVpnAttackProxy(kind: VpnAttackKind, upstreamUrl: stri
       (b) => {
         if (!cut) client.write(b);
       },
+      TUNNEL.SERVER_HELLO_LEN,
     );
     upstream.on("data", (c: Buffer) => cutter.push(c));
     upstream.on("end", () => {

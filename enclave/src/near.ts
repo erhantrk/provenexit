@@ -33,10 +33,14 @@ export interface AnchorView {
 /** What the router needs from the registry chain. Implemented for NEAR below; faked in unit tests. */
 export interface RegistryWriter {
   readonly contractId: string;
+  /** The account that signs this instance's transactions (its on-chain `operator`, SPEC §7 rev 1.2). */
+  readonly operatorId: string;
   registerInstance(args: RegisterArgs): Promise<void>;
   /** Returns the contract's return value (the anchor id if the contract returns one). */
   anchorReceipts(args: AnchorArgs): Promise<unknown>;
   getInstanceNextSeq(keyHash: string): Promise<number | null>;
+  /** The `operator` account recorded for the instance, or null if it is not (or no longer) registered. */
+  getInstanceOperator(keyHash: string): Promise<string | null>;
   anchorCount(): Promise<number>;
   getAnchor(id: number): Promise<AnchorView | null>;
 }
@@ -55,6 +59,7 @@ export function isAnchorView(a: unknown): a is AnchorView {
 
 export class NearRegistryWriter implements RegistryWriter {
   readonly contractId: string;
+  readonly operatorId: string;
   readonly #provider: JsonRpcProvider;
   readonly #account: Account;
   readonly #deposit: bigint;
@@ -64,6 +69,7 @@ export class NearRegistryWriter implements RegistryWriter {
     if (!NEAR_ACCOUNT_RE.test(o.contractId) || !NEAR_ACCOUNT_RE.test(o.operatorId)) throw new PlrError("E_BAD_INPUT", "account id");
     if (!NEAR_KEY_RE.test(o.operatorKey)) throw new PlrError("E_BAD_INPUT", "operator key");
     this.contractId = o.contractId;
+    this.operatorId = o.operatorId;
     this.#provider = new JsonRpcProvider({ url: o.rpcUrl });
     this.#account = new Account(o.operatorId, this.#provider, KeyPairSigner.fromSecretKey(o.operatorKey as KeyPairString));
     this.#deposit = o.registerDeposit;
@@ -98,6 +104,14 @@ export class NearRegistryWriter implements RegistryWriter {
     if (r === null || r === undefined) return null;
     if (typeof r !== "object" || !isUint((r as Record<string, unknown>).next_seq)) throw new PlrError("E_BAD_RESPONSE", "get_instance");
     return (r as { next_seq: number }).next_seq;
+  }
+
+  async getInstanceOperator(keyHash: string): Promise<string | null> {
+    const r = await this.#view("get_instance", { key_hash: keyHash });
+    if (r === null || r === undefined) return null;
+    const op = typeof r === "object" ? (r as Record<string, unknown>).operator : undefined;
+    if (typeof op !== "string" || !NEAR_ACCOUNT_RE.test(op)) throw new PlrError("E_BAD_RESPONSE", "get_instance");
+    return op;
   }
 
   async anchorCount(): Promise<number> {

@@ -56,13 +56,15 @@ describe("reproducible build (SPEC §4)", () => {
 
       // VPN exit builds (SPEC-VPN §2), recorded under "vpn" without touching the router keys.
       expect(Object.keys(info).sort()).toEqual(["llm", "runtime", "variants", "vpn"]);
+      const TEST_DOH = ["http://127.0.0.1:18253/dns-query"], PROD_DOH = ["https://1.1.1.1/dns-query", "https://9.9.9.9/dns-query"];
       for (const [v, loopback] of [["vpn-honest", false], ["vpn-honest-test", true], ["vpn-evil-logger", true]] as const) {
         const dir = `vpn-exit/${v}`;
         const c = parseVpnCompose(new Uint8Array(readFileSync(join(a, dir, "app-compose.json")))); // strict + canonical
         expect(c.vpn.bundle_sha256).toBe(ha[`${dir}/vpn.bundle.mjs`]);
         expect(c.policy.egress).toEqual({ allow_loopback: loopback, deny_private: true });
+        expect(c.policy.dns.doh).toEqual(loopback ? TEST_DOH : PROD_DOH); // SPEC-VPN §2
         expect(info.vpn[v]).toEqual({
-          dir, bundle: `${dir}/vpn.bundle.mjs`, bundle_sha256: ha[`${dir}/vpn.bundle.mjs`], allow_loopback: loopback,
+          dir, bundle: `${dir}/vpn.bundle.mjs`, bundle_sha256: ha[`${dir}/vpn.bundle.mjs`], allow_loopback: loopback, doh: loopback ? TEST_DOH : PROD_DOH,
           compose: { file: `${dir}/app-compose.json`, compose_hash: ha[`${dir}/app-compose.json`] },
         });
       }

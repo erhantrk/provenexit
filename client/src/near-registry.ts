@@ -15,6 +15,7 @@ import {
   isAnchorRecord,
   isHash32,
   isInstanceRecord,
+  isOrgId,
   isRegistryRoot,
   parseJsonIntegers,
   type AnchorRecord,
@@ -181,10 +182,19 @@ export class NearRegistry implements RegistryReader {
       x25519: v.x25519,
       ed25519: v.ed25519,
       operator: v.operator,
+      org_id: v.org_id,
       registered_at_ms: v.registered_at_ms,
       expires_at_ms: v.expires_at_ms,
       next_seq: v.next_seq,
     };
+  }
+
+  /** `get_operator(account_id)` (SPEC §7 rev 1.2): the account's owner-approved `org_id`, or null. */
+  async getOperator(accountId: string): Promise<string | null> {
+    if (!isNearAccountId(accountId)) return null; // the contract never maps malformed account ids
+    const v = await this.view("get_operator", { account_id: accountId });
+    if (v !== null && !isOrgId(v)) throw new NearRegistryError("get_operator: malformed reply");
+    return v;
   }
 
   async getAnchor(id: number): Promise<AnchorRecord | null> {

@@ -1,14 +1,16 @@
-/** PLR-VPN-v1 tunnel constants (SPEC-VPN §4). */
+/** PLR-VPN-v1 tunnel constants (SPEC-VPN §4, rev 2: handshake v2). */
 import { utf8 } from "../bytes.js";
 
 /** `utf8("PLR-VPN-v1")` — the VPN protocol domain separator (SPEC-VPN header). */
 export const VPN_DOMAIN: Uint8Array = utf8("PLR-VPN-v1");
 
 export const TUNNEL = Object.freeze({
-  /** hello version byte */
-  VERSION: 1,
-  /** `u8(1) ‖ att_nonce(32) ‖ epk(32)` */
+  /** hello / server_hello version byte (handshake v2; v1 is removed) */
+  VERSION: 2,
+  /** `u8(2) ‖ att_nonce(32) ‖ epk_c(32)` */
   HELLO_LEN: 65,
+  /** `u8(2) ‖ epk_s(32)` */
+  SERVER_HELLO_LEN: 33,
   /** max frame payload (DATA chunk) */
   MAX_PAYLOAD: 16384,
   /** tag(16) + type(1) */

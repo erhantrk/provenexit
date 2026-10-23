@@ -4,15 +4,26 @@
  *
  *   node e2e/dist/stack-cli.js up [--llm llama|mock] [--rpc-port N] [--router-port N] [--exit-port N] [--id <id>]
  *                                 [--extra evil-logger,mitm-key,vpn-honest-test,vpn-evil-logger,…] [--destination]
- *                                 [--env-out .run/stack.env]
- *       Starts near-sandbox + both registries (LLM + VPN), approves and launches the honest router and the honest
- *       PRODUCTION VPN exit (SPEC-VPN; `vpn-honest`, approved on the VPN registry) (+ extra variants: router
- *       attacks, and VPN builds/attacks — `vpn-honest-test` is approved whenever it or an attack in front of it is
- *       requested, `vpn-evil-logger` never is), optionally a local HTTP destination (`--destination`, port in
- *       PLR_DEST_PORT), writes the env file (PLR_* client config incl. PLR_VPN_URL, PLR_VPN_REGISTRY,
+ *                                 [--env-out .run/stack.env] [--dns-down-file <path>]
+ *       Starts near-sandbox + both registries (LLM + VPN) + the test builds' DoH resolver (127.0.0.1:18253),
+ *       approves and launches the honest router and the honest PRODUCTION VPN exit (SPEC-VPN; `vpn-honest`,
+ *       approved on the VPN registry, registered by `operator`) (+ extra variants: router attacks, and VPN
+ *       builds/attacks — `vpn-evil-logger` is never approved).
+ *       Two-hop (SPEC-VPN §10): the owner approves `operator` as org-a and `operator2` as org-b; a second
+ *       production exit (`vpn-honest`, registered by `operator2`, PLR_VPN2_URL) and a two-hop ENTRY (registered by
+ *       `operator2`, PLR_VPN_ENTRY_URL) are launched. The entry is the approved TEST build: a production entry
+ *       refuses to dial a loopback exit (egress policy), so on one machine only a loopback-allowing entry can
+ *       reach the exit; in the cloud both hops are production builds with public addresses.
+ *       `vpn-honest-test` is therefore always approved. Optionally a local HTTP destination (`--destination`,
+ *       port in PLR_DEST_PORT, name PLR_DEST_HOST=dest.plr.test known only to the local DoH resolver).
+ *       Writes the env file (PLR_* client config incl. PLR_VPN_URL, PLR_VPN_ENTRY_URL, PLR_VPN_REGISTRY,
  *       PLR_VPN_COMPOSE_HASH) and the owner key file (0600), then runs until SIGINT/SIGTERM, when it
  *       stops everything and removes both files. Router/host output is teed to <logs>/<variant>.log
  *       (content-free for honest builds; the evil build would print what it steals there).
+ *       `--dns-down-file <path>`: while <path> exists the DoH resolver answers HTTP 503 (demo: "resolver down").
+ *       `--evil-entry`: ⚠️ also a `vpn-evil-logger` instance registered by `operator` (org-a) for the demo's
+ *       separation-of-knowledge step (PLR_VPN_EVIL_ENTRY_URL): the owner approves the evil build just long enough
+ *       for it to register, then revokes it again (PLR_VPN_EVIL_COMPOSE_HASH; the demo re-approves it briefly).
  *       Shutdown triggers: `--stop-file <path>` (the file appears; dev-down.sh, demo.sh), `--parent-pid <pid>`
  *       (that process is gone, however it ended), SIGINT/SIGTERM. Shutdown is idempotent and bounded: every
  *       router subtree and the chain get SIGTERM to their process group, SIGKILL after 10 s, and the CLI exits
@@ -42,6 +53,10 @@ function die(msg: string): never {
 }
 
 const envVarName = (v: Variant | VpnVariant) => `PLR_${v.toUpperCase().replace(/-/g, "_")}_URL`;
+/** The local destination's name: only the stack's DoH resolver knows it (`.test` never resolves publicly). */
+const DEST_NAME = "dest.plr.test";
+/** Operator organizations of the dev stack (SPEC §7 rev 1.2): entry and exit belong to different orgs. */
+const ORGS = { operator: "org-a", operator2: "org-b" } as const;
 const ownerFileOf = (envFile: string) => envFile.replace(/\.env$/, "") + ".owner.json";
 
 function portFree(p: number): Promise<boolean> {
@@ -124,6 +139,7 @@ async function up(values: Record<string, string | boolean | undefined>): Promise
     const rpcPort = port(values["rpc-port"] as string | undefined);
     const routerPort = port(values["router-port"] as string | undefined);
     const exitPort = port(values["exit-port"] as string | undefined);
+    if (exitPort !== undefined && exitPort !== 0 && exitPort === rpcPort) throw new Error("exit and rpc ports must differ");
     for (const [what, p] of [["rpc", rpcPort], ["router", routerPort], ["exit", exitPort]] as const) {
       if (p !== undefined && p !== 0 && !(await portFree(p))) throw new Error(`${what} port ${p} is already in use`);
     }
@@ -149,22 +165,52 @@ async function up(values: Record<string, string | boolean | undefined>): Promise
     // VPN (SPEC-VPN): the honest production exit on the VPN registry, plus any requested exit variants.
     const vpnApproved = await stack.approveVpnBuild("vpn-honest");
     process.stdout.write(`stack-cli: owner approved vpn-honest build on the VPN registry compose=${vpnApproved.composeHash} os=${vpnApproved.osMeasurement}\n`);
-    const exits: Partial<Record<VpnVariant, ExitHandle>> = {};
-    exits["vpn-honest"] = await stack.startExit("vpn-honest", exitPort !== undefined ? { port: exitPort } : {});
-    process.stdout.write(`stack-cli: vpn-honest exit ${exits["vpn-honest"].url} key_hash=${exits["vpn-honest"].keyHash}\n`);
-    let testApproved: { composeHash: string } | null = null;
-    if (exitExtras.some((e) => e !== "vpn-evil-logger")) {
-      testApproved = await stack.approveVpnBuild("vpn-honest-test");
-      process.stdout.write(`stack-cli: owner approved vpn-honest-test build (loopback allowed: local tests only) compose=${testApproved.composeHash}\n`);
+    const testApproved = await stack.approveVpnBuild("vpn-honest-test");
+    process.stdout.write(`stack-cli: owner approved vpn-honest-test build (loopback allowed: local tests and the two-hop entry only) compose=${testApproved.composeHash}\n`);
+    for (const [account, org] of Object.entries(ORGS) as Array<[keyof typeof ORGS, string]>) {
+      await stack.approveOperator(account, org);
+      process.stdout.write(`stack-cli: owner approved operator ${stack.accounts[account]} as organization ${org}\n`);
     }
+    process.stdout.write(`stack-cli: DoH resolver of the test builds on http://127.0.0.1:18253/dns-query\n`);
+    const exits: Partial<Record<VpnVariant, ExitHandle>> = {};
+    exits["vpn-honest"] = await stack.startExit("vpn-honest", { operator: "operator", ...(exitPort !== undefined ? { port: exitPort } : {}) });
+    process.stdout.write(`stack-cli: vpn-honest exit ${exits["vpn-honest"].url} key_hash=${exits["vpn-honest"].keyHash} (operator, ${ORGS.operator})\n`);
+    // Two-hop: a second production exit and the entry, both run by operator2 (org-b). Labels keep their logs apart.
+    const exit2 = await stack.startExit("vpn-honest", { operator: "operator2", label: "vpn-honest-2" });
+    process.stdout.write(`stack-cli: vpn-honest exit #2 ${exit2.url} key_hash=${exit2.keyHash} (operator2, ${ORGS.operator2})\n`);
+    const entry = await stack.startExit("vpn-honest-test", { operator: "operator2", label: "vpn-entry" });
+    process.stdout.write(`stack-cli: two-hop entry (vpn-honest-test) ${entry.url} key_hash=${entry.keyHash} (operator2, ${ORGS.operator2})\n`);
     for (const e of exitExtras) {
       exits[e] = await stack.startExit(e);
       process.stdout.write(`stack-cli: ${e} exit ${exits[e]!.url} compose=${exits[e]!.composeHash}\n`);
     }
+    let evilEntry: { url: string; composeHash: string } | null = null;
+    if (values["evil-entry"] === true) {
+      // After the extras: an unapproved `vpn-evil-logger` extra must have failed its registration already.
+      const evil = await stack.approveVpnBuild("vpn-evil-logger");
+      const h = await stack.startExit("vpn-evil-logger", { operator: "operator", label: "vpn-evil-entry" });
+      await stack.callVpn("owner", "revoke_compose", { hash: evil.composeHash });
+      evilEntry = { url: h.url, composeHash: evil.composeHash };
+      process.stdout.write(`stack-cli: ⚠️ evil logging entry ${h.url} registered (operator, ${ORGS.operator}); its build is revoked again compose=${evil.composeHash}\n`);
+    }
     let dest: Destination | null = null;
     if (values.destination === true) {
       dest = await stack.startDestination();
-      process.stdout.write(`stack-cli: local HTTP destination on 127.0.0.1:${dest.port}\n`);
+      stack.dns.set(DEST_NAME, [dest.host]);
+      process.stdout.write(`stack-cli: local HTTP destination on 127.0.0.1:${dest.port} (${DEST_NAME} in the local DoH resolver)\n`);
+    }
+    const dnsDownFile = values["dns-down-file"] as string | undefined;
+    if (dnsDownFile !== undefined) {
+      rmSync(dnsDownFile, { force: true });
+      let down = false;
+      const dns = stack.dns;
+      setInterval(() => {
+        const now = existsSync(dnsDownFile);
+        if (now === down) return;
+        down = now;
+        dns.setDown(down);
+        process.stdout.write(`stack-cli: DoH resolver ${down ? "DOWN (HTTP 503)" : "UP"}\n`);
+      }, 200).unref();
     }
 
     const lines = [
@@ -181,12 +227,21 @@ async function up(values: Record<string, string | boolean | undefined>): Promise
       `PLR_STACK_PID=${process.pid}`,
       ...routerExtras.map((e) => `${envVarName(e)}=${routers[e]!.url}`),
       `PLR_VPN_URL=${exits["vpn-honest"].url}`,
+      `# two-hop (SPEC-VPN §10): with PLR_VPN_ENTRY_URL set, \`plr vpn\` routes client → entry → PLR_VPN_URL; unset it for one hop`,
+      `PLR_VPN_ENTRY_URL=${entry.url}`,
+      `PLR_VPN2_URL=${exit2.url}`,
+      `PLR_VPN_ORG=${ORGS.operator}`,
+      `PLR_VPN_ENTRY_ORG=${ORGS.operator2}`,
+      `PLR_OPERATOR_ID=${stack.accounts.operator}`,
+      `PLR_OPERATOR2_ID=${stack.accounts.operator2}`,
       `PLR_VPN_REGISTRY=${stack.vpnContractId}`,
       `PLR_VPN_COMPOSE_HASH=${vpnApproved.composeHash}`,
       `PLR_VPN_OS_MEASUREMENT=${vpnApproved.osMeasurement}`,
-      ...(testApproved ? [`PLR_VPN_TEST_COMPOSE_HASH=${testApproved.composeHash}`] : []),
+      `PLR_VPN_TEST_COMPOSE_HASH=${testApproved.composeHash}`,
+      `PLR_DOH_URL=http://127.0.0.1:18253/dns-query`,
       ...exitExtras.map((e) => `${envVarName(e)}=${exits[e]!.url}`),
-      ...(dest ? [`PLR_DEST_PORT=${dest.port}`] : []),
+      ...(evilEntry ? [`PLR_VPN_EVIL_ENTRY_URL=${evilEntry.url}`, `PLR_VPN_EVIL_COMPOSE_HASH=${evilEntry.composeHash}`] : []),
+      ...(dest ? [`PLR_DEST_PORT=${dest.port}`, `PLR_DEST_HOST=${DEST_NAME}`] : []),
     ];
     mkdirSync(dirname(envFile), { recursive: true });
     // Owner key for the `owner` sub-command (demo revocation): fresh dev-chain key, 0600, removed on stop.
@@ -216,7 +271,7 @@ function readEnvFile(path: string): Record<string, string> {
   return out;
 }
 
-const OWNER_METHODS = new Set(["allow_compose", "revoke_compose", "allow_os", "revoke_os"]);
+const OWNER_METHODS = new Set(["allow_compose", "revoke_compose", "allow_os", "revoke_os", "approve_operator", "revoke_operator"]);
 
 async function owner(method: string | undefined, argsJson: string | undefined, envFile: string, vpn: boolean): Promise<void> {
   if (!method || !OWNER_METHODS.has(method)) die(`owner: method must be one of ${[...OWNER_METHODS].join(", ")}`);
@@ -253,12 +308,14 @@ const { values, positionals } = parseArgs({
     "router-port": { type: "string" },
     "exit-port": { type: "string" },
     destination: { type: "boolean" },
+    "evil-entry": { type: "boolean" },
     vpn: { type: "boolean" },
     id: { type: "string" },
     extra: { type: "string" },
     "env-out": { type: "string" },
     "stop-file": { type: "string" },
     "parent-pid": { type: "string" },
+    "dns-down-file": { type: "string" },
   },
 });
 if (cmd === "up") await up(values);

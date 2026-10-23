@@ -3,7 +3,10 @@
 #   build → near-sandbox + LLM registry + VPN registry → honest router (real Qwen 0.5B via llama.cpp, launched &
 #   measured by the mock TDX host) → `plr verify` + `plr chat` → evil-logger, MITM and on-chain revocation
 #   scenarios → VPN: `plr vpn verify`, a fetch through the local SOCKS5 proxy and the attested tunnel, evil exit,
-#   MITM, revocation, the production egress policy, and (only when online) https://example.com via the exit.
+#   MITM, revocation, encrypted DNS inside the exit (DoH: resolver down ⇒ E_DNS, no plaintext fallback), the
+#   production egress policy, and (only when online) https://example.com via the exit → two-hop (SPEC-VPN §10):
+#   both hops + operator organizations verified, a fetch through entry → exit, same organization refused, a logging
+#   entry that sees only the exit's address, and (only when online) https://example.com through two hops.
 # Everything it starts is stopped on exit (trap), whatever happens.
 #
 # Env: PLR_LLM=llama|mock (default llama), PLR_SKIP_BUILD=1, NO_COLOR=1,
@@ -35,6 +38,7 @@ STACK_LOG="$RUN/$ID.log"
 STACK_STARTED=0
 STACK_PID=""
 STOP_FILE="$RUN/$ID.stop"
+DNS_DOWN_FILE="$RUN/$ID.dns-down"   # while it exists, the stack's DoH resolver answers HTTP 503
 SOCKS_PIDS=()   # names of the running `plr vpn` instances
 SOCKS_JOBS=()   # their background job pids
 # Shutdown is signal-free and bounded: dropping $STOP_FILE makes the stack stop every router subtree and the
@@ -64,7 +68,7 @@ cleanup() {
     printf '\n%s━━ cleanup%s\n' "$B$C" "$X"
     stop_stack
   fi
-  rm -f "$ENV_FILE" "${ENV_FILE%.env}.owner.json" "$RUN/$ID"-socks-*.log
+  rm -f "$ENV_FILE" "${ENV_FILE%.env}.owner.json" "$RUN/$ID"-socks-*.log "$DNS_DOWN_FILE"
   exit "$code"
 }
 trap cleanup EXIT
@@ -103,6 +107,7 @@ mkdir -p "$RUN"
 : >"$STACK_LOG"
 rm -f "$STOP_FILE"
 node e2e/dist/stack-cli.js up --llm "$LLM" --id "$ID" --extra evil-logger,mitm-key,vpn-honest-test,vpn-evil-logger,vpn-mitm-key --destination \
+  --evil-entry --dns-down-file "$DNS_DOWN_FILE" \
   --env-out "$ENV_FILE" --stop-file "$STOP_FILE" --parent-pid "$$" </dev/null >"$STACK_LOG" 2>&1 &
 STACK_PID=$!
 STACK_STARTED=1
@@ -117,6 +122,8 @@ for _ in $(seq 1 1200); do
 done
 if [[ ! -f "$ENV_FILE" ]]; then sed -n "$((SHOWN + 1)),\$p" "$STACK_LOG" | show; bad "stack failed to start (log: $STACK_LOG)"; exit 1; fi
 set -a; . "$ENV_FILE"; set +a
+# Two-hop mode is opt-in per command below: the single-hop steps talk to one exit.
+TWOHOP_ENTRY_URL="$PLR_VPN_ENTRY_URL"; unset PLR_VPN_ENTRY_URL
 ok "stack ready: router $PLR_ROUTER_URL · registry $PLR_REGISTRY @ $PLR_NEAR_RPC"
 info "pinned root (PLR_TRUSTED_ROOT): ${PLR_TRUSTED_ROOT:0:32}…"
 
@@ -170,12 +177,13 @@ SOCKS_PROD=$((SOCKS_TEST + 1))
 MARK="vpn-demo-secret-$(date +%s)-$RANDOM"
 # curl through a SOCKS5 proxy with remote DNS (socks5h); `--noproxy ''` keeps NO_PROXY from bypassing it for localhost.
 socks_curl() { local port=$1; shift; curl -sS --max-time 20 --noproxy '' --proxy "socks5h://127.0.0.1:$port" "$@"; }
-# Starts `plr vpn` against exit $2 on SOCKS port $3 in the background; waits for its ready line.
+# Starts `plr vpn` against exit $2 on SOCKS port $3 (two-hop through entry $4 when given) in the background;
+# waits for its ready line.
 start_socks() {
-  local name=$1 url=$2 port=$3 log="$RUN/$ID-socks-$1.log"
+  local name=$1 url=$2 port=$3 entry=${4:-} log="$RUN/$ID-socks-$1.log"
   : >"$log"
-  run "PLR_VPN_URL=$url PLR_VPN_SOCKS_PORT=$port plr vpn &"
-  env PLR_VPN_URL="$url" PLR_VPN_SOCKS_PORT="$port" node "$ROOT/scripts/plr-bg.mjs" --stop-file "$RUN/$ID-socks-$name.stop" -- vpn </dev/null >"$log" 2>&1 &
+  run "${entry:+PLR_VPN_ENTRY_URL=$entry }PLR_VPN_URL=$url PLR_VPN_SOCKS_PORT=$port plr vpn &"
+  env ${entry:+PLR_VPN_ENTRY_URL="$entry"} PLR_VPN_URL="$url" PLR_VPN_SOCKS_PORT="$port" node "$ROOT/scripts/plr-bg.mjs" --stop-file "$RUN/$ID-socks-$name.stop" -- vpn </dev/null >"$log" 2>&1 &
   local pid=$!
   SOCKS_PIDS+=("$name"); SOCKS_JOBS+=("$pid")
   for _ in $(seq 1 120); do
@@ -186,6 +194,30 @@ start_socks() {
   show <"$log"
   if grep -q "SOCKS5 proxy" "$log"; then ok "SOCKS5 proxy for the $name exit on socks5h://127.0.0.1:$port"; return 0; fi
   bad "plr vpn ($name) did not start"; return 1
+}
+# One verified connection with the exact PLR error code (scripts/vpn-probe.mjs): GET <path> to <host>:<port> via exit
+# <exit> (two-hop through <entry> unless it is "-"). Expects $1 = "ok" or a refusal code; prints the probe output.
+#   expect_probe <ok|E_CODE> <entry|-> <exit> <host> <port> [<path>]
+expect_probe() {
+  local want=$1 entry=$2 exit=$3; shift 3
+  local out rc
+  set +e
+  if [[ $entry == - ]]; then run "PLR_VPN_URL=$exit vpn-probe $*"; else run "PLR_VPN_ENTRY_URL=$entry PLR_VPN_URL=$exit vpn-probe $*"; fi
+  if [[ $entry == - ]]; then out=$(env PLR_VPN_ENTRY_URL= PLR_VPN_URL="$exit" node "$ROOT/scripts/vpn-probe.mjs" "$@" 2>&1 </dev/null); rc=$?
+  else out=$(env PLR_VPN_ENTRY_URL="$entry" PLR_VPN_URL="$exit" node "$ROOT/scripts/vpn-probe.mjs" "$@" 2>&1 </dev/null); rc=$?; fi
+  set -e
+  printf '%s\n' "$out" | show
+  if [[ $want == ok ]]; then
+    [[ $rc -eq 0 ]] && return 0
+    bad "expected a successful connection (exit $rc)"; return 1
+  fi
+  [[ $rc -ne 0 && "$out" == *"✘ $want"* ]] && return 0
+  bad "expected refusal $want (exit $rc)"; return 1
+}
+# Waits (≤ 10 s) for the stack log to report the DoH resolver state $1 (DOWN|UP).
+wait_dns() {
+  for _ in $(seq 1 40); do grep -q "stack-cli: DoH resolver $1" "$STACK_LOG" && return 0; sleep 0.25; done
+  bad "the DoH resolver did not switch $1"; return 1
 }
 # Expects a SOCKS5 refusal: curl exit 97 (proxy handshake failed: the CONNECT reply was not "succeeded").
 expect_socks_refusal() {
@@ -207,10 +239,11 @@ info "test build compose $PLR_VPN_TEST_COMPOSE_HASH (allow_loopback: true is par
 VPN_TEST_OK=0
 if start_socks test "$PLR_VPN_HONEST_TEST_URL" "$SOCKS_TEST"; then
   VPN_TEST_OK=1
-  run "curl --proxy socks5h://127.0.0.1:$SOCKS_TEST http://localhost:$PLR_DEST_PORT/$MARK"
-  set +e; OUT=$(socks_curl "$SOCKS_TEST" "http://localhost:$PLR_DEST_PORT/$MARK" 2>&1); RC=$?; set -e
+  info "$PLR_DEST_HOST exists only in the stack's local DoH resolver (.test never resolves publicly): if it works, the exit resolved it"
+  run "curl --proxy socks5h://127.0.0.1:$SOCKS_TEST http://$PLR_DEST_HOST:$PLR_DEST_PORT/$MARK"
+  set +e; OUT=$(socks_curl "$SOCKS_TEST" "http://$PLR_DEST_HOST:$PLR_DEST_PORT/$MARK" 2>&1); RC=$?; set -e
   printf '%s\n' "$OUT" | show
-  if [[ $RC -eq 0 && "$OUT" == "dest-ok:/$MARK" ]]; then ok "response relayed end-to-end (\"localhost\" was resolved by the exit, not by the client)"; else bad "fetch through the tunnel failed (curl exit $RC)"; fi
+  if [[ $RC -eq 0 && "$OUT" == "dest-ok:/$MARK" ]]; then ok "response relayed end-to-end (\"$PLR_DEST_HOST\" was resolved by the exit over DoH, not by the client)"; else bad "fetch through the tunnel failed (curl exit $RC)"; fi
   if grep -qF "$MARK" "$PLR_STACK_LOG_DIR/vpn-honest-test.log" "$PLR_STACK_LOG_DIR/vpn-honest.log" 2>/dev/null; then bad "a destination/payload marker appears in an honest exit's output!"; else ok "the honest exits' output contains no destination, path or payload"; fi
   grep -m3 "plr-vpn: " "$PLR_STACK_LOG_DIR/vpn-honest-test.log" | show || true
 fi
@@ -231,14 +264,33 @@ if [[ $VPN_TEST_OK == 1 ]]; then
   step "VPN: revocation — applies to the very next connection, even with a cached attestation"
   run "owner --vpn revoke_compose $PLR_VPN_TEST_COMPOSE_HASH"
   vpn_owner revoke_compose "{\"hash\":\"$PLR_VPN_TEST_COMPOSE_HASH\"}" 2>&1 | show
-  run "curl --proxy socks5h://127.0.0.1:$SOCKS_TEST http://localhost:$PLR_DEST_PORT/after-revoke"
-  expect_socks_refusal "refused (SOCKS5 reply 0x02 \"not allowed by ruleset\") — the destination was never contacted" "$SOCKS_TEST" "http://localhost:$PLR_DEST_PORT/after-revoke"
+  run "curl --proxy socks5h://127.0.0.1:$SOCKS_TEST http://$PLR_DEST_HOST:$PLR_DEST_PORT/after-revoke"
+  expect_socks_refusal "refused (SOCKS5 reply 0x02 \"not allowed by ruleset\") — the destination was never contacted" "$SOCKS_TEST" "http://$PLR_DEST_HOST:$PLR_DEST_PORT/after-revoke"
   run "owner --vpn allow_compose $PLR_VPN_TEST_COMPOSE_HASH"
   vpn_owner allow_compose "{\"hash\":\"$PLR_VPN_TEST_COMPOSE_HASH\"}" 2>&1 | show
-  run "curl --proxy socks5h://127.0.0.1:$SOCKS_TEST http://localhost:$PLR_DEST_PORT/after-reallow"
-  set +e; OUT=$(socks_curl "$SOCKS_TEST" "http://localhost:$PLR_DEST_PORT/after-reallow" 2>&1); RC=$?; set -e
+  run "curl --proxy socks5h://127.0.0.1:$SOCKS_TEST http://$PLR_DEST_HOST:$PLR_DEST_PORT/after-reallow"
+  set +e; OUT=$(socks_curl "$SOCKS_TEST" "http://$PLR_DEST_HOST:$PLR_DEST_PORT/after-reallow" 2>&1); RC=$?; set -e
   printf '%s\n' "$OUT" | show
   if [[ $RC -eq 0 && "$OUT" == "dest-ok:/after-reallow" ]]; then ok "service restored by re-approval"; else bad "fetch failed after re-approval (curl exit $RC)"; fi
+fi
+
+if [[ $VPN_TEST_OK == 1 ]]; then
+  step "VPN: encrypted DNS inside the exit — DoH only (RFC 8484), never the host's resolver"
+  info "production resolvers (measured in the compose): $(node -e 'console.log(require("./enclave/dist/build-info.json").vpn["vpn-honest"].doh.join(", "))')"
+  info "test builds: $PLR_DOH_URL (the stack's local resolver). The resolver sees the query, never your IP;"
+  info "the exit's host/ISP sees only TLS to the resolver's IP literal — no plaintext DNS, no bootstrap lookup."
+  if expect_probe ok - "$PLR_VPN_HONEST_TEST_URL" "$PLR_DEST_HOST" "$PLR_DEST_PORT" /doh-up; then ok "$PLR_DEST_HOST resolved inside the exit over DoH, then fetched"; fi
+  run "touch $DNS_DOWN_FILE   # the DoH resolver now answers HTTP 503"
+  touch "$DNS_DOWN_FILE"
+  if wait_dns DOWN; then
+    if expect_probe E_DNS - "$PLR_VPN_HONEST_TEST_URL" "$PLR_DEST_HOST" "$PLR_DEST_PORT" /doh-down; then ok "resolver down ⇒ E_DNS: no fallback, the destination was never contacted"; fi
+    if expect_probe E_DNS - "$PLR_VPN_HONEST_TEST_URL" example.com 80; then ok "example.com ⇒ E_DNS too: the host's resolver could answer it, but the exit never asks it"; fi
+    run "curl --proxy socks5h://127.0.0.1:$SOCKS_TEST http://$PLR_DEST_HOST:$PLR_DEST_PORT/doh-down"
+    expect_socks_refusal "SOCKS5 reply 0x04 (host unreachable) = E_DNS" "$SOCKS_TEST" "http://$PLR_DEST_HOST:$PLR_DEST_PORT/doh-down"
+  fi
+  rm -f "$DNS_DOWN_FILE"
+  wait_dns UP || true
+  if expect_probe E_EGRESS_DENIED - "$PLR_VPN_HONEST_TEST_URL" localhost "$PLR_DEST_PORT"; then ok "\"localhost\" refused before any resolution (RFC 6761), even on the loopback-allowing test build"; fi
 fi
 
 step "VPN: the production build refuses loopback and cloud-metadata targets (protects the host's own services)"
@@ -258,6 +310,70 @@ if start_socks production "$PLR_VPN_URL" "$SOCKS_PROD"; then
     info "offline (https://example.com unreachable directly): skipped"
   fi
 fi
+
+# =========================================================================================== two-hop (SPEC-VPN §10)
+SOCKS_TWO=$((SOCKS_TEST + 2))
+SOCKS_TWO_PROD=$((SOCKS_TEST + 3))
+MARK2="twohop-demo-secret-$(date +%s)-$RANDOM"
+ENTRY_PORT="${TWOHOP_ENTRY_URL##*:}"
+twohop_verify() { env PLR_VPN_ENTRY_URL="$1" PLR_VPN_URL="$2" node "$ROOT/client/dist/cli.js" vpn verify; }
+
+step "Two-hop: plr vpn verify — both hops attested, operator organizations from the chain, different orgs"
+info "entry $TWOHOP_ENTRY_URL — run by operator2, approved as organization $PLR_VPN_ENTRY_ORG"
+info "exit  $PLR_VPN_HONEST_TEST_URL — run by operator, approved as organization $PLR_VPN_ORG (test build: reaches the local destination)"
+run "PLR_VPN_ENTRY_URL=\$ENTRY PLR_VPN_URL=\$EXIT plr vpn verify"
+set +e; OUT=$(twohop_verify "$TWOHOP_ENTRY_URL" "$PLR_VPN_HONEST_TEST_URL" 2>&1); RC=$?; set -e
+printf '%s\n' "$OUT" | show
+if [[ $RC -eq 0 && "$OUT" == *"$PLR_VPN_ENTRY_ORG → $PLR_VPN_ORG"* ]]; then ok "both hops verified; organizations $PLR_VPN_ENTRY_ORG ≠ $PLR_VPN_ORG (the exit was attested through the entry, never contacted directly)"; else bad "two-hop verification failed (exit $RC)"; fi
+
+step "Two-hop: fetch through entry ($PLR_VPN_ENTRY_ORG) → exit ($PLR_VPN_ORG) via the SOCKS5 proxy"
+if start_socks twohop "$PLR_VPN_HONEST_TEST_URL" "$SOCKS_TWO" "$TWOHOP_ENTRY_URL"; then
+  run "curl --proxy socks5h://127.0.0.1:$SOCKS_TWO http://$PLR_DEST_HOST:$PLR_DEST_PORT/$MARK2"
+  set +e; OUT=$(socks_curl "$SOCKS_TWO" "http://$PLR_DEST_HOST:$PLR_DEST_PORT/$MARK2" 2>&1); RC=$?; set -e
+  printf '%s\n' "$OUT" | show
+  if [[ $RC -eq 0 && "$OUT" == "dest-ok:/$MARK2" ]]; then ok "relayed through two nested tunnels (inner one end-to-end encrypted to the exit)"; else bad "two-hop fetch failed (curl exit $RC)"; fi
+fi
+if expect_probe ok "$TWOHOP_ENTRY_URL" "$PLR_VPN_HONEST_TEST_URL" "$PLR_DEST_HOST" "$PLR_DEST_PORT" "/$MARK2-probe"; then ok "the exit's and the entry's session receipts both verified"; fi
+if grep -qF -e "$MARK2" -e "$PLR_DEST_HOST" "$PLR_STACK_LOG_DIR/vpn-entry.log" "$PLR_STACK_LOG_DIR/vpn-honest-test.log" 2>/dev/null; then bad "a destination or payload marker appears in an honest hop's output!"; else ok "neither honest hop's output contains the destination, path or payload"; fi
+
+step "Two-hop: the same organization on both hops is refused"
+info "exit #2 $PLR_VPN2_URL (production) is run by operator2 — the entry's own organization ($PLR_VPN_ENTRY_ORG)"
+run "PLR_VPN_ENTRY_URL=\$ENTRY PLR_VPN_URL=\$PLR_VPN2_URL plr vpn verify"
+expect_refusal E_SAME_OPERATOR twohop_verify "$TWOHOP_ENTRY_URL" "$PLR_VPN2_URL"
+if expect_probe E_SAME_OPERATOR "$TWOHOP_ENTRY_URL" "$PLR_VPN2_URL" "$PLR_DEST_HOST" "$PLR_DEST_PORT" /same-org; then ok "connect refused with E_SAME_OPERATOR before any CONNECT to a destination"; fi
+
+if [[ -n "${PLR_VPN_EVIL_ENTRY_URL:-}" ]]; then
+  step "Two-hop: even an approved entry that logs everything sees only the exit's address"
+  info "⚠️ logging entry $PLR_VPN_EVIL_ENTRY_URL (vpn-evil-logger, run by operator → $PLR_VPN_ORG) prints every destination and the first bytes it relays"
+  info "exit: $TWOHOP_ENTRY_URL (test build, $PLR_VPN_ENTRY_ORG). The owner approves the logging build for this step only:"
+  run "owner --vpn allow_compose $PLR_VPN_EVIL_COMPOSE_HASH"
+  vpn_owner allow_compose "{\"hash\":\"$PLR_VPN_EVIL_COMPOSE_HASH\"}" 2>&1 | show
+  MARK3="separation-secret-$(date +%s)-$RANDOM"
+  if expect_probe ok "$PLR_VPN_EVIL_ENTRY_URL" "$TWOHOP_ENTRY_URL" "$PLR_DEST_HOST" "$PLR_DEST_PORT" "/$MARK3"; then
+    info "everything the logging entry printed:"
+    grep "EVIL-VPN-LOGGER" "$PLR_STACK_LOG_DIR/vpn-evil-entry.log" | cut -c1-150 | show || true
+    if grep -q "EVIL-VPN-LOGGER destination: .*:$ENTRY_PORT" "$PLR_STACK_LOG_DIR/vpn-evil-entry.log" 2>/dev/null; then ok "it saw the exit's address (127.0.0.1:$ENTRY_PORT) — and that is all it can know"; else bad "the logging entry did not log the exit's address (is the logger working?)"; fi
+    if grep -qF -e "$MARK3" -e "$PLR_DEST_HOST" "$PLR_STACK_LOG_DIR/vpn-evil-entry.log" 2>/dev/null; then bad "the logging entry saw the destination or payload!"; else ok "no destination name, path or payload in its output: the inner tunnel is end-to-end encrypted to the exit"; fi
+  fi
+  run "owner --vpn revoke_compose $PLR_VPN_EVIL_COMPOSE_HASH"
+  vpn_owner revoke_compose "{\"hash\":\"$PLR_VPN_EVIL_COMPOSE_HASH\"}" 2>&1 | show
+fi
+
+step "Two-hop: https://example.com through two hops (only when this machine is online)"
+info "two PRODUCTION hops cannot chain on one machine: a production entry refuses to dial a loopback exit —"
+run "PLR_VPN_ENTRY_URL=\$PLR_VPN2_URL PLR_VPN_URL=\$PLR_VPN_URL plr vpn verify   # both production builds"
+expect_refusal E_EGRESS_DENIED twohop_verify "$PLR_VPN2_URL" "$PLR_VPN_URL"
+info "(in the cloud each hop has a public address.) Locally: test-build entry ($PLR_VPN_ENTRY_ORG) → PRODUCTION exit ($PLR_VPN_ORG, public DoH)."
+if curl -sS --max-time 5 -o /dev/null https://example.com 2>/dev/null; then
+  if start_socks twohop-production "$PLR_VPN_URL" "$SOCKS_TWO_PROD" "$TWOHOP_ENTRY_URL"; then
+    run "curl --proxy socks5h://127.0.0.1:$SOCKS_TWO_PROD https://example.com"
+    set +e; OUT=$(socks_curl "$SOCKS_TWO_PROD" https://example.com 2>&1); RC=$?; set -e
+    printf '%s\n' "$OUT" | grep -o '<title>[^<]*</title>' | show || true
+    if [[ $RC -eq 0 && "$OUT" == *"Example Domain"* ]]; then ok "fetched over TLS through two hops: the entry saw only the exit's address, the production exit resolved example.com over DoH and saw only the entry's IP"; else bad "two-hop fetch via the production exit failed (curl exit $RC)"; fi
+  fi
+else
+  info "offline (https://example.com unreachable directly): skipped"
+fi
 stop_socks
 
 # ------------------------------------------------------------------------------------------- shutdown
@@ -271,6 +387,7 @@ if [[ $FAILURES -eq 0 ]]; then
   rm -rf "$PLR_STACK_LOG_DIR" "$STACK_LOG"   # kept only when something failed
   printf '%s━━ DEMO PASSED: honest router served privately; evil build, MITM and revoked build were all refused before any prompt left the client.%s\n' "$B$G" "$X"
   printf '%s━━ VPN PASSED: attested exit tunnelled end-to-end with no logs; evil exit, MITM, revoked build and forbidden targets were all refused before any byte reached a destination.%s\n' "$B$G" "$X"
+  printf '%s━━ DNS + TWO-HOP PASSED: names resolved only over DoH inside the exit (resolver down ⇒ E_DNS, no fallback); two hops of different organizations verified and chained, same organization refused, a logging entry saw only the exit.%s\n' "$B$G" "$X"
 else
   printf '%s━━ DEMO FAILED: %d check(s) failed (stack log: %s)%s\n' "$B$R" "$FAILURES" "$STACK_LOG" "$X"
   exit 1

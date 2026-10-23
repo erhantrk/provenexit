@@ -11,7 +11,7 @@ const log = new Logger("plr-vpn");
 let running: RunningExit | null = null;
 installProcessGuards(log, () => running);
 try {
-  running = await bootExit(loadExitConfig(), { log });
+  running = await bootExit(loadExitConfig(), { log, onFatal: () => process.exit(1) });
 } catch (e) {
   log.info("boot_failed", { code: codeOf(e) });
   process.exit(1);

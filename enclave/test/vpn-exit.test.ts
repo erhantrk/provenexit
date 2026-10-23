@@ -1,8 +1,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { randomBytes } from "@noble/hashes/utils.js";
 import { randomBytes as nodeRandomBytes } from "node:crypto";
-import { FRAME, TUNNEL, fromHex, parseConnectErr, parseReceiptPayload, toHex, u32be, verifyVpnReceipt, vpnReceiptLeaf, merkleRoot, type EgressPolicy } from "@plr/shared";
-import { TestTunnel, attestExit, deadPort, startEchoUpstream, startTestExit, upgrade, type TestExit } from "./vpn-helpers.js";
+import { FRAME, TUNNEL, fromHex, parseConnectErr, parseReceiptPayload, registrationNonce, toHex, u32be, verifyVpnReceipt, vpnReceiptLeaf, merkleRoot, type EgressPolicy } from "@plr/shared";
+import { ManualTimers, TestTunnel, attestExit, deadPort, eventually, handshake, startEchoUpstream, startTestExit, upgrade, type TestExit } from "./vpn-helpers.js";
 import type { LookupAll } from "../src/vpn/egress.js";
 
 type Up = Awaited<ReturnType<typeof startEchoUpstream>>;
@@ -47,6 +47,23 @@ describe("exit HTTP API (SPEC-VPN §3)", () => {
     expect(v.bundle.app_compose).toBe(new TextDecoder().decode(e.composeBytes));
     expect(JSON.parse(v.bundle.app_compose).name).toBe("plr-vpn");
     expect(toHex(v.keyHash)).toBe(toHex(e.keys.keyHash));
+  });
+
+  // Review finding (high): a registration quote from the public endpoint let anyone register the exit first under
+  // their own account, deciding its on-chain operator and org_id (SPEC §7 rev 1.2, SPEC-VPN §10).
+  it("never quotes a registration nonce of its registries (400 E_BAD_REQUEST, no quote requested)", async () => {
+    const regNonce = registrationNonce("vpnregistry.test.near");
+    const e = await exitWith({ reservedNonces: [regNonce, registrationNonce("registry.test.near")] });
+    for (const id of ["vpnregistry.test.near", "registry.test.near"]) {
+      const r = await fetch(`${e.url}/v1/attestation?nonce=${toHex(registrationNonce(id))}`);
+      expect([r.status, await r.json()], id).toEqual([400, { error: "E_BAD_REQUEST" }]);
+    }
+    // Upper-case hex of the same nonce is not a way around it (it is either refused as hex or as the nonce).
+    expect((await fetch(`${e.url}/v1/attestation?nonce=${toHex(regNonce).toUpperCase()}`)).status).toBe(400);
+    // Any other nonce (including another contract's registration nonce) is a normal session quote.
+    const v = await attestExit(e.url, e.root.publicKey);
+    expect(toHex(v.keyHash)).toBe(toHex(e.keys.keyHash));
+    expect((await fetch(`${e.url}/v1/attestation?nonce=${toHex(registrationNonce("other.test.near"))}`)).status).toBe(200);
   });
 
   it("healthz, proof, 404, and /v1/tunnel without a proper upgrade → 400 E_BAD_REQUEST", async () => {
@@ -148,7 +165,7 @@ describe("tunnel round trip (SPEC-VPN §4)", () => {
       t.sock.write(Buffer.concat(parts));
       expect(await t.until(() => t.types().includes(FRAME.RECEIPT), 15_000)).toBe(true);
       expect([...t.data()]).toEqual(Array.from({ length: 4000 }, (_, i) => i & 0xff));
-      await new Promise((r) => setTimeout(r, 50));
+      for (let i = 0; i < 3; i++) await new Promise((r) => setImmediate(r)); // let any process warning surface
     } finally {
       process.off("warning", onWarn);
     }
@@ -189,7 +206,7 @@ describe("tunnel round trip (SPEC-VPN §4)", () => {
 
   it("a destination name is resolved by the exit and dialled by IP", async () => {
     const asked: string[] = [];
-    const lookup: LookupAll = async (h) => { asked.push(h); return [{ address: "127.0.0.1", family: 4 }]; };
+    const lookup: LookupAll = async (h, signal) => { asked.push(h); expect(signal).toBeInstanceOf(AbortSignal); return [{ address: "127.0.0.1", family: 4 }]; };
     const e = await exitWith({ lookup });
     const t = await openVerified(e);
     t.connect("upstream.example", up.port);
@@ -209,11 +226,10 @@ describe("tunnel round trip (SPEC-VPN §4)", () => {
     await t.until(() => t.data().length === 1);
     t.sock.end();
     expect(await t.waitClosed()).toBe(true);
-    await new Promise((r) => setTimeout(r, 100));
-    expect(up.closed()).toBeGreaterThan(closedBefore); // (aborted with a RST: see vpn-hardening.test.ts)
+    expect(await eventually(() => up.closed() > closedBefore)).toBe(true); // (aborted with a RST: see vpn-hardening.test.ts)
     expect(t.types()).not.toContain(FRAME.RECEIPT);
     expect(e.receipts.size).toBe(0);
-    expect(e.exit.tunnels).toBe(0);
+    expect(await eventually(() => e.exit.tunnels === 0)).toBe(true);
   });
 
   it("receipt leaves are what the Merkle batch commits to", async () => {
@@ -282,9 +298,16 @@ describe("egress policy (SPEC-VPN §6)", () => {
     expect(up.connections()).toBe(before);
   });
 
-  it("production policy: 'localhost' via the real system resolver is refused", async () => {
-    const e = await exitWith({ allowLoopback: false });
-    expect(await connectOutcome(e, "localhost", up.port)).toBe("E_EGRESS_DENIED");
+  it("RFC 6761: localhost / *.localhost are refused before any resolution, on either policy", async () => {
+    const asked: string[] = [];
+    const lookup: LookupAll = async (h) => { asked.push(h); return [{ address: "127.0.0.1", family: 4 }]; };
+    for (const allowLoopback of [false, true]) {
+      const e = await exitWith({ allowLoopback, lookup });
+      for (const h of ["localhost", "LOCALHOST.", "x.localhost", "a.b.LocalHost"]) expect(await connectOutcome(e, h, up.port), h).toBe("E_EGRESS_DENIED");
+    }
+    expect(asked).toEqual([]);
+    expect(await connectOutcome(await exitWith({ lookup }), "localhost.example", up.port)).toBe("OK"); // only the RFC 6761 names
+    expect(asked).toEqual(["localhost.example"]);
   });
 
   it("test policy allows loopback only (private stays denied)", async () => {
@@ -298,32 +321,51 @@ describe("egress policy (SPEC-VPN §6)", () => {
 describe("protocol violations and timeouts close the tunnel (SPEC-VPN §4.2, §4.3)", () => {
   const nothingSent = (t: TestTunnel) => expect(t.types()).toEqual([]);
 
-  it("no hello within helloMs ⇒ close; partial hello ⇒ close", async () => {
-    const e = await exitWith({ timeouts: { helloMs: 200 } });
+  const closed = (s: import("node:net").Socket) => new Promise<void>((r) => s.on("close", () => r()).resume());
+
+  it("no hello within helloMs ⇒ close; partial hello ⇒ close (manual clock)", async () => {
+    const timers = new ManualTimers();
+    const e = await exitWith({ timeouts: { helloMs: 10_000 }, timers });
     const a = await upgrade(e.port);
-    const t0 = Date.now();
-    await new Promise<void>((r) => a.sock.on("close", () => r()).resume());
-    expect(Date.now() - t0).toBeLessThan(3000);
     const b = await upgrade(e.port);
     b.sock.write(Buffer.alloc(30, 1));
-    await new Promise<void>((r) => b.sock.on("close", () => r()).resume());
+    expect(await eventually(() => e.exit.tunnels === 2)).toBe(true);
+    const aClosed = closed(a.sock), bClosed = closed(b.sock);
+    timers.advance(9_999);
+    expect(e.exit.tunnels).toBe(2); // not a millisecond early
+    timers.advance(1);
     expect(e.exit.tunnels).toBe(0);
+    await aClosed;
+    await bClosed;
   });
 
-  it("malformed hello (version) or low-order epk ⇒ close", async () => {
+  it("wrong version byte (incl. the removed v1), or a low-order epk ⇒ close with nothing sent (no server_hello)", async () => {
     const e = await exitWith();
     const v = await attestExit(e.url, e.root.publicKey);
-    for (const hello of [Buffer.concat([Buffer.from([2]), Buffer.from(randomBytes(64))]), Buffer.concat([Buffer.from([1]), Buffer.from(v.nonce), Buffer.alloc(32)])]) {
+    const valid = (await import("@plr/shared")).tunnelClientStart({ xp: v.x25519, ep: v.ed25519, attNonce: v.nonce }).hello;
+    for (const hello of [
+      Buffer.concat([Buffer.from([1]), Buffer.from(valid.subarray(1))]),
+      Buffer.concat([Buffer.from([3]), Buffer.from(valid.subarray(1))]),
+      Buffer.concat([Buffer.from([2]), Buffer.from(v.nonce), Buffer.alloc(32)]),
+    ]) {
       const u = await upgrade(e.port);
+      const got: Buffer[] = [];
+      u.sock.on("data", (c: Buffer) => got.push(c));
       u.sock.write(hello);
-      await new Promise<void>((r) => u.sock.on("close", () => r()).resume());
+      await closed(u.sock);
+      expect(Buffer.concat([u.head, ...got]).length, String(hello[0])).toBe(0);
     }
   });
 
-  it("no CONNECT within connectMs after the hello ⇒ close", async () => {
-    const e = await exitWith({ timeouts: { connectMs: 200 } });
+  it("no CONNECT within connectMs after the hello ⇒ close (manual clock)", async () => {
+    const timers = new ManualTimers();
+    const e = await exitWith({ timeouts: { connectMs: 10_000 }, timers });
     const t = await openVerified(e);
-    expect(await t.waitClosed(3000)).toBe(true);
+    timers.advance(9_999);
+    expect(t.closed).toBe(false);
+    expect(e.exit.tunnels).toBe(1);
+    timers.advance(1);
+    expect(await t.waitClosed()).toBe(true);
     nothingSent(t);
   });
 
@@ -370,39 +412,43 @@ describe("protocol violations and timeouts close the tunnel (SPEC-VPN §4.2, §4
     t.sock.write(f);
     expect(await t.waitClosed()).toBe(true);
     nothingSent(t);
-    // A valid hello (issued nonce, fresh epk), frames keyed for another tunnel: authentication fails.
+    // A valid handshake, frames keyed for another tunnel: authentication fails.
     const v = await attestExit(e.url, e.root.publicKey);
     const other = await TestTunnel.open(e.port, v, v.nonce);
     const u = await upgrade(e.port);
-    const { tunnelClientInit } = await import("@plr/shared");
-    u.sock.write(tunnelClientInit({ xp: v.x25519, ep: v.ed25519, attNonce: v.nonce }).hello);
+    await handshake(u.sock, u.head, v, v.nonce);
     u.sock.write(other.seal(FRAME.CONNECT, enc(JSON.stringify({ host: "127.0.0.1", port: up.port }))));
     await new Promise<void>((r) => u.sock.on("close", () => r()).resume());
     other.sock.destroy();
     expect(up.connections()).toBe(before);
   });
 
-  it("idle limit: no frames in either direction ⇒ close without FIN/RECEIPT", async () => {
-    const e = await exitWith({ timeouts: { idleMs: 300 } });
+  it("idle limit: no frames in either direction ⇒ close without FIN/RECEIPT (manual clock)", async () => {
+    const timers = new ManualTimers();
+    const e = await exitWith({ timeouts: { idleMs: 300_000 }, timers });
     const t = await openVerified(e);
     t.connect("127.0.0.1", up.port);
-    await t.until(() => t.frames.length >= 1);
-    const t0 = Date.now();
-    expect(await t.waitClosed(5000)).toBe(true);
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(200);
+    expect(await t.until(() => t.frames.length >= 1)).toBe(true);
+    timers.advance(299_999);
+    expect(t.closed).toBe(false);
+    timers.advance(1);
+    expect(await t.waitClosed()).toBe(true);
     expect(t.types()).toEqual([FRAME.CONNECT_OK]);
+    expect(e.receipts.size).toBe(0);
   });
 
-  it("activity keeps a tunnel alive past the idle limit", async () => {
-    const e = await exitWith({ timeouts: { idleMs: 400 } });
+  it("activity (either direction) keeps a tunnel alive past the idle limit (manual clock)", async () => {
+    const timers = new ManualTimers();
+    const e = await exitWith({ timeouts: { idleMs: 1_000 }, timers });
     const t = await openVerified(e);
     t.connect("127.0.0.1", up.port);
-    await t.until(() => t.frames.length >= 1);
-    for (let i = 0; i < 6; i++) {
-      await new Promise((r) => setTimeout(r, 150));
+    expect(await t.until(() => t.frames.length >= 1)).toBe(true);
+    for (let i = 1; i <= 6; i++) {
+      timers.advance(900);
       t.send(FRAME.DATA, enc("k"));
+      expect(await t.until(() => t.data().length === i)).toBe(true); // c2s frame + echoed s2c frame both refresh it
     }
-    expect(t.closed).toBe(false);
+    expect(t.closed).toBe(false); // 5 400 ms of manual time, never 1 000 without a frame
     t.send(FRAME.FIN);
     expect(await t.until(() => t.types().includes(FRAME.RECEIPT))).toBe(true);
   });
@@ -451,7 +497,7 @@ describe("no retention (SPEC-VPN §1.3, §5)", () => {
     await resolveEgress({ host: "secret-host.example", port: 4242 }, policy, async () => [{ address: "10.4.2.42", family: 4 }], ac.signal).catch((e) => errs.push(e));
     await resolveEgress({ host: "secret host", port: 4242 }, policy, async () => [], ac.signal).catch((e) => errs.push(e));
     await connectIp({ address: "secret-host.example", family: 4 }, 4242, ac.signal).catch((e) => errs.push(e));
-    await dialEgress({ host: "127.0.0.1", port: 4242 }, { policy: { allow_loopback: true, deny_private: true }, timeoutMs: 2000 }).catch((e) => errs.push(e));
+    await dialEgress({ host: "127.0.0.1", port: 4242 }, { policy: { allow_loopback: true, deny_private: true }, lookup: async () => [], timeoutMs: 2000 }).catch((e) => errs.push(e));
     expect(errs.map((e) => (e as { code: string }).code)).toEqual(["E_EGRESS_DENIED", "E_BAD_INPUT", "E_CONNECT_FAILED", "E_CONNECT_FAILED"]);
     for (const e of errs) {
       const s = String((e as Error).message) + String((e as Error).stack);

@@ -15,6 +15,8 @@ pub const OWNER_PROPOSED: &str = "owner_proposed";
 pub const OWNER_ACCEPTED: &str = "owner_accepted";
 pub const INSTANCE_REGISTERED: &str = "instance_registered";
 pub const RECEIPTS_ANCHORED: &str = "receipts_anchored";
+pub const OPERATOR_APPROVED: &str = "operator_approved";
+pub const OPERATOR_REVOKED: &str = "operator_revoked";
 
 /// Logs one NEP-297 event with a single data entry.
 pub fn emit(event: &str, data: Value) {

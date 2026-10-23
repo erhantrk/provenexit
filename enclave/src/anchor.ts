@@ -12,8 +12,13 @@
  *   balance). On `E_DEPOSIT` the instance re-registers, which tops up its prepaid anchor credit. A failed batch stays pending
  *   and is retried. On `E_SEQ` the local state is resynchronised from the chain (verifying roots); if the
  *   chain disagrees with the local log, anchoring halts (fail closed: no proofs are served for it).
+ * - With `onOperatorMismatch` set (the VPN exit, whose on-chain operator decides its `org_id`, SPEC §7 rev 1.2 /
+ *   SPEC-VPN §10), every successful registration is read back: if the instance's recorded `operator` is not this
+ *   anchorer's own account (someone else registered the key first), the instance is permanently mis-attributed.
+ *   The anchorer then stops for good (no retries: the record's operator never changes), logs
+ *   `registration_failed code=E_OPERATOR_MISMATCH` and calls `onOperatorMismatch` so the service stops serving.
  */
-import { anchorMessage, equalBytes, fromHex, registrationNonce, toHex, type Attester } from "@plr/shared";
+import { PlrError, anchorMessage, equalBytes, fromHex, registrationNonce, toHex, type Attester } from "@plr/shared";
 import type { EnclaveKeys } from "./keys.js";
 import { Logger, code as codeField, codeOf, hex as hexField, type Code } from "./log.js";
 import type { AnchorView, RegistryWriter } from "./near.js";
@@ -37,12 +42,14 @@ export interface AnchorerOptions {
   refreshMs?: number;
   /** How many anchors to scan back when looking up our own anchor ids. */
   scanLimit?: number;
+  /** Enables the operator read-back after each registration; called once if the on-chain operator is not ours. */
+  onOperatorMismatch?: () => void;
 }
 
 export type RegistrationState = "pending" | "registered" | "failed";
 
 export class Anchorer {
-  readonly #o: Required<Omit<AnchorerOptions, "log">> & { log: Logger };
+  readonly #o: Required<Omit<AnchorerOptions, "log" | "onOperatorMismatch">> & { log: Logger; onOperatorMismatch: (() => void) | null };
   readonly #keyHashHex: string;
   #state: RegistrationState = "pending";
   #lastError: Code | null = null;
@@ -62,6 +69,7 @@ export class Anchorer {
       scanLimit: 1000,
       ...o,
       log: o.log ?? new Logger("plr-router"),
+      onOperatorMismatch: o.onOperatorMismatch ?? null,
     };
     this.#retryMs = this.#o.retryMinMs;
     this.#keyHashHex = toHex(o.keys.keyHash);
@@ -130,6 +138,7 @@ export class Anchorer {
   /** One registration attempt. Never throws; logs only the outcome code. */
   register(): Promise<boolean> {
     return this.#exclusive(async () => {
+      if (this.#lastError === "E_OPERATOR_MISMATCH") return false; // permanent
       try {
         const contractId = this.#o.chain.contractId;
         const rd = this.#o.keys.reportData(registrationNonce(contractId));
@@ -141,6 +150,15 @@ export class Anchorer {
           x25519: toHex(this.#o.keys.x25519),
           ed25519: toHex(this.#o.keys.ed25519),
         });
+        if (this.#o.onOperatorMismatch) {
+          // Read back who the chain thinks operates this key (a lookup failure throws: retried like any failure).
+          const op = await this.#o.chain.getInstanceOperator(this.#keyHashHex);
+          if (op === null) throw new PlrError("E_INSTANCE_NOT_REGISTERED", "registration not visible");
+          if (op !== this.#o.chain.operatorId) {
+            this.#operatorMismatch();
+            return false;
+          }
+        }
         const first = this.#state !== "registered";
         this.#state = "registered";
         this.#lastError = null;
@@ -240,6 +258,18 @@ export class Anchorer {
       this.#o.log.info("anchored", { anchor_id: a.id, first_seq: first, count: a.count });
     }
     if (r.anchoredCount > next) this.#halt();
+  }
+
+  /** Permanent: the key is registered under another account. Stop everything and tell the service. */
+  #operatorMismatch(): void {
+    const c = codeField("E_OPERATOR_MISMATCH");
+    this.#state = "failed";
+    this.#lastError = c;
+    this.#halted = true;
+    this.stop();
+    this.#o.log.info("registration_failed", { code: c });
+    const cb = this.#o.onOperatorMismatch;
+    if (cb) queueMicrotask(cb);
   }
 
   #halt(): void {

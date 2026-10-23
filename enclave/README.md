@@ -17,9 +17,9 @@ src/
   log.ts              content-free logger (only codes, numbers, hex ids, routes)
   boot.ts             boot quote self-check + process guards (router and exit)
   service-routes.ts   /v1/attestation, /v1/receipts/proof, /healthz (shared by router and exit)
-  vpn/                the PLR-VPN-v1 exit (SPEC-VPN): entry, main, exit (HTTP + upgrade), tunnel (state
-                      machine), egress (resolve → check every address → dial by IP), replay (hello
-                      anti-replay), keys, receipts, config
+  vpn/                the PLR-VPN-v1 exit (SPEC-VPN rev 2): entry, main, exit (HTTP + upgrade), tunnel (state
+                      machine, handshake v2), egress (localhost rule → DoH → check every address → dial by
+                      IP), doh (RFC 8484 lookup), timers (injectable deadlines), keys, receipts, config
   mock-tdx/host.ts    the mock TDX host (library API, used by the CLI and in-process by harnesses)
   mock-tdx/cli.ts     host CLI
   mock-tdx/attester.ts  SocketAttester: what the router uses to call POST /GetQuote
@@ -120,20 +120,26 @@ plr-router: request route=/v1/private/chat status=200 ms=N
 - Opt-in chain test: `PLR_NEAR_IT=1 npx vitest run test/near.integration.test.ts` (near-sandbox + the built
   contract wasm): registers, anchors, verifies a served proof against `get_anchor`.
 
-## VPN exit (PLR-VPN-v1, SPEC-VPN §2–§6)
+## VPN exit (PLR-VPN-v1 rev 2, SPEC-VPN §2–§6)
 
 A second enclave service with **no LLM**: a `plr-vpn` compose (exact SPEC-VPN §2 schema; the compose `name` is the
 service discriminator, `composeService()` / `composeServiceOf()`; `parseVpnCompose` is strict and canonical, the
 router's `parseCompose` is unchanged and refuses VPN composes and vice versa). `vpn.entry` is always
 `vpn.bundle.mjs`, so each build lives in its own directory:
 
-| variant | files | policy.egress |
-|---|---|---|
-| `vpn-honest` | `dist/vpn-exit/vpn-honest/{app-compose.json,vpn.bundle.mjs}` | `allow_loopback: false` (production) |
-| `vpn-honest-test` | `dist/vpn-exit/vpn-honest-test/…` (same bundle bytes) | `allow_loopback: true` (local tests; different compose hash) |
-| `vpn-evil-logger` | `dist/vpn-exit/vpn-evil-logger/…` ⚠️ | `allow_loopback: true` |
+| variant | files | policy.egress | policy.dns.doh |
+|---|---|---|---|
+| `vpn-honest` | `dist/vpn-exit/vpn-honest/{app-compose.json,vpn.bundle.mjs}` | `allow_loopback: false` (production) | `https://1.1.1.1/dns-query`, `https://9.9.9.9/dns-query` |
+| `vpn-honest-test` | `dist/vpn-exit/vpn-honest-test/…` (same bundle bytes) | `allow_loopback: true` (local tests; different compose hash) | `http://127.0.0.1:18253/dns-query` |
+| `vpn-evil-logger` | `dist/vpn-exit/vpn-evil-logger/…` ⚠️ | `allow_loopback: true` | `http://127.0.0.1:18253/dns-query` |
 
-`build-info.json` → `"vpn": { "<variant>": { dir, bundle, bundle_sha256, allow_loopback, compose: { file,
+`policy.dns.doh` validation (`dohUrlProblem`): 1–4 unique URLs, each in WHATWG-normalised form (the measured
+string is exactly what is fetched), host an IP literal (no bootstrap DNS; `01.1.1.1` / integer / mapped spellings
+are refused), no credentials/query/fragment, `https:` to an address the build's egress policy allows (never a
+private / link-local / metadata resolver), and plain `http:` only as `http://127.0.0.1:<port>/…` on
+`allow_loopback` builds. Resolver order is measured.
+
+`build-info.json` → `"vpn": { "<variant>": { dir, bundle, bundle_sha256, allow_loopback, doh, compose: { file,
 compose_hash } } }` (paths relative to `dist/`; the router keys `llm`, `runtime`, `variants` are unchanged).
 
 ```
@@ -160,6 +166,7 @@ plr-host: runtimes_verified node_sha256=<hex>
 plr-host: exit_started pid=N
 plr-vpn: listening url=http://127.0.0.1:N key_hash=<hex> compose_hash=<hex>
 plr-vpn: registered key_hash=<hex>   | plr-vpn: registration_failed code=E_…  | plr-vpn: registration_disabled
+plr-vpn: registration_failed code=E_OPERATOR_MISMATCH   (someone else registered this key first: the exit stops, exit 1)
 plr-vpn: anchored anchor_id=N first_seq=N count=N   | plr-vpn: anchor_failed code=E_… first_seq=N count=N
 ```
 
@@ -167,24 +174,41 @@ Exit behaviour (`src/vpn/`):
 - API: `GET /v1/attestation` (SPEC §6.2 bundle, `app_compose` = the VPN compose), `GET /v1/tunnel` with
   `Connection: Upgrade` + `Upgrade: plr-vpn/1` → `101` (any other request there → `400 {"error":"E_BAD_REQUEST"}`),
   `GET /v1/receipts/proof?seq=`, `GET /healthz`. At most 1024 concurrent tunnels (then `503`).
+- `/v1/attestation` refuses (`400 E_BAD_REQUEST`) the registration nonce `SHA256("PLR-v1/register" ‖ id)` of every
+  registry id in `PLR_REGISTRY` / `PLR_VPN_REGISTRY`, even when registration is disabled, so only the instance's own
+  anchorer can obtain its registration quote (the LLM router does the same). After every registration the anchorer
+  reads `get_instance(key).operator` back. If it is not `PLR_OPERATOR_ID`, the exit stops serving and exits 1.
+- Handshake v2 (§4.1): on a valid 65-byte hello (version 2) the exit immediately sends `server_hello =
+  u8(2) ‖ epk_s` with a fresh ephemeral key per tunnel (`VpnKeys.tunnelAccept` → shared `tunnelServerAccept`, which
+  zeroes the ephemeral secret and the DH outputs once the keys are derived). A replayed hello meets a new `epk_s`,
+  so every replayed frame fails authentication and nothing is dialled; later compromise of `xs` does not reveal past
+  tunnels. A wrong version (incl. the removed v1) or a low-order `epk_c` ⇒ close with nothing sent. No hello state
+  is kept (the interim nonce/hello replay guard of rev 1 is gone; `/v1/attestation` serves any well-formed nonce).
 - Tunnel (§4.3): hello ≤ 10 s, then CONNECT as c2s frame 0 ≤ 10 s, resolve + dial ≤ 10 s, idle 300 s; any
   protocol/auth error, client EOF before its FIN, or upstream error ⇒ immediate close without FIN/RECEIPT, and
   the upstream connection is aborted with a TCP **RST** (only an authenticated c2s FIN frame becomes a FIN at the
   destination, so a cut/tampered c2s stream is never committed as complete). Frames
   pipelined after CONNECT are queued (≤ 256 KiB) with the socket paused. Backpressure both ways. RECEIPT is sent
   once both FINs are exchanged **and** every relayed c2s byte has been flushed upstream.
-- Anti-replay (`replay.ts`; §4.1 has no exit-side randomness in `th`, so a replayed hello would re-derive a
-  victim tunnel's keys and nonces): every nonce served by `/v1/attestation` is recorded for 2 h (> the client's
-  max `attestTtlMs` of 1 h); a hello must name a live recorded nonce, and each `epk` is admitted once per nonce —
-  otherwise the tunnel is closed before any frame. Bounded: ≤ 65 536 live nonces (when full the oldest unused one
-  is dropped, else `/v1/attestation` → `503`), ≤ 2^20 remembered hellos (then new tunnels are refused).
-- Egress (§6): `validateDestination` → `dns.lookup(all)` (IP literals are not resolved) → `egressAllowed` on
+- Egress (§6): `validateDestination` → `localhost` / `*.localhost` (RFC 6761) refused `E_EGRESS_DENIED` before any
+  resolution, on every policy → DoH lookup (IP literals are not resolved) → `egressAllowed` on
   **every** address — if any is denied the destination is `E_EGRESS_DENIED` (fail closed against mixed answers)
   → also refuse "public" addresses that reach the host itself: Azure WireServer `168.63.129.16` and every address
   of the exit's own interfaces (`os.networkInterfaces()`, per dial; listing failure ⇒ deny), compared in
   canonical form (`egressIdentity`: IPv4-mapped / NAT64 / 6to4 spellings included)
   → dial the first address (IPv4 preferred) **by IP literal** with a lookup function that refuses everything.
   The egress policy is read from the measured compose bytes, never from configuration.
+- DNS (§6.1, `doh.ts`): names are resolved **only** by RFC 8484 POSTs (`content-type`/`accept:
+  application/dns-message`, A and AAAA in parallel, exact `encodeDnsQuery` bytes with EDNS0 padding) to the
+  compose's `policy.dns.doh` resolvers, in order, 5 s per resolver, under the tunnel's dial deadline; responses
+  must be `200` + `application/dns-message`, ≤ 65 535 bytes (read incrementally), parsed by `parseDnsResponse`.
+  A transport/HTTP/parse failure ⇒ next resolver; NXDOMAIN / no address for both types is an answer ⇒ `E_DNS`;
+  all resolvers failing ⇒ `E_DNS`. There is **no fallback**: `egress.ts` has no system-resolver path, `bootExit`
+  hands the exit only the DoH lookup built from the measured compose, resolver hosts are IP literals (fetch does
+  no lookup) and `net.connect` gets a lookup that refuses. Query/response buffers are zeroed after use; errors are
+  the content-free `E_DNS`.
+- Deadlines (`timers.ts`): every tunnel timer (hello, CONNECT, idle, linger) comes from an injectable `Timers`
+  (Node timers in production); the unit tests drive a manual clock, so no test depends on wall-clock timing.
 - Receipts: SPEC-VPN §5 (no destination/port/bytes), `ts_close_ms` clamped ≥ `ts_open_ms`; anchored by the shared
   `Anchorer` (generic over receipt kind: `LeafLog` + `EnclaveKeys`).
 - ⚠️ `vpn-evil-logger` = honest source + `evil/logging-dialer.ts` (prints `EVIL-VPN-LOGGER destination: host:port`

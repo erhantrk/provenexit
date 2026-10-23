@@ -6,7 +6,7 @@ import { ed25519 } from "@noble/curves/ed25519.js";
 import {
   parseIpv4, parseIpv6, formatIpv6, classifyIp, egressAllowed, validateDestination, TunnelWriter, TunnelReader, FRAME, TUNNEL,
   encodeConnect, parseConnect, encodeConnectErr, parseConnectErr, encodeReceiptPayload, parseReceiptPayload, signVpnReceipt,
-  verifyVpnReceipt, isVpnReceipt, parseSocksRequest, PlrError, egressIdentity, type VpnReceipt,
+  verifyVpnReceipt, isVpnReceipt, parseSocksRequest, PlrError, egressIdentity, CONNECT_ERR_CODES, CONNECT_PADDED_LEN, CONNECT_ERR_PADDED_LEN, type VpnReceipt,
 } from "../src/index.js";
 
 const code = (fn: () => unknown) => { try { fn(); } catch (e) { expect(e).toBeInstanceOf(PlrError); return (e as PlrError).code; } return "NO_THROW"; };
@@ -124,6 +124,25 @@ describe("payload codecs", () => {
       expect(code(() => parseConnect(enc(s))), s).toBe("E_BAD_INPUT");
     expect(code(() => parseConnect(new Uint8Array([0xff, 0xfe])))).toBe("E_BAD_INPUT");
     expect(code(() => encodeConnect("bad host", 80))).toBe("E_BAD_INPUT");
+  });
+  // Review finding (low): unpadded payloads told the two-hop entry the destination name's length and which
+  // CONNECT error the exit returned, from the inner frame lengths.
+  it("CONNECT and CONNECT_ERR have one fixed size each (no name-length / error-kind leak); unpadded JSON still parses", () => {
+    const sizes = new Set(["a.io", "wikileaks.org", "protonmail.com", "x".repeat(63) + "." + "y".repeat(63) + ".com", "::1", "8.8.8.8"]
+      .flatMap((h) => [1, 443, 65535].map((p) => encodeConnect(h, p).length)));
+    expect([...sizes]).toEqual([CONNECT_PADDED_LEN]);
+    expect(CONNECT_PADDED_LEN).toBe(512);
+    expect(parseConnect(encodeConnect("wikileaks.org", 443))).toEqual({ host: "wikileaks.org", port: 443 });
+    expect(parseConnect(enc('{"host":"a.io","port":443}'))).toEqual({ host: "a.io", port: 443 });
+    const longest = "a".repeat(63) + "." + "b".repeat(63) + "." + "c".repeat(63) + "." + "d".repeat(61);
+    expect(longest.length).toBe(253);
+    expect(parseConnect(encodeConnect(longest, 65535))).toEqual({ host: longest, port: 65535 });
+    expect(new Set(CONNECT_ERR_CODES.map((c) => encodeConnectErr(c).length))).toEqual(new Set([CONNECT_ERR_PADDED_LEN]));
+    for (const c of CONNECT_ERR_CODES) expect(parseConnectErr(encodeConnectErr(c))).toBe(c);
+    expect(parseConnectErr(enc('{"code":"E_DNS"}'))).toBe("E_DNS");
+    // Padding is whitespace only: anything else after the object is still rejected.
+    expect(code(() => parseConnect(enc('{"host":"a.io","port":443}' + "x".repeat(10))))).toBe("E_BAD_INPUT");
+    expect(code(() => parseConnect(enc('{"host":"a.io","port":443}' + " ".repeat(500))))).toBe("E_BAD_INPUT"); // > 512
   });
   it("CONNECT_ERR carries only the four generic codes", () => {
     expect(parseConnectErr(encodeConnectErr("E_DNS"))).toBe("E_DNS");

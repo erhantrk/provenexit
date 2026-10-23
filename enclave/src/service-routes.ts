@@ -13,7 +13,22 @@ export type RouteHandler = (req: http.IncomingMessage, res: http.ServerResponse,
 
 const MAX_QUOTE_BYTES = QUOTE.MAX_LEN;
 
-export function commonRoutes(o: { attester: Attester; keys: EnclaveKeys; composeBytes: Uint8Array; receipts: LeafLog }): {
+export interface CommonRoutesOptions {
+  attester: Attester;
+  keys: EnclaveKeys;
+  composeBytes: Uint8Array;
+  receipts: LeafLog;
+  /**
+   * Nonces that are never quoted for a session: the registration nonces `SHA256("PLR-v1/register" ‖ contract_id)`
+   * (SPEC §5) of the registries this instance registers on. Session quotes use a client's *random* nonce; quoting a
+   * registration nonce on this public endpoint would hand anyone a valid `register_instance` quote, letting them
+   * register this instance first under their own account (and so decide its on-chain operator / `org_id`, SPEC §7
+   * rev 1.2, SPEC-VPN §10). Such a nonce is a bad nonce: `400 E_BAD_REQUEST`.
+   */
+  reservedNonces?: readonly Uint8Array[];
+}
+
+export function commonRoutes(o: CommonRoutesOptions): {
   attestation: RouteHandler;
   proof: RouteHandler;
   healthz: RouteHandler;
@@ -21,12 +36,18 @@ export function commonRoutes(o: { attester: Attester; keys: EnclaveKeys; compose
   const composeText = new TextDecoder("utf-8", { fatal: true }).decode(o.composeBytes);
   const xpHex = toHex(o.keys.x25519);
   const epHex = toHex(o.keys.ed25519);
+  const reserved = (o.reservedNonces ?? []).map((n) => {
+    if (!(n instanceof Uint8Array) || n.length !== 32) throw new TypeError("reserved nonce must be 32 bytes");
+    return n.slice();
+  });
 
   async function attestation(req: http.IncomingMessage, res: http.ServerResponse, query: URLSearchParams): Promise<void> {
     if (req.method !== "GET") throw new HttpError(405, "E_BAD_REQUEST");
     const nonceHex = onlyParams(query, ["nonce"]).get("nonce");
     if (!isHex(nonceHex, 32)) throw new HttpError(400, "E_BAD_REQUEST");
-    const rd = o.keys.reportData(fromHex(nonceHex, 32));
+    const nonce = fromHex(nonceHex, 32);
+    if (reserved.some((r) => equalBytes(r, nonce))) throw new HttpError(400, "E_BAD_REQUEST");
+    const rd = o.keys.reportData(nonce);
     let quote: Uint8Array;
     let eventLog: TdxEvent[];
     try {

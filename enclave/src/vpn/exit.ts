@@ -7,19 +7,20 @@
  *   GET /healthz                         {"ok":true}
  *
  * No per-connection logging at all (not even routes or status codes). Error bodies are fixed codes. The egress
- * policy comes from the measured compose bytes themselves, never from a separate setting.
+ * policy and the DoH resolvers come from the measured compose bytes themselves, never from a separate setting.
  */
 import http from "node:http";
 import type { Duplex } from "node:stream";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { fromHex, isHex, type Attester } from "@plr/shared";
+import type { Attester } from "@plr/shared";
 import { parseVpnCompose } from "../compose.js";
 import { HttpError, parseUrl, sendError } from "../http-util.js";
 import { commonRoutes, type RouteHandler } from "../service-routes.js";
+import { createDohLookup } from "./doh.js";
 import { dialEgress, type Dialer, type LookupAll } from "./egress.js";
 import type { VpnKeys } from "./keys.js";
 import type { VpnReceiptLog } from "./receipts.js";
-import { HelloGuard, type HelloGuardOptions } from "./replay.js";
+import { nodeTimers, type Timers } from "./timers.js";
 import { DEFAULT_TUNNEL_TIMEOUTS, ExitTunnel, type TunnelTimeouts } from "./tunnel.js";
 
 export const TUNNEL_PATH = "/v1/tunnel";
@@ -31,15 +32,20 @@ export interface ExitOptions {
   /** Exact bytes of the measured VPN app-compose.json (its policy.egress is enforced). */
   composeBytes: Uint8Array;
   receipts: VpnReceiptLog;
+  /** Registration nonces of this instance's registries: refused on `/v1/attestation` (see `commonRoutes`). */
+  reservedNonces?: readonly Uint8Array[];
   /** Upstream dialer (default: the honest {@link dialEgress}). */
   dial?: Dialer;
-  /** Resolver for destination names (default: system `dns.lookup`). */
+  /**
+   * Resolver for destination names. Default (and the only one bootExit uses): RFC 8484 DoH through the measured
+   * `policy.dns.doh` resolvers, no fallback. Unit tests may inject a fake.
+   */
   lookup?: LookupAll;
-  /** Hello anti-replay bounds (defaults in replay.ts; tests shrink them). */
-  replay?: HelloGuardOptions;
   /** Concurrent tunnels (default 1024); above it new tunnels get 503. */
   maxTunnels?: number;
   timeouts?: Partial<TunnelTimeouts>;
+  /** Timer source of the tunnel deadlines (default Node timers; tests drive a manual clock). */
+  timers?: Timers;
   now?: () => number;
 }
 
@@ -80,32 +86,25 @@ export function createExit(o: ExitOptions): ExitServer {
   const composeHash = sha256(composeBytes);
   const maxTunnels = o.maxTunnels ?? MAX_TUNNELS;
   const timeouts: TunnelTimeouts = { ...DEFAULT_TUNNEL_TIMEOUTS, ...o.timeouts };
-  const hellos = new HelloGuard(o.replay);
   const ctx = {
     keys: o.keys,
-    hellos,
     composeHash,
     policy,
     receipts: o.receipts,
     dial: o.dial ?? dialEgress,
-    ...(o.lookup ? { lookup: o.lookup } : {}),
+    lookup: o.lookup ?? createDohLookup(compose.policy.dns.doh),
     timeouts,
+    timers: o.timers ?? nodeTimers,
     now: o.now ?? Date.now,
   };
   const open = new Set<ExitTunnel>();
 
-  const common = commonRoutes({ attester: o.attester, keys: o.keys, composeBytes, receipts: o.receipts });
+  const common = commonRoutes({ attester: o.attester, keys: o.keys, composeBytes, receipts: o.receipts, reservedNonces: o.reservedNonces ?? [] });
   const tunnelWithoutUpgrade: RouteHandler = () => {
     throw new HttpError(400, "E_BAD_REQUEST");
   };
-  // Every nonce we attest to is recorded: tunnel hellos must name one of them (anti-replay, replay.ts).
-  const attestation: RouteHandler = async (req, res, query) => {
-    const nonceHex = query.get("nonce");
-    if (req.method === "GET" && isHex(nonceHex, 32) && !hellos.issue(fromHex(nonceHex, 32))) throw new HttpError(503, "E_UPSTREAM");
-    await common.attestation(req, res, query);
-  };
   const routes: Record<string, RouteHandler> = {
-    "/v1/attestation": attestation,
+    "/v1/attestation": common.attestation,
     [TUNNEL_PATH]: tunnelWithoutUpgrade,
     "/v1/receipts/proof": common.proof,
     "/healthz": common.healthz,

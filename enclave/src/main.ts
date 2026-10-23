@@ -5,7 +5,7 @@
 import type http from "node:http";
 import type { AddressInfo } from "node:net";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { toHex } from "@plr/shared";
+import { registrationNonce, toHex } from "@plr/shared";
 import { Anchorer } from "./anchor.js";
 import { installProcessGuards, selfCheckQuote } from "./boot.js";
 import { parseCompose, readCompose } from "./compose.js";
@@ -46,7 +46,8 @@ export async function bootRouter(cfg: RouterConfig, llmFor: (port: number) => Ll
 
   const receipts = new ReceiptLog();
   const llmPort = cfg.llmPort ?? DEFAULT_LLM_PORT[compose.llm.kind];
-  const server = createRouter({ attester, keys, composeBytes, llm: llmFor(llmPort), receipts, log });
+  const reservedNonces = cfg.registryIds.map((id) => registrationNonce(id));
+  const server = createRouter({ attester, keys, composeBytes, llm: llmFor(llmPort), receipts, log, reservedNonces });
   await new Promise<void>((ok, fail) => {
     server.once("error", fail);
     server.listen(cfg.port, cfg.host, () => {

@@ -3,7 +3,7 @@
  * Hostnames are passed to the exit unresolved (`socks5h`: remote DNS); the client never resolves destinations.
  *
  * Per connection: the greeting and request are parsed with the `@plr/shared` codecs under a byte cap and a
- * handshake timeout; `VpnClient.connect` runs every SPEC-VPN §7 check; the reply is `socksReplyFor(code)`. On
+ * handshake timeout; `client.connect` (a `VpnClient` or `TwoHopClient`) runs every SPEC-VPN §7 / §10 check; the reply is `socksReplyFor(code)`. On
  * failure the reply is sent and the connection closed — nothing is contacted. On success bytes are piped both
  * ways with backpressure; a tunnel failure resets the SOCKS connection (never a clean EOF). Nothing is logged.
  */
@@ -22,14 +22,18 @@ import {
   type SocksRequest,
 } from "@plr/shared";
 import { isPlainObject } from "../util.js";
-import type { VpnClient } from "./client.js";
 import type { VpnStream } from "./stream.js";
+
+/** Anything that opens verified VPN streams: a `VpnClient`, a `TwoHopClient`, … (SPEC-VPN §9.2). */
+export interface VpnConnector {
+  connect(host: string, port: number): Promise<VpnStream>;
+}
 
 export interface VpnProxyOptions {
   port: number;
   /** Bind address: a loopback IP literal only (default `127.0.0.1`). */
   host?: string;
-  client: VpnClient;
+  client: VpnConnector;
   /** Max simultaneous SOCKS connections (default 256). */
   maxConnections?: number;
   /** Max time from accept to a complete SOCKS request (default 10 s). */

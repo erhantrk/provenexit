@@ -15,6 +15,8 @@ export interface InstanceRecord {
   x25519: string;
   ed25519: string;
   operator: string;
+  /** SPEC §7 rev 1.2: live organization of `operator` (owner-approved), null if the operator is not approved. */
+  org_id: string | null;
   registered_at_ms: number;
   expires_at_ms: number;
   next_seq: number;
@@ -42,6 +44,14 @@ export interface RegistryReader {
 
 const ZERO32 = "00".repeat(32);
 
+/** SPEC §7 rev 1.2 operator organization id. */
+export const ORG_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+/** True for a valid `org_id` (SPEC §7 rev 1.2: `^[a-z0-9][a-z0-9._-]{0,63}$`). Never throws. */
+export function isOrgId(v: unknown): v is string {
+  return typeof v === "string" && v.length <= 64 && ORG_ID_RE.test(v);
+}
+
 /** 32-byte lowercase hex, not all-zero (the registry never accepts the zero hash). */
 export function isHash32(h: unknown): h is string {
   return isHex(h, 32) && h !== ZERO32;
@@ -59,6 +69,9 @@ export function isInstanceRecord(v: unknown): v is InstanceRecord {
     isHex(v.x25519, 32) &&
     isHex(v.ed25519, 32) &&
     typeof v.operator === "string" &&
+    // required key (fail closed): an absent org_id is not the same as "unapproved"
+    Object.prototype.hasOwnProperty.call(v, "org_id") &&
+    (v.org_id === null || isOrgId(v.org_id)) &&
     isUint(v.registered_at_ms) &&
     isUint(v.expires_at_ms) &&
     isUint(v.next_seq)
@@ -87,6 +100,12 @@ export interface MemoryRegistryOptions {
   contractId?: string;
   /** Clock used for instance expiry (default `Date.now`). */
   now?: () => number;
+  /**
+   * Operator account → org_id (SPEC §7 rev 1.2 `approve_operator`). When an instance's operator has an entry
+   * here (approved, or revoked via {@link MemoryRegistry.revokeOperator}), `getInstance` returns that live
+   * value as `org_id`; otherwise the record's own `org_id` is returned unchanged.
+   */
+  operators?: Record<string, string>;
 }
 
 function bad(what: string): never {
@@ -105,6 +124,8 @@ export class MemoryRegistry implements RegistryReader {
   readonly #os = new Set<string>();
   readonly #instances = new Map<string, InstanceRecord>();
   readonly #anchors: AnchorRecord[] = [];
+  /** account → org_id; `null` = explicitly revoked */
+  readonly #operators = new Map<string, string | null>();
   readonly #now: () => number;
 
   constructor(o: MemoryRegistryOptions) {
@@ -119,6 +140,10 @@ export class MemoryRegistry implements RegistryReader {
     for (const h of o.os) this.allowOs(h);
     for (const [k, rec] of Object.entries(o.instances)) this.putInstance(k, rec);
     for (const a of o.anchors ?? []) this.addAnchor(a);
+    if (o.operators !== undefined) {
+      if (!isPlainObject(o.operators)) bad("bad operators");
+      for (const [acct, org] of Object.entries(o.operators)) this.approveOperator(acct, org);
+    }
   }
 
   // --- mutators (test helpers mirroring the owner/operator methods) ---
@@ -149,6 +174,21 @@ export class MemoryRegistry implements RegistryReader {
   removeInstance(keyHash: string): void {
     this.#instances.delete(keyHash);
   }
+  /** `approve_operator(account_id, org_id)`: (re)maps an operator account to an organization. */
+  approveOperator(account: string, orgId: string): void {
+    if (typeof account !== "string" || account.length === 0) bad("bad operator account");
+    if (!isOrgId(orgId)) bad("bad org_id");
+    this.#operators.set(account, orgId);
+  }
+  /** `revoke_operator(account_id)`: the operator's instances read `org_id: null` from now on. */
+  revokeOperator(account: string): void {
+    if (typeof account !== "string" || account.length === 0) bad("bad operator account");
+    this.#operators.set(account, null);
+  }
+  /** `get_operator(account_id)`: live org of an account (null if unknown or revoked). */
+  async getOperator(account: string): Promise<string | null> {
+    return typeof account === "string" ? (this.#operators.get(account) ?? null) : null;
+  }
   /** Appends an anchor; its `id` must equal the current anchor count. */
   addAnchor(a: AnchorRecord): void {
     if (!isAnchorRecord(a) || a.id !== this.#anchors.length) bad("bad anchor");
@@ -170,7 +210,8 @@ export class MemoryRegistry implements RegistryReader {
     if (!isHash32(keyHash)) return null;
     const rec = this.#instances.get(keyHash);
     if (rec === undefined || rec.expires_at_ms <= this.#now()) return null;
-    return { ...rec };
+    const org_id = this.#operators.has(rec.operator) ? (this.#operators.get(rec.operator) ?? null) : rec.org_id;
+    return { ...rec, org_id };
   }
   async getAnchor(id: number): Promise<AnchorRecord | null> {
     if (!isUint(id)) return null;

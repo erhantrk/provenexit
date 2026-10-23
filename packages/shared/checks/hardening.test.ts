@@ -38,7 +38,7 @@ function setup() {
   const os = osMeasurement(mockOsReport());
   const rec: InstanceRecord = {
     compose_hash: toHex(sha256(composeBytes)), os_measurement: toHex(os), x25519: toHex(xp), ed25519: toHex(ep),
-    operator: "op", registered_at_ms: 1, expires_at_ms: Date.now() + 60_000, next_seq: 0,
+    operator: "op", org_id: null, registered_at_ms: 1, expires_at_ms: Date.now() + 60_000, next_seq: 0,
   };
   const registry = new MemoryRegistry({
     root: { kind: "MOCK", p256: toHex(root.publicKey) }, compose: [rec.compose_hash], os: [rec.os_measurement],

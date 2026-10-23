@@ -178,7 +178,9 @@ Listens on a Unix socket under the run directory (mode 0600); path given to the 
   "ed25519": "<64 hex>"
 }
 ```
-Bad/missing nonce → `400 {"error":"E_BAD_REQUEST"}`.
+Bad/missing nonce → `400 {"error":"E_BAD_REQUEST"}`. (rev 1.2) A nonce equal to the registration nonce (§5) of any registry the
+instance is configured for (`PLR_REGISTRY` / `PLR_VPN_REGISTRY`) is a bad nonce: a session quote never doubles as a
+registration quote.
 
 ### 6.3 `POST /v1/private/chat`
 Request body (JSON, ≤ 1 MiB):
@@ -260,8 +262,12 @@ Methods (NEAR: JSON args, hex strings; zero hash `00…00` always rejected):
 6. compose and OS measurement allowed, `E_COMPOSE_NOT_ALLOWED` / `E_OS_NOT_ALLOWED`
 7. `report_data == SHA256(DOMAIN‖x25519‖ed25519) ‖ SHA256("PLR-v1/register" ‖ contract_account_id)`, `E_REPORT_DATA`
 
-Re-registering the same key_hash refreshes `expires_at_ms` and keeps `next_seq`. Replay of a registration
-quote is harmless: it can only re-register keys whose private halves stay in the enclave.
+Re-registering the same key_hash refreshes `expires_at_ms` and keeps `next_seq` and `operator`. Replay of a registration
+quote can only re-register keys whose private halves stay in the enclave and never changes `operator`. Because the
+**first** registration decides `operator` (and so `org_id`, rev 1.2), only the instance's own anchorer may obtain a
+registration quote (§6.2), and a VPN exit reads `get_instance(key).operator` back after registering: if it is not its
+own account it stops serving (fail closed; a restart generates new keys). Binding the operator account into an
+enclave-signed registration is future work.
 
 `anchor_receipts`: instance exists, is unexpired, its compose and OS are still allowed; `first_seq == next_seq`;
 `1 ≤ count ≤ 10_000`; `sig` = Ed25519(instance ed25519,

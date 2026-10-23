@@ -3,9 +3,10 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import net from "node:net";
 import { join, resolve } from "node:path";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { FRAME, MockRoot, MockVerifier, isDebug, toHex, verifyEventLog } from "@plr/shared";
+import { FRAME, MockRoot, MockVerifier, isDebug, registrationNonce, toHex, verifyEventLog } from "@plr/shared";
 import { EXIT_ENV_ALLOWLIST, HostError, composeServiceOf, exitNodeFlags, launchVpn, measureBoot, measureVpnBoot, routerNodeFlags } from "../src/mock-tdx/host.js";
-import { parseCompose, parseVpnCompose } from "../src/compose.js";
+import { composeBytes, makeVpnCompose, parseCompose, parseVpnCompose } from "../src/compose.js";
+import { startFakeDoh } from "./doh-server.js";
 import { TestTunnel, attestExit, startEchoUpstream } from "./vpn-helpers.js";
 
 const DIST = resolve(import.meta.dirname, "..", "dist");
@@ -129,13 +130,19 @@ describe.skipIf(!canSock)("launchVpn via the mock TDX host", () => {
     mkdirSync(runDir, { recursive: true });
     let out = "";
     const MARK = "vpn-live-" + Date.now();
-    const h = await launchVpn({ composePath: vpnCompose("vpn-honest-test"), root, runDir, exitPort: 0, output: (s) => { out += s; } });
+    // A registry id alone (incomplete NEAR config ⇒ registration disabled) still reserves its registration nonce.
+    const h = await launchVpn({ composePath: vpnCompose("vpn-honest-test"), root, runDir, exitPort: 0, exitEnv: { PLR_VPN_REGISTRY: "vpnregistry.test.near" }, output: (s) => { out += s; } });
     try {
       const m = await waitFor(/plr-vpn: listening url=(\S+) key_hash=([0-9a-f]{64}) compose_hash=([0-9a-f]{64})/, () => out);
       expect(m[3]).toBe(INFO.vpn["vpn-honest-test"].compose.compose_hash);
-      expect(out).toContain("plr-vpn: registration_disabled");
+      // A separate log line written after "listening": it may arrive in a later stdout chunk, so wait for it.
+      await waitFor(/plr-vpn: registration_disabled/, () => out);
       expect(out).not.toContain("llm_ready");
       const url = m[1]!;
+      // Review finding: the public attestation endpoint must never hand out a registration quote (anyone could
+      // register this instance first under their own account and so choose its org_id).
+      const reg = await fetch(`${url}/v1/attestation?nonce=${toHex(registrationNonce("vpnregistry.test.near"))}`);
+      expect([reg.status, await reg.json()]).toEqual([400, { error: "E_BAD_REQUEST" }]);
       const v = await attestExit(url, root.publicKey);
       expect(toHex(v.keyHash)).toBe(m[2]);
       const t = await TestTunnel.open(Number(new URL(url).port), v, v.nonce);
@@ -157,6 +164,43 @@ describe.skipIf(!canSock)("launchVpn via the mock TDX host", () => {
     }
   }, 60_000);
 
+  it("the launched bundle (host isolation flags) resolves names only via the compose's DoH resolver; prints none of it", async () => {
+    const root = MockRoot.generate();
+    const up = await startEchoUpstream();
+    const doh = await startFakeDoh(); // ephemeral port: a custom (self-consistent, unregistered) test compose points at it
+    const NAME = `live-${Date.now()}.plr.test`;
+    doh.set(NAME, ["127.0.0.1"]);
+    const d = mkdtempSync(join(tmp, "doh-"));
+    const cb = composeBytes(makeVpnCompose({ bundleSha256: INFO.vpn["vpn-honest-test"].bundle_sha256, nodeSha256: INFO.runtime.node_sha256, allowLoopback: true, doh: [doh.url] }));
+    writeFileSync(join(d, "app-compose.json"), cb);
+    copyFileSync(join(DIST, INFO.vpn["vpn-honest-test"].bundle), join(d, "vpn.bundle.mjs"));
+    let out = "";
+    const h = await launchVpn({ composePath: join(d, "app-compose.json"), root, runDir: tmp, exitPort: 0, output: (s) => { out += s; } });
+    try {
+      const url = (await waitFor(/plr-vpn: listening url=(\S+)/, () => out))[1]!;
+      const v = await attestExit(url, root.publicKey);
+      const port = Number(new URL(url).port);
+      const ok = await TestTunnel.open(port, v, v.nonce);
+      ok.connect(NAME, up.port);
+      expect(await ok.until(() => ok.frames.length >= 1)).toBe(true);
+      expect(ok.types()).toEqual([FRAME.CONNECT_OK]);
+      expect(doh.hits()).toBe(2);
+      ok.sock.destroy();
+      doh.mode = "down"; // no fallback to the host resolver, even for a name it could resolve
+      const nx = await TestTunnel.open(port, v, v.nonce);
+      nx.connect("example.com", 443);
+      expect(await nx.until(() => nx.frames.length >= 1)).toBe(true);
+      expect(nx.types()).toEqual([FRAME.CONNECT_ERR]);
+      nx.sock.destroy();
+      expect(out).not.toContain(NAME);
+      expect(out).not.toContain("example.com");
+    } finally {
+      await h.stop();
+      await up.close();
+      await doh.close();
+    }
+  }, 60_000);
+
   it("the evil logger build prints destinations and payload bytes (why clients must refuse it)", async () => {
     const root = MockRoot.generate();
     const up = await startEchoUpstream();
@@ -170,7 +214,7 @@ describe.skipIf(!canSock)("launchVpn via the mock TDX host", () => {
       t.connect("127.0.0.1", up.port);
       await t.until(() => t.frames.length >= 1);
       t.send(FRAME.DATA, new TextEncoder().encode(MARK));
-      await waitFor(/EVIL-VPN-LOGGER c2s/, () => out);
+      await waitFor(new RegExp(`EVIL-VPN-LOGGER c2s: .*${MARK}`), () => out);
       expect(out).toContain(`127.0.0.1:${up.port}`);
       expect(out).toContain(MARK);
       t.sock.destroy();

@@ -7,7 +7,7 @@
  * Config via env: PLR_ROUTER_URL, PLR_NEAR_RPC, PLR_REGISTRY, PLR_TRUSTED_ROOT (128 hex);
  * optional PLR_PROXY_PORT (default 18787) and PLR_PROXY_HOST (default 127.0.0.1).
  * VPN env: PLR_VPN_URL, PLR_VPN_REGISTRY, PLR_NEAR_RPC, PLR_TRUSTED_ROOT; optional PLR_VPN_SOCKS_PORT (default 18180),
- * PLR_VPN_ATTEST_TTL_MS (default 60000).
+ * PLR_VPN_ATTEST_TTL_MS (default 60000), PLR_VPN_ENTRY_URL (set ⇒ two-hop, SPEC-VPN §10, with PLR_VPN_URL as the exit).
  */
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -18,7 +18,8 @@ import { startProxy } from "./proxy.js";
 import { TracingRegistry, checkLines, formatCheckLine } from "./verify-report.js";
 import { recheckRegistry, type AttestationSession } from "./attestation.js";
 import { VpnClient, VPN_ATTEST_TTL_MS } from "./vpn/client.js";
-import { startVpn } from "./vpn/socks5-server.js";
+import { TwoHopClient } from "./vpn/twohop.js";
+import { startVpn, type VpnConnector } from "./vpn/socks5-server.js";
 
 export interface CliIo {
   out: (s: string) => void;
@@ -36,6 +37,8 @@ export interface CliConfig {
 
 export interface VpnCliConfig {
   exitUrl: string;
+  /** Entry exit URL: set ⇒ two-hop (SPEC-VPN §10) with `exitUrl` as the exit. */
+  entryUrl: string | undefined;
   rpcUrl: string;
   contractId: string;
   trustedRoot: Uint8Array;
@@ -61,8 +64,11 @@ const CHAT_USAGE = `usage: plr chat              read the prompt from stdin (rec
 
 const VPN_USAGE = `usage: plr vpn             verify the VPN exit, then serve a local SOCKS5 proxy (remote DNS) on
                             socks5h://127.0.0.1:${DEFAULTS.vpnSocksPort}, e.g.  curl --proxy socks5h://127.0.0.1:${DEFAULTS.vpnSocksPort} https://example.com
-       plr vpn verify      print every attestation + registry check of the VPN exit (✔/✘)
+       plr vpn verify      print every attestation + registry check of the VPN exit (✔/✘); in two-hop mode both
+                            hops and the operator-organization check
 env:   PLR_VPN_URL       VPN exit URL (default ${DEFAULTS.vpnExit})
+       PLR_VPN_ENTRY_URL entry exit URL; when set, traffic goes client → entry → exit (two-hop): the exit is
+                            reached only through the entry and must belong to a different approved organization
        PLR_VPN_REGISTRY  VPN registry contract account id (required; a separate deployment from PLR_REGISTRY)
        PLR_NEAR_RPC      (default ${DEFAULTS.rpc}; https, or http to a loopback host only)
        PLR_TRUSTED_ROOT  pinned attestation root, 128 hex (required)
@@ -130,7 +136,20 @@ export function loadVpnConfig(env: Record<string, string | undefined>): VpnCliCo
   const socksPort = portFrom(env, "PLR_VPN_SOCKS_PORT", DEFAULTS.vpnSocksPort);
   const ttlStr = env.PLR_VPN_ATTEST_TTL_MS ?? String(VPN_ATTEST_TTL_MS);
   if (!/^\d{1,7}$/.test(ttlStr) || Number(ttlStr) > 3_600_000) throw new ConfigError("PLR_VPN_ATTEST_TTL_MS must be 0..3600000");
-  return { exitUrl: env.PLR_VPN_URL || DEFAULTS.vpnExit, rpcUrl, contractId, trustedRoot, socksPort, attestTtlMs: Number(ttlStr) };
+  const exitUrl = env.PLR_VPN_URL || DEFAULTS.vpnExit;
+  const entryUrl = env.PLR_VPN_ENTRY_URL || undefined;
+  if (!isHttpUrl(exitUrl)) throw new ConfigError("PLR_VPN_URL must be an http(s) URL");
+  if (entryUrl !== undefined && !isHttpUrl(entryUrl)) throw new ConfigError("PLR_VPN_ENTRY_URL must be an http(s) URL");
+  return { exitUrl, entryUrl, rpcUrl, contractId, trustedRoot, socksPort, attestTtlMs: Number(ttlStr) };
+}
+
+function isHttpUrl(u: string): boolean {
+  try {
+    const url = new URL(u);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function errCode(e: unknown): string {
@@ -192,30 +211,53 @@ async function cmdChat(prompt: string, client: PrivateClient, io: CliIo, writeDe
   }
 }
 
-/** Build name and egress policy from the verified compose (its bytes were checked against the quote). */
+/** Build name, egress and DNS policy from the verified compose (its bytes were checked against the quote). */
 function composeSummary(appCompose: string): { name: string; egress: string; testBuild: boolean } {
   try {
-    const j = JSON.parse(appCompose) as { name?: unknown; policy?: { egress?: { allow_loopback?: unknown; deny_private?: unknown } } };
+    const j = JSON.parse(appCompose) as {
+      name?: unknown;
+      policy?: { egress?: { allow_loopback?: unknown; deny_private?: unknown }; dns?: { doh?: unknown } };
+    };
     const eg = j.policy?.egress;
     const name = typeof j.name === "string" ? j.name : "?";
     if (typeof eg !== "object" || eg === null) return { name, egress: "(no VPN egress policy)", testBuild: false };
     const testBuild = eg.allow_loopback === true;
-    return { name, egress: `deny_private=${String(eg.deny_private)} allow_loopback=${String(eg.allow_loopback)}`, testBuild };
+    const doh = j.policy?.dns?.doh;
+    const dns = Array.isArray(doh) && doh.every((u) => typeof u === "string") ? ` · DNS over HTTPS via ${doh.join(", ")}` : "";
+    return { name, egress: `deny_private=${String(eg.deny_private)} allow_loopback=${String(eg.allow_loopback)}${dns}`, testBuild };
   } catch {
     return { name: "?", egress: "(unparseable)", testBuild: false };
   }
 }
 
-function printVpnSummary(io: CliIo, s: AttestationSession): void {
+function printVpnSummary(io: CliIo, s: AttestationSession, ind = "  "): void {
   const v = s.verified;
   const c = composeSummary(s.appCompose);
-  io.out(`  root:            ${v.rootKind} ROOT${v.rootKind === "MOCK" ? " (local test root, NOT Intel)" : ""}`);
-  io.out(`  build:           ${c.name} · egress ${c.egress}${c.testBuild ? "  ⚠ TEST BUILD (loopback egress allowed)" : ""}`);
-  io.out(`  compose hash:    ${toHex(v.composeHash)}`);
-  io.out(`  OS measurement:  ${toHex(v.osMeasurement)}`);
-  io.out(`  key hash:        ${toHex(v.keyHash)}`);
-  io.out(`  exit x25519:     ${toHex(v.x25519)}`);
-  io.out(`  exit ed25519:    ${toHex(v.ed25519)}`);
+  io.out(`${ind}root:            ${v.rootKind} ROOT${v.rootKind === "MOCK" ? " (local test root, NOT Intel)" : ""}`);
+  io.out(`${ind}build:           ${c.name} · egress ${c.egress}${c.testBuild ? "  ⚠ TEST BUILD (loopback egress allowed)" : ""}`);
+  io.out(`${ind}compose hash:    ${toHex(v.composeHash)}`);
+  io.out(`${ind}OS measurement:  ${toHex(v.osMeasurement)}`);
+  io.out(`${ind}key hash:        ${toHex(v.keyHash)}`);
+  io.out(`${ind}exit x25519:     ${toHex(v.x25519)}`);
+  io.out(`${ind}exit ed25519:    ${toHex(v.ed25519)}`);
+}
+
+async function printInstance(io: CliIo, registry: TracingRegistry, s: AttestationSession, ind = "  "): Promise<void> {
+  try {
+    const inst = await registry.inner.getInstance(toHex(s.verified.keyHash));
+    if (inst === null) {
+      io.out(`${ind}on-chain instance: (none — registration expired since verification)`);
+    } else {
+      io.out(`${ind}on-chain instance:`);
+      io.out(`${ind}  operator:      ${inst.operator}`);
+      io.out(`${ind}  organization:  ${inst.org_id ?? "(not approved)"}`);
+      io.out(`${ind}  registered at: ${new Date(inst.registered_at_ms).toISOString()}`);
+      io.out(`${ind}  expires at:    ${new Date(inst.expires_at_ms).toISOString()}`);
+      io.out(`${ind}  next seq:      ${inst.next_seq}`);
+    }
+  } catch {
+    io.out(`${ind}on-chain instance: (registry unavailable)`);
+  }
 }
 
 const RECHECK_LINE = "registry re-check before each connection (compose, OS, instance)";
@@ -246,25 +288,104 @@ async function cmdVpnVerify(cfg: VpnCliConfig, registry: TracingRegistry, client
     io.out(`✘ REFUSED — ${errCode(e)}. No connection would be tunnelled through this exit.`);
     return 1;
   }
-  io.out(`  ✔ destinations resolved by the exit (remote DNS); the client never resolves them`);
+  io.out(`  ✔ ${REMOTE_DNS_LINE}`);
   io.out("");
   io.out(`✔ VERIFIED`);
   printVpnSummary(io, session);
-  try {
-    const inst = await registry.inner.getInstance(toHex(session.verified.keyHash));
-    if (inst === null) {
-      io.out(`  on-chain instance: (none — registration expired since verification)`);
-    } else {
-      io.out(`  on-chain instance:`);
-      io.out(`    operator:      ${inst.operator}`);
-      io.out(`    registered at: ${new Date(inst.registered_at_ms).toISOString()}`);
-      io.out(`    expires at:    ${new Date(inst.expires_at_ms).toISOString()}`);
-      io.out(`    next seq:      ${inst.next_seq}`);
-    }
-  } catch {
-    io.out(`  on-chain instance: (registry unavailable)`);
-  }
+  await printInstance(io, registry, session);
   return 0;
+}
+
+const REMOTE_DNS_LINE = "destinations resolved by the exit (remote DNS); the client never resolves them";
+
+/** One hop of `plr vpn verify` in two-hop mode: SPEC §9 checks, registry re-check, org lines. Returns the org or the error. */
+async function verifyHop(
+  io: CliIo,
+  registry: TracingRegistry,
+  attest: () => Promise<AttestationSession>,
+  check: (s: AttestationSession) => Promise<string>,
+  orgLines: (code: string | undefined, org: string | undefined) => string[],
+): Promise<{ session: AttestationSession; org: string } | { error: unknown }> {
+  let session: AttestationSession;
+  try {
+    session = await attest();
+  } catch (e) {
+    for (const l of checkLines(e, registry.lastCall)) io.out(formatCheckLine(l));
+    io.out(`  · ${RECHECK_LINE}  (not checked)`);
+    for (const l of orgLines(undefined, undefined)) io.out(`  · ${l}  (not checked)`);
+    return { error: e };
+  }
+  for (const l of checkLines(undefined)) io.out(formatCheckLine(l));
+  try {
+    const org = await check(session);
+    io.out(`  ✔ ${RECHECK_LINE}`);
+    for (const l of orgLines(undefined, org)) io.out(`  ✔ ${l}`);
+    return { session, org };
+  } catch (e) {
+    const code = errCode(e);
+    const orgFailure = code === "E_OPERATOR_UNAPPROVED" || code === "E_SAME_OPERATOR";
+    io.out(orgFailure ? `  ✔ ${RECHECK_LINE}` : `  ✘ ${RECHECK_LINE}  [${code}]`);
+    const lines = orgLines(code, undefined);
+    let failedShown = !orgFailure;
+    for (const [i, l] of lines.entries()) {
+      // E_SAME_OPERATOR: the exit's operator is approved (first line passes), the second line fails.
+      const passes = orgFailure && code === "E_SAME_OPERATOR" && i === 0;
+      if (passes) io.out(`  ✔ ${l}`);
+      else if (!failedShown) {
+        io.out(`  ✘ ${l}  [${code}]`);
+        failedShown = true;
+      } else io.out(`  · ${l}  (not checked)`);
+    }
+    return { error: e };
+  }
+}
+
+async function cmdTwoHopVerify(cfg: VpnCliConfig, registry: TracingRegistry, client: TwoHopClient, io: CliIo): Promise<number> {
+  io.out(`PLR VPN verify (two-hop)`);
+  io.out(`  entry:    ${client.entryUrl}`);
+  io.out(`  exit:     ${client.exitUrl}  (reached only through the entry)`);
+  io.out(`  registry: ${registry.contractId} on ${registry.chain} (${cfg.rpcUrl})`);
+  io.out(`  pinned root: ${client.rootKind} ROOT ${toHex(cfg.trustedRoot)}`);
+  io.out("");
+  const refused = (e: unknown): number => {
+    io.out("");
+    io.out(`✘ REFUSED — ${errCode(e)}. No connection would be tunnelled through these hops.`);
+    return 1;
+  };
+  io.out(`entry hop (direct)`);
+  const entry = await verifyHop(io, registry, () => client.attestEntrySession(), (s) => client.checkEntry(s), (_c, org) => [
+    `entry operator approved by the registry owner${org !== undefined ? ` (organization ${org})` : ""}`,
+  ]);
+  if ("error" in entry) {
+    io.out(`exit hop  (not checked)`);
+    return refused(entry.error);
+  }
+  io.out(`exit hop (attestation fetched through the entry; the exit is never contacted directly)`);
+  const exit = await verifyHop(io, registry, () => client.attestExitSession(), (s) => client.checkExit(s, entry.org), (code, org) => [
+    `exit operator approved by the registry owner${org !== undefined ? ` (organization ${org})` : code === "E_SAME_OPERATOR" ? ` (organization ${entry.org})` : ""}`,
+    `entry and exit run by different organizations${org !== undefined ? ` (${entry.org} ≠ ${org})` : ""}`,
+  ]);
+  if ("error" in exit) return refused(exit.error);
+  io.out(`  ✔ ${REMOTE_DNS_LINE}`);
+  io.out(`  ✔ the entry sees only the exit's address; destinations and payload are end-to-end encrypted to the exit`);
+  io.out("");
+  io.out(`✔ VERIFIED (two-hop: ${entry.org} → ${exit.org})`);
+  io.out(`entry:`);
+  printVpnSummary(io, entry.session);
+  await printInstance(io, registry, entry.session);
+  io.out(`exit:`);
+  printVpnSummary(io, exit.session);
+  await printInstance(io, registry, exit.session);
+  return 0;
+}
+
+async function serveSocks(cfg: VpnCliConfig, client: VpnConnector, io: CliIo): Promise<Awaited<ReturnType<typeof startVpn>> | undefined> {
+  try {
+    return await startVpn({ port: cfg.socksPort, host: "127.0.0.1", client });
+  } catch {
+    io.err(`✘ could not listen on 127.0.0.1:${cfg.socksPort} (PLR_VPN_SOCKS_PORT)`);
+    return undefined;
+  }
 }
 
 async function cmdVpn(cfg: VpnCliConfig, client: VpnClient, io: CliIo, untilStopped: () => Promise<void>): Promise<number> {
@@ -275,15 +396,31 @@ async function cmdVpn(cfg: VpnCliConfig, client: VpnClient, io: CliIo, untilStop
     io.err(`✘ VPN exit verification failed: ${errCode(e)} — SOCKS5 proxy not started (run \`plr vpn verify\` for every check)`);
     return 1;
   }
-  let p;
-  try {
-    p = await startVpn({ port: cfg.socksPort, host: "127.0.0.1", client });
-  } catch {
-    io.err(`✘ could not listen on 127.0.0.1:${cfg.socksPort} (PLR_VPN_SOCKS_PORT)`);
-    return 1;
-  }
+  const p = await serveSocks(cfg, client, io);
+  if (p === undefined) return 1;
   io.out(`✔ VPN exit verified (${session.verified.checks.length} checks against registry ${cfg.contractId}); every new connection re-checks the registry`);
   printVpnSummary(io, session);
+  io.out(`✔ SOCKS5 proxy (remote DNS, CONNECT only) on ${p.url}`);
+  io.out(`  e.g.  curl --proxy ${p.url} https://example.com`);
+  await untilStopped();
+  await p.close();
+  return 0;
+}
+
+async function cmdTwoHop(cfg: VpnCliConfig, client: TwoHopClient, io: CliIo, untilStopped: () => Promise<void>): Promise<number> {
+  let a;
+  try {
+    a = await client.attest();
+  } catch (e) {
+    io.err(`✘ two-hop VPN verification failed: ${errCode(e)} — SOCKS5 proxy not started (run \`plr vpn verify\` for every check)`);
+    return 1;
+  }
+  const p = await serveSocks(cfg, client, io);
+  if (p === undefined) return 1;
+  io.out(`✔ two-hop VPN verified against registry ${cfg.contractId}: entry (${a.entryOrg}) → exit (${a.exitOrg}), different organizations`);
+  io.out(`  entry: ${client.entryUrl}  compose ${toHex(a.entry.composeHash)}`);
+  io.out(`  exit:  ${client.exitUrl}  compose ${toHex(a.exit.composeHash)}  (reached only through the entry)`);
+  io.out(`  every new connection re-checks both hops and the operator rules`);
   io.out(`✔ SOCKS5 proxy (remote DNS, CONNECT only) on ${p.url}`);
   io.out(`  e.g.  curl --proxy ${p.url} https://example.com`);
   await untilStopped();
@@ -308,15 +445,23 @@ async function runVpn(rest: string[], env: Record<string, string | undefined>, i
   }
   let cfg: VpnCliConfig;
   let registry: TracingRegistry;
-  let client: VpnClient;
+  let client: VpnClient | TwoHopClient;
   try {
     cfg = loadVpnConfig(env);
     registry = new TracingRegistry(new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.contractId }));
-    client = new VpnClient({ exitUrl: cfg.exitUrl, registry, trustedRoot: cfg.trustedRoot, attestTtlMs: cfg.attestTtlMs });
+    const common = { registry, trustedRoot: cfg.trustedRoot, attestTtlMs: cfg.attestTtlMs };
+    client =
+      cfg.entryUrl !== undefined
+        ? new TwoHopClient({ entryUrl: cfg.entryUrl, exitUrl: cfg.exitUrl, ...common })
+        : new VpnClient({ exitUrl: cfg.exitUrl, ...common });
   } catch (e) {
     io.err(`config error: ${e instanceof ConfigError ? e.message : errCode(e)}`);
     io.err(VPN_USAGE);
     return 2;
+  }
+  if (client instanceof TwoHopClient) {
+    if (sub === "verify") return cmdTwoHopVerify(cfg, registry, client, io);
+    return cmdTwoHop(cfg, client, io, untilStopped);
   }
   if (sub === "verify") return cmdVpnVerify(cfg, registry, client, io);
   return cmdVpn(cfg, client, io, untilStopped);

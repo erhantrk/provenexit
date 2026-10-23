@@ -206,7 +206,10 @@ fn only_the_owner_changes_policy() {
         fails_with(E_UNAUTHORIZED, || c.revoke_os(h.clone()));
         fails_with(E_UNAUTHORIZED, || c.set_root("MOCK".into(), "11".repeat(64)));
         fails_with(E_UNAUTHORIZED, || c.propose_owner(STRANGER.parse().unwrap()));
+        fails_with(E_UNAUTHORIZED, || c.approve_operator(OPERATOR.parse().unwrap(), "org-a".into()));
+        fails_with(E_UNAUTHORIZED, || c.revoke_operator(OPERATOR.parse().unwrap()));
     }
+    assert_eq!(c.get_operator(OPERATOR.into()), None);
     assert!(!c.is_compose_allowed(h.clone()));
     assert!(take_logs().is_empty());
 }
@@ -379,6 +382,7 @@ fn registration_records_instance_emits_event_and_refunds() {
         x25519: a.x25519.clone(),
         ed25519: a.ed25519.clone(),
         operator: OPERATOR.parse().unwrap(),
+        org_id: None,
         registered_at_ms: now_ms(),
         expires_at_ms: now_ms() + DEFAULT_INSTANCE_TTL_MS,
         next_seq: 0,
@@ -389,7 +393,7 @@ fn registration_records_instance_emits_event_and_refunds() {
         serde_json::to_value(&rec).unwrap(),
         json!({
             "compose_hash": fs("compose_hash"), "os_measurement": fs("os_measurement"),
-            "x25519": a.x25519, "ed25519": a.ed25519, "operator": OPERATOR,
+            "x25519": a.x25519, "ed25519": a.ed25519, "operator": OPERATOR, "org_id": null,
             "registered_at_ms": now_ms(), "expires_at_ms": now_ms() + DEFAULT_INSTANCE_TTL_MS, "next_seq": 0,
         })
     );
@@ -855,4 +859,152 @@ fn primitive_vectors_match_ts() {
 fn deposit_amounts_are_exact_tokens() {
     // Guards the constant used in assertions above against near-sdk changes.
     assert_eq!(near_sdk::env::storage_byte_cost(), NearToken::from_yoctonear(BYTE_COST));
+}
+
+// ---------------- operator organizations (SPEC §7 rev 1.2) ----------------
+
+#[test]
+fn org_id_syntax_matches_the_spec_regex() {
+    let max = format!("a{}", "-".repeat(MAX_ORG_ID_LEN - 1));
+    for ok in ["a", "0", "org-a", "acme-hosting.eu", "a_b.c-d", "9lives", "a.", "a-", "a_", max.as_str()] {
+        assert!(is_valid_org_id(ok), "{ok:?} should be valid");
+    }
+    let too_long = "o".repeat(MAX_ORG_ID_LEN + 1);
+    for bad in [
+        "", "Org-A", "-org", ".org", "_org", "org a", "org/a", "org:a", "org\n", " org", "orgé", "org\u{0}", "ÿ",
+        "a\u{212a}", // KELVIN SIGN: lowercases to 'k' under Unicode rules, must not pass the ASCII check
+        too_long.as_str(),
+    ] {
+        assert!(!is_valid_org_id(bad), "{bad:?} should be invalid");
+    }
+}
+
+#[test]
+fn approve_operator_validates_org_id_and_leaves_no_trace_on_failure() {
+    let mut c = fresh_bare();
+    caller(OWNER, 0);
+    let before = test_host::storage_usage_now();
+    for bad in ["", "Org-A", "-org", "org a", &"o".repeat(65), "org/a"] {
+        let msg = panics(|| c.approve_operator(OPERATOR.parse().unwrap(), bad.to_string()));
+        assert!(msg.starts_with(E_BAD_INPUT), "{bad:?}: {msg:?}");
+        if !bad.is_empty() {
+            assert!(!msg.contains(bad), "panic message must not echo the input: {msg:?}");
+        }
+    }
+    assert_eq!(c.get_operator(OPERATOR.into()), None);
+    assert_eq!(test_host::storage_usage_now(), before);
+    assert!(take_logs().is_empty());
+}
+
+#[test]
+fn approve_change_and_revoke_operator_with_events() {
+    let mut c = fresh_bare();
+    caller(OWNER, 0);
+    c.approve_operator(OPERATOR.parse().unwrap(), "acme-hosting.eu".into());
+    assert_eq!(
+        assert_single_event(&take_logs(), events::OPERATOR_APPROVED),
+        json!({ "account_id": OPERATOR, "org_id": "acme-hosting.eu", "previous_org_id": null })
+    );
+    assert_eq!(c.get_operator(OPERATOR.into()).as_deref(), Some("acme-hosting.eu"));
+    assert_eq!(c.get_operator(STRANGER.into()), None, "per account");
+
+    // Re-approve = change of organization.
+    c.approve_operator(OPERATOR.parse().unwrap(), "acme-2".into());
+    assert_eq!(
+        assert_single_event(&take_logs(), events::OPERATOR_APPROVED),
+        json!({ "account_id": OPERATOR, "org_id": "acme-2", "previous_org_id": "acme-hosting.eu" })
+    );
+    assert_eq!(c.get_operator(OPERATOR.into()).as_deref(), Some("acme-2"));
+
+    c.approve_operator(STRANGER.parse().unwrap(), "other-org".into());
+    take_logs();
+    c.revoke_operator(OPERATOR.parse().unwrap());
+    assert_eq!(
+        assert_single_event(&take_logs(), events::OPERATOR_REVOKED),
+        json!({ "account_id": OPERATOR, "previous_org_id": "acme-2" })
+    );
+    assert_eq!(c.get_operator(OPERATOR.into()), None);
+    assert_eq!(c.get_operator(STRANGER.into()).as_deref(), Some("other-org"), "revocation is per account");
+
+    // Revoking an account that is not approved is a no-op (event with previous_org_id null).
+    c.revoke_operator(OPERATOR.parse().unwrap());
+    assert_eq!(
+        assert_single_event(&take_logs(), events::OPERATOR_REVOKED),
+        json!({ "account_id": OPERATOR, "previous_org_id": null })
+    );
+    assert_eq!(c.get_operator(OPERATOR.into()), None);
+}
+
+#[test]
+fn operator_storage_is_released_on_revoke() {
+    let mut c = fresh_bare();
+    caller(OWNER, 0);
+    let before = test_host::storage_usage_now();
+    c.approve_operator(OPERATOR.parse().unwrap(), "org-a".into());
+    let one = test_host::storage_usage_now() - before;
+    assert!(one > 0);
+    c.approve_operator(OPERATOR.parse().unwrap(), "org-b".into()); // same length: a change adds nothing
+    assert_eq!(test_host::storage_usage_now() - before, one);
+    c.revoke_operator(OPERATOR.parse().unwrap());
+    assert_eq!(test_host::storage_usage_now(), before);
+    assert!(take_transfers().is_empty(), "owner methods move no tokens");
+}
+
+#[test]
+fn get_operator_never_panics_on_malformed_account_ids() {
+    let mut c = fresh_bare();
+    caller(OWNER, 0);
+    c.approve_operator(OPERATOR.parse().unwrap(), "org-a".into());
+    for bad in ["", "UPPER.near", "a", "has space.near", "x".repeat(65).as_str(), "..", "op@near"] {
+        assert_eq!(c.get_operator(bad.to_string()), None, "{bad:?}");
+    }
+}
+
+#[test]
+fn get_instance_carries_the_operators_live_org_id() {
+    let mut c = registered();
+    let kh = fs("key_hash");
+    assert_eq!(c.get_instance(kh.clone()).unwrap().org_id, None);
+    assert_eq!(serde_json::to_value(c.get_instance(kh.clone()).unwrap()).unwrap()["org_id"], Value::Null);
+
+    caller(OWNER, 0);
+    c.approve_operator(STRANGER.parse().unwrap(), "not-the-operator".into());
+    assert_eq!(c.get_instance(kh.clone()).unwrap().org_id, None, "only the registering operator's org counts");
+
+    c.approve_operator(OPERATOR.parse().unwrap(), "acme-hosting.eu".into());
+    let rec = c.get_instance(kh.clone()).unwrap();
+    assert_eq!(rec.org_id.as_deref(), Some("acme-hosting.eu"));
+    assert_eq!(serde_json::to_value(&rec).unwrap()["org_id"], "acme-hosting.eu");
+
+    c.approve_operator(OPERATOR.parse().unwrap(), "acme-2".into());
+    assert_eq!(c.get_instance(kh.clone()).unwrap().org_id.as_deref(), Some("acme-2"), "re-approve = change, live");
+
+    // A refresh by someone else keeps the original operator, hence its org.
+    advance_ms(1_000);
+    caller(STRANGER, 0);
+    register(&mut c, &ok_args());
+    assert_eq!(c.get_instance(kh.clone()).unwrap().org_id.as_deref(), Some("acme-2"));
+
+    caller(OWNER, 0);
+    c.revoke_operator(OPERATOR.parse().unwrap());
+    assert_eq!(c.get_instance(kh.clone()).unwrap().org_id, None);
+
+    // Expired instances stay invisible regardless of the operator's org.
+    c.approve_operator(OPERATOR.parse().unwrap(), "acme-3".into());
+    advance_ms(DEFAULT_INSTANCE_TTL_MS);
+    assert_eq!(c.get_instance(kh), None);
+}
+
+#[test]
+fn approving_an_operator_does_not_affect_registration_or_anchoring_policy() {
+    let mut c = fresh();
+    caller(OWNER, 0);
+    c.approve_operator(OPERATOR.parse().unwrap(), "org-a".into());
+    take_logs();
+    // Org approval is metadata for clients, not an authorization: unapproved accounts still register.
+    caller(STRANGER, DEPOSIT);
+    let kh = register(&mut c, &ok_args());
+    assert_eq!(c.get_instance(kh.clone()).unwrap().operator.as_str(), STRANGER);
+    assert_eq!(c.get_instance(kh).unwrap().org_id, None);
+    anchor(&mut c, &anchor_step("first_batch"));
 }

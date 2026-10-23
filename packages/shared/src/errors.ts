@@ -46,6 +46,9 @@ export const ERROR_CODES = [
   "E_DNS",
   "E_CONNECT_FAILED",
   "E_TUNNEL_PROTOCOL",
+  // two-hop operator organizations (SPEC-VPN §8, §10 rev 2)
+  "E_OPERATOR_UNAPPROVED",
+  "E_SAME_OPERATOR",
 ] as const;
 
 export type PlrErrorCode = (typeof ERROR_CODES)[number];

@@ -31,17 +31,31 @@ function decodeObject(payload: Uint8Array, maxLen: number, code: PlrErrorCode): 
   return v;
 }
 
+/**
+ * Fixed payload sizes, so frame lengths do not reveal the destination name's length or which CONNECT error occurred
+ * (in two-hop the entry relays the inner tunnel and sees every inner frame's length). The JSON is padded with
+ * trailing spaces — still the SPEC-VPN §4.2 JSON object (JSON allows trailing whitespace); parsers accept both forms.
+ */
+export const CONNECT_PADDED_LEN = MAX_CONNECT_PAYLOAD;
+export const CONNECT_ERR_PADDED_LEN = 32;
+
+/** `b` followed by ASCII spaces up to `len` bytes (`b` must not be longer). */
+function padJson(b: Uint8Array, len: number): Uint8Array {
+  if (b.length > len) throw new PlrError("E_BAD_INPUT", "payload too large");
+  const out = new Uint8Array(len).fill(0x20);
+  out.set(b);
+  return out;
+}
+
 function exactKeys(o: Record<string, unknown>, keys: readonly string[]): boolean {
   const k = Object.keys(o);
   return k.length === keys.length && keys.every((x) => Object.prototype.hasOwnProperty.call(o, x));
 }
 
-/** `{"host":…,"port":…}` (validated per SPEC-VPN §6, ≤ 512 bytes). @throws PlrError E_BAD_INPUT */
+/** `{"host":…,"port":…}` (validated per SPEC-VPN §6), always exactly 512 bytes (space-padded). @throws PlrError E_BAD_INPUT */
 export function encodeConnect(host: string, port: number): Uint8Array {
   validateDestination(host, port);
-  const b = utf8(JSON.stringify({ host, port }));
-  if (b.length > MAX_CONNECT_PAYLOAD) throw new PlrError("E_BAD_INPUT", "connect payload too large");
-  return b;
+  return padJson(utf8(JSON.stringify({ host, port })), CONNECT_PADDED_LEN);
 }
 
 /** Parses and validates a CONNECT payload. @throws PlrError E_BAD_INPUT */
@@ -54,10 +68,10 @@ export function parseConnect(payload: Uint8Array): { host: string; port: number 
   return { host: o.host, port: o.port };
 }
 
-/** `{"code":"E_…"}` with one of {@link CONNECT_ERR_CODES} only. @throws PlrError E_BAD_INPUT */
+/** `{"code":"E_…"}` with one of {@link CONNECT_ERR_CODES} only, always 32 bytes (space-padded). @throws PlrError E_BAD_INPUT */
 export function encodeConnectErr(code: ConnectErrCode): Uint8Array {
   if (!isConnectErrCode(code)) throw new PlrError("E_BAD_INPUT", "not a CONNECT_ERR code");
-  return utf8(JSON.stringify({ code }));
+  return padJson(utf8(JSON.stringify({ code })), CONNECT_ERR_PADDED_LEN);
 }
 
 /** @returns the CONNECT_ERR code. @throws PlrError E_TUNNEL_PROTOCOL for a malformed payload or any other code */

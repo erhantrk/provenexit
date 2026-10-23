@@ -17,6 +17,7 @@ import { VpnKeys } from "../src/vpn/keys.js";
 import { VpnReceiptLog } from "../src/vpn/receipts.js";
 import { composeBytes as vpnComposeBytesOf, makeVpnCompose } from "../src/compose.js";
 import { verifyVpnReceipt, vpnReceiptLeaf } from "@plr/shared";
+import { eventually } from "./wait.js";
 
 const CONTRACT = "registry.test.near";
 const COMPOSE = composeBytes(makeCompose({ kind: "mock", modelSha256: "11".repeat(32), runtime: "node", bundleSha256: "22".repeat(32), entry: "router.bundle.mjs", runtimeSha256: "33".repeat(32), nodeSha256: "33".repeat(32) }));
@@ -24,7 +25,11 @@ const COMPOSE = composeBytes(makeCompose({ kind: "mock", modelSha256: "11".repea
 /** Enforces the §7 rules the router depends on (registration nonce/report_data, anchor sig, seq). */
 class FakeChain implements RegistryWriter {
   readonly contractId = CONTRACT;
-  instances = new Map<string, { ed: Uint8Array; next: number }>();
+  constructor(readonly operatorId = "operator.test.near") {}
+  /** The account whose `register_instance` lands first keeps the record (SPEC §7: re-registration keeps operator). */
+  instances = new Map<string, { ed: Uint8Array; next: number; operator: string }>();
+  /** If set, a front-runner registers every new key under this account just before our own call lands. */
+  frontRunner: string | null = null;
   anchors: AnchorView[] = [];
   failNext: string | null = null;
   dropResult = false;
@@ -39,8 +44,8 @@ class FakeChain implements RegistryWriter {
     const want = reportData(xp, ep, registrationNonce(CONTRACT));
     if (toHex(q.report.reportData) !== toHex(want)) throw new Error("Smart contract panicked: E_REPORT_DATA");
     const kh = toHex(keyHash(xp, ep));
-    const prev = this.instances.get(kh);
-    this.instances.set(kh, { ed: ep, next: prev?.next ?? 0 });
+    const prev = this.instances.get(kh) ?? (this.frontRunner ? { ed: ep, next: 0, operator: this.frontRunner } : undefined);
+    this.instances.set(kh, { ed: ep, next: prev?.next ?? 0, operator: prev?.operator ?? this.operatorId });
   }
 
   async anchorReceipts(a: AnchorArgs): Promise<unknown> {
@@ -59,6 +64,7 @@ class FakeChain implements RegistryWriter {
   }
 
   async getInstanceNextSeq(kh: string) { return this.instances.get(kh)?.next ?? null; }
+  async getInstanceOperator(kh: string) { return this.instances.get(kh)?.operator ?? null; }
   async anchorCount() { return this.anchors.length; }
   async getAnchor(id: number) { return this.anchors[id] ?? null; }
 }
@@ -230,7 +236,8 @@ describe("anchor storage deposit", () => {
     const before = regCalls();
     await t.anchorer.anchorOnce();
     expect(t.receipts.anchoredCount).toBe(0);
-    await new Promise((r) => setTimeout(r, 50)); // the re-registration is scheduled immediately
+    // The top-up re-registration is scheduled immediately (timer 0): wait for its outcome event, not a fixed sleep.
+    expect(await eventually(() => t.lines.some((l) => l.includes("registration_refreshed")))).toBe(true);
     t.anchorer.stop();
     expect(regCalls()).toBe(before + 2); // the failed anchor + the top-up registration
     expect(t.lines.some((l) => l.includes("anchor_failed") && l.includes("code=E_DEPOSIT"))).toBe(true);
@@ -261,5 +268,69 @@ describe("VPN exit registration + anchoring (SPEC-VPN §5: same Anchorer, VPN re
     expect(chain.anchors).toHaveLength(1);
     const p = receipts.proof(1)!;
     expect(verifyMerkleProof(vpnReceiptLeaf(issued[1]!.receipt), p.index, p.count, p.proof.map((h) => fromHex(h, 32)), fromHex(chain.anchors[0]!.root, 32))).toBe(true);
+  });
+});
+
+// Review finding (high): whoever calls register_instance first for a key decides its on-chain operator, hence its
+// org_id (SPEC §7 rev 1.2, SPEC-VPN §10). The exit reads the operator back and stops for good on a mismatch.
+describe("operator read-back (registration hijack)", () => {
+  function vpnSetup(chain: FakeChain) {
+    const compose = vpnComposeBytesOf(makeVpnCompose({ bundleSha256: "44".repeat(32), nodeSha256: "55".repeat(32), allowLoopback: false }));
+    const attester = new MockTdxAttester({ root: MockRoot.generate(), composeBytes: compose });
+    const keys = VpnKeys.generate();
+    const receipts = new VpnReceiptLog();
+    const lines: string[] = [];
+    let mismatches = 0;
+    const anchorer = new Anchorer({
+      chain, attester, keys, receipts, composeBytes: compose, log: new Logger("plr-vpn", (l) => lines.push(l)),
+      onOperatorMismatch: () => { mismatches++; },
+    });
+    return { anchorer, keys, receipts, lines, mismatches: () => mismatches };
+  }
+
+  it("own operator on chain → registered as usual", async () => {
+    const t = vpnSetup(new FakeChain());
+    expect(await t.anchorer.register()).toBe(true);
+    expect(t.anchorer.state).toBe("registered");
+    expect(t.mismatches()).toBe(0);
+  });
+
+  it("someone else registered the key first → never 'registered', halts permanently, signals the service once", async () => {
+    const chain = new FakeChain();
+    chain.frontRunner = "attacker.test.near";
+    const t = vpnSetup(chain);
+    t.anchorer.start();
+    expect(await eventually(() => t.mismatches() === 1)).toBe(true);
+    expect(t.anchorer.state).toBe("failed");
+    expect(t.anchorer.halted).toBe(true);
+    expect(t.anchorer.lastError).toBe("E_OPERATOR_MISMATCH");
+    expect(t.lines).toEqual(["plr-vpn: registration_failed code=E_OPERATOR_MISMATCH"]);
+    // Permanent: no retries, no anchoring of anything issued afterwards.
+    const calls = chain.calls;
+    expect(await t.anchorer.register()).toBe(false);
+    t.receipts.issue({ th: randomBytes(32), composeHash: randomBytes(32), keyHash: t.keys.keyHash, tsOpenMs: 1, tsCloseMs: 2, sign: (r) => t.keys.signVpnReceipt(r) });
+    await t.anchorer.anchorOnce();
+    expect(chain.calls).toBe(calls);
+    expect(t.mismatches()).toBe(1);
+    t.anchorer.stop();
+  });
+
+  it("read-back finds no record → retried like any failure (not 'registered')", async () => {
+    const chain = new FakeChain();
+    chain.getInstanceOperator = async () => null;
+    const t = vpnSetup(chain);
+    expect(await t.anchorer.register()).toBe(false);
+    expect(t.anchorer.state).toBe("failed");
+    expect(t.anchorer.lastError).toBe("E_INSTANCE_NOT_REGISTERED");
+    expect(t.mismatches()).toBe(0);
+  });
+
+  it("without onOperatorMismatch (LLM router) the operator is not consulted", async () => {
+    const chain = new FakeChain();
+    chain.frontRunner = "attacker.test.near";
+    chain.getInstanceOperator = async () => { throw new Error("must not be called"); };
+    const t = setup();
+    const a = new Anchorer({ chain, attester: t.attester, keys: t.keys, receipts: t.receipts, composeBytes: COMPOSE, log: new Logger("plr-router", () => undefined) });
+    expect(await a.register()).toBe(true);
   });
 });

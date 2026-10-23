@@ -9,15 +9,20 @@
  *   await S.approveVpnBuild("vpn-honest-test");
  *   const x = await S.startExit("vpn-honest-test");   // registered on the VPN registry
  *   const d = await S.startDestination();
+ *   S.dns.set("dest.plr.test", ["127.0.0.1"]);   // the test builds' DoH resolver (127.0.0.1:18253)
+ *   await S.approveOperator("operator", "org-a");   // two-hop (SPEC-VPN §10): operator organizations
  *   …
  *   await S.stop();
  *
  * Layout: `<repo>/.run/<id>/` is the stack's `runDir` (near-sandbox home under `near/`); the mock host's
  * private socket directories live in the sibling `<repo>/.run/<id>-host/` (a Unix socket cannot be read as a
  * file, and macOS limits socket paths to 104 bytes). Both are removed by `stop()` unless `PLR_KEEP_RUN=1`.
- * Nothing listens on a fixed port unless asked to (`rpcPort`, `routerPort`).
+ * Nothing listens on a fixed port unless asked to (`rpcPort`, `routerPort`), except the local DoH resolver: the
+ * test builds measure `http://127.0.0.1:18253/dns-query` (SPEC-VPN §2), so every stack runs it on exactly that port
+ * (one stack at a time on a machine; a busy port fails `startStack`).
  */
 import { existsSync, readFileSync } from "node:fs";
+import http from "node:http";
 import net, { type AddressInfo } from "node:net";
 import { mkdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -25,7 +30,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes as nodeRandomBytes } from "node:crypto";
 import { Account, JsonRpcProvider, KeyPair, KeyPairSigner, type KeyPairString } from "near-api-js";
-import { toHex, type RegistryReader, type TdxEvent } from "@plr/shared";
+import { parseIpv4, parseIpv6, toHex, type RegistryReader, type TdxEvent } from "@plr/shared";
 import { NearRegistry } from "@plr/client";
 import { generateRootSecret, measureBoot, measureVpnBoot } from "@plr/enclave/mock-tdx";
 import { isAttack, startAttackProxy, type AttackProxy } from "./attacks.js";
@@ -38,7 +43,9 @@ import { startSandbox, type SandboxNode } from "./sandbox.js";
 export const VARIANTS = ["honest", "evil-logger", "mitm-key", "replay-quote", "debug-td", "truncate-stream", "tamper-stream"] as const;
 export type Variant = (typeof VARIANTS)[number];
 export type LlmChoice = "mock" | "llama";
-export type Signer = "owner" | "operator" | "stranger";
+export type Signer = "owner" | "operator" | "operator2" | "stranger";
+/** Accounts that operate (register) VPN exits; the owner maps them to organizations (SPEC §7 rev 1.2). */
+export type OperatorAccount = "operator" | "operator2";
 /** VPN exits (SPEC-VPN §9.3): three measured builds, and network attackers in front of `vpn-honest-test`. */
 export const VPN_BUILDS = ["vpn-honest", "vpn-honest-test", "vpn-evil-logger"] as const;
 export type VpnBuild = (typeof VPN_BUILDS)[number];
@@ -53,8 +60,11 @@ export interface StackOptions {
   id?: string;
   /** Router anchoring interval (default 1000 ms). */
   anchorIntervalMs?: number;
-  /** Receives every router/host/attacker output chunk as it arrives (e.g. to tee into a log file). */
-  onRouterOutput?: (variant: Variant | VpnVariant, chunk: string) => void;
+  /**
+   * Receives every router/host/attacker output chunk as it arrives (e.g. to tee into a log file), labelled by the
+   * variant, or by `ExitOptions.label` when given.
+   */
+  onRouterOutput?: (label: string, chunk: string) => void;
 }
 
 export interface RouterOptions {
@@ -78,6 +88,10 @@ export interface ExitOptions {
   register?: boolean;
   /** Exit listen port (default 0 = ephemeral). For attack variants: the proxy's port is always ephemeral. */
   port?: number;
+  /** The operator account that registers the instance (default "operator"); its org is the instance's org. */
+  operator?: OperatorAccount;
+  /** Output label for `onRouterOutput` (dev tooling: several instances of one variant), `[a-z0-9-]{1,40}`. */
+  label?: string;
 }
 
 export interface ExitHandle {
@@ -88,6 +102,18 @@ export interface ExitHandle {
   /** exit + host stdout+stderr (and the attacker proxy's log for network variants). */
   output(): string;
   stop(): Promise<void>;
+}
+
+/**
+ * The local RFC 8484 resolver of the test builds (SPEC-VPN §9.3), on `127.0.0.1:18253` (POST `/dns-query`).
+ * Answers A / AAAA from `set()` records by address family; unknown names ⇒ NXDOMAIN; `setDown(true)` ⇒ HTTP 503.
+ */
+export interface StackDns {
+  /** Sets (replaces) the addresses of `name` (case-insensitive, optional trailing dot). */
+  set(name: string, addrs: string[]): void;
+  /** Number of queries received so far (every POST, answered or not). */
+  hits(): number;
+  setDown(down: boolean): void;
 }
 
 /** Local HTTP/1.1 destination (SPEC-VPN §9.3). */
@@ -107,7 +133,7 @@ export interface Stack {
   trustedRoot: Uint8Array;
   registry: RegistryReader;
   runDir: string;
-  accounts: { owner: string; operator: string; stranger: string };
+  accounts: { owner: string; operator: string; operator2: string; stranger: string };
   view<T>(method: string, args: object): Promise<T>;
   /** Rejects with an Error whose message includes the contract panic code. */
   call(signer: Signer, method: string, args: object, o?: { deposit?: string; gas?: string }): Promise<unknown>;
@@ -122,7 +148,13 @@ export interface Stack {
   approveVpnBuild(build: VpnBuild): Promise<{ composeHash: string; osMeasurement: string }>;
   startExit(variant: VpnVariant, o?: ExitOptions): Promise<ExitHandle>;
   startDestination(): Promise<Destination>;
-  /** Stops every router, exit, attacker proxy, destination and the chain. */
+  /** Owner → `approve_operator` on the VPN registry (re-approving changes the org). */
+  approveOperator(account: OperatorAccount, orgId: string): Promise<void>;
+  /** Owner → `revoke_operator` on the VPN registry. */
+  revokeOperator(account: OperatorAccount): Promise<void>;
+  /** The test builds' DoH resolver (always running while the stack is up). */
+  dns: StackDns;
+  /** Stops every router, exit, attacker proxy, destination, the DoH resolver and the chain. */
   stop(): Promise<void>;
 }
 
@@ -206,6 +238,10 @@ const DEST_MAX_BODY = 16 * 1024 * 1024;
 const DEST_MAX_RECORDED = 64 * 1024 * 1024;
 const DEST_IDLE_MS = 60_000;
 
+/** The test builds' measured resolver URL is `http://127.0.0.1:18253/dns-query` (SPEC-VPN §2). */
+export const TEST_DOH_PORT = 18253;
+const OPERATORS: readonly OperatorAccount[] = ["operator", "operator2"];
+
 export async function startStack(o: StackOptions): Promise<DevStack> {
   if (o.llm !== "mock" && o.llm !== "llama") throw new Error(`startStack: llm must be "mock" or "llama"`);
   const info = loadBuildInfo();
@@ -244,17 +280,23 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
     const root = await generateRootSecret(rootSecretFile);
     const trustedRoot = root.publicKey;
 
+    // The test builds' DoH resolver on its measured, fixed port (fails fast if another stack holds it).
+    const doh = await startDohResolver(TEST_DOH_PORT);
+    teardowns.add(doh.close);
+    const dns: StackDns = { set: doh.set, hits: doh.hits, setDown: doh.setDown };
+
     node = await startSandbox({ homeDir: join(runDir, "near"), ...(o.rpcPort !== undefined ? { rpcPort: o.rpcPort } : {}) });
     const rpcUrl = node.rpcUrl;
     const provider = new JsonRpcProvider({ url: rpcUrl });
     const rootAcct = new Account(node.rootAccountId, provider, KeyPairSigner.fromSecretKey(node.rootKey));
 
-    // Accounts: registry + vpnregistry (contracts), owner, operator, stranger — each with its own fresh key.
+    // Accounts: registry + vpnregistry (contracts), owner, operator, operator2, stranger — each with its own fresh key.
     const names = {
       registry: `registry.${node.rootAccountId}`,
       vpnregistry: `vpnregistry.${node.rootAccountId}`,
       owner: `owner.${node.rootAccountId}`,
       operator: `operator.${node.rootAccountId}`,
+      operator2: `operator2.${node.rootAccountId}`,
       stranger: `stranger.${node.rootAccountId}`,
     };
     type Role = keyof typeof names;
@@ -266,7 +308,7 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
       await rootAcct.createAccount({ newAccountId: accountId, publicKey: kp.getPublicKey().toString(), nearToTransfer: (isContract ? 50n : 100n) * NEAR });
     }
     const acct = (role: Role) => new Account(names[role], provider, KeyPairSigner.fromSecretKey(keys.get(role)!.toString() as KeyPairString));
-    const signers: Record<Signer, Account> = { owner: acct("owner"), operator: acct("operator"), stranger: acct("stranger") };
+    const signers: Record<Signer, Account> = { owner: acct("owner"), operator: acct("operator"), operator2: acct("operator2"), stranger: acct("stranger") };
     const contractId = names.registry;
     const vpnContractId = names.vpnregistry;
 
@@ -348,12 +390,14 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
     interface HostLaunch {
       service: "router" | "vpn";
       /** Output label (log file name in the dev stack). */
-      label: Variant | VpnVariant;
+      label: string;
       /** Diagnostics, e.g. "router honest" / "exit vpn-honest-test". */
       what: string;
       /** Host CLI arguments after `launch`. */
       hostArgs: string[];
       register: boolean;
+      /** The account that registers the instance (default "operator"). */
+      operator?: OperatorAccount;
       /** The registry variable for this service (`PLR_REGISTRY` / `PLR_VPN_REGISTRY`) → contract id. */
       registryEnv: Record<string, string>;
       listenTimeoutMs: number;
@@ -370,9 +414,10 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
       if (l.register) {
         // A dedicated full-access key per instance on the operator account: no nonce races between instances or
         // with the harness's own operator calls. (Function-call keys cannot attach the storage deposit.)
+        const op = l.operator ?? "operator";
         const instanceKey = KeyPair.fromRandom("ed25519");
-        await signers.operator.addFullAccessKey(instanceKey.getPublicKey().toString());
-        Object.assign(env, { PLR_NEAR_RPC: rpcUrl, ...l.registryEnv, PLR_OPERATOR_ID: names.operator, PLR_OPERATOR_KEY: instanceKey.toString() });
+        await signers[op].addFullAccessKey(instanceKey.getPublicKey().toString());
+        Object.assign(env, { PLR_NEAR_RPC: rpcUrl, ...l.registryEnv, PLR_OPERATOR_ID: names[op], PLR_OPERATOR_KEY: instanceKey.toString() });
       }
       const proc: ManagedProcess = startManaged({
         name: `${l.service}:${l.label}`,
@@ -495,13 +540,14 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
       return { composeHash: m.composeHash, osMeasurement: m.osMeasurement };
     };
 
-    const launchExit = (build: VpnBuild, xo: ExitOptions, label: VpnVariant): Promise<ExitHandle> =>
+    const launchExit = (build: VpnBuild, xo: ExitOptions, label: string): Promise<ExitHandle> =>
       launchHost({
         service: "vpn",
         label,
         what: `exit ${label}`,
         hostArgs: ["--compose", vpnComposePathOf(build), "--run-dir", hostDir, "--exit-port", String(xo.port ?? 0)],
         register: xo.register !== false,
+        operator: xo.operator ?? "operator",
         registryEnv: { PLR_VPN_REGISTRY: vpnContractId },
         listenTimeoutMs: 60_000,
       });
@@ -509,15 +555,18 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
     const startExit = async (variant: VpnVariant, xo: ExitOptions = {}): Promise<ExitHandle> => {
       if (stopping) throw new Error("stack is stopped");
       const build = vpnBuildOf(variant);
-      if (!isVpnAttack(variant)) return launchExit(build, xo, variant);
+      if (xo.operator !== undefined && !OPERATORS.includes(xo.operator)) throw new Error(`startExit: unknown operator: ${String(xo.operator)}`);
+      if (xo.label !== undefined && !/^[a-z0-9][a-z0-9-]{0,39}$/.test(xo.label)) throw new Error("startExit: bad label");
+      const label = xo.label ?? variant;
+      if (!isVpnAttack(variant)) return launchExit(build, xo, label);
       // Network attack: the approved, registered test build behind a malicious TCP/HTTP proxy.
-      const inner = await launchExit(build, { ...xo, port: 0 }, variant);
+      const inner = await launchExit(build, { ...xo, port: 0 }, label);
       let proxyLog = "";
       let proxy: AttackProxy;
       try {
         proxy = await startVpnAttackProxy(variant, inner.url, (line) => {
           proxyLog += line;
-          o.onRouterOutput?.(variant, line);
+          o.onRouterOutput?.(label, line);
         });
       } catch (e) {
         await inner.stop();
@@ -538,13 +587,24 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
       return { ...d, close };
     };
 
+    const operatorId = (account: OperatorAccount): string => {
+      if (!OPERATORS.includes(account)) throw new Error(`unknown operator account: ${String(account)}`);
+      return names[account];
+    };
+    const approveOperator = async (account: OperatorAccount, orgId: string): Promise<void> => {
+      await callVpn("owner", "approve_operator", { account_id: operatorId(account), org_id: orgId });
+    };
+    const revokeOperator = async (account: OperatorAccount): Promise<void> => {
+      await callVpn("owner", "revoke_operator", { account_id: operatorId(account) });
+    };
+
     return {
       rpcUrl,
       contractId,
       trustedRoot,
       registry,
       runDir,
-      accounts: { owner: names.owner, operator: names.operator, stranger: names.stranger },
+      accounts: { owner: names.owner, operator: names.operator, operator2: names.operator2, stranger: names.stranger },
       view,
       call,
       approveBuild,
@@ -556,6 +616,9 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
       approveVpnBuild,
       startExit,
       startDestination,
+      approveOperator,
+      revokeOperator,
+      dns,
       stop,
       exportSigner: (signer: Signer) => {
         const kp = keys.get(signer);
@@ -652,6 +715,142 @@ async function startDestinationServer(): Promise<Omit<Destination, "close"> & { 
     port,
     hits: () => hits,
     received: () => Buffer.concat(recorded).toString("latin1"),
+    close: () =>
+      (closing ??= new Promise<void>((ok) => {
+        server.close(() => ok());
+        for (const s of sockets) s.destroy();
+      })),
+  };
+}
+
+// ------------------------------------------------------------------------------------------------ DoH resolver
+
+/** Resolver bounds: queries are ≤ 512 bytes (padded to 128, names ≤ 253); ≤ 32 addresses per name; 10 s per request. */
+const DOH_MAX_QUERY = 4096;
+const DOH_MAX_ADDRS = 32;
+const DOH_REQUEST_TIMEOUT_MS = 10_000;
+const DNS_TYPE_A = 1;
+const DNS_TYPE_AAAA = 28;
+
+/** Lowercase, no trailing dot: the resolver's record key. */
+const dnsKey = (name: string): string => name.toLowerCase().replace(/\.$/, "");
+
+/** The question of a standard query: QDCOUNT = 1, uncompressed qname, class IN. `null` = malformed. */
+function parseDnsQuestion(q: Buffer): { id: number; name: string; qtype: number; end: number } | null {
+  if (q.length < 12 || q.readUInt16BE(4) !== 1 || (q[2]! & 0x80) !== 0) return null;
+  const labels: string[] = [];
+  let i = 12;
+  let total = 0;
+  for (;;) {
+    if (i >= q.length) return null;
+    const len = q[i]!;
+    if (len === 0) break;
+    if (len > 63 || i + 1 + len > q.length) return null; // (also rejects compression pointers in a query)
+    total += len + 1;
+    if (total > 255) return null;
+    labels.push(q.subarray(i + 1, i + 1 + len).toString("latin1"));
+    i += 1 + len;
+  }
+  if (i + 5 > q.length || q.readUInt16BE(i + 3) !== 1) return null;
+  return { id: q.readUInt16BE(0), name: dnsKey(labels.join(".")), qtype: q.readUInt16BE(i + 1), end: i + 5 };
+}
+
+/** A response: the query's id and question, RD/RA set, `rcode`, one answer RR (TTL 60) per rdata, no additional RRs. */
+function dnsAnswer(q: Buffer, question: { id: number; qtype: number; end: number }, rcode: number, rdatas: Uint8Array[]): Buffer {
+  const header = Buffer.alloc(12);
+  header.writeUInt16BE(question.id, 0);
+  header.writeUInt16BE(0x8180 | rcode, 2);
+  header.writeUInt16BE(1, 4);
+  header.writeUInt16BE(rdatas.length, 6);
+  const answers = rdatas.map((rd) => {
+    const rr = Buffer.alloc(12 + rd.length);
+    rr.writeUInt16BE(0xc00c, 0); // name: pointer to the question name
+    rr.writeUInt16BE(question.qtype, 2);
+    rr.writeUInt16BE(1, 4); // IN
+    rr.writeUInt32BE(60, 6);
+    rr.writeUInt16BE(rd.length, 10);
+    rr.set(rd, 12);
+    return rr;
+  });
+  return Buffer.concat([header, q.subarray(12, question.end), ...answers]);
+}
+
+/**
+ * The SPEC-VPN §9.3 resolver: RFC 8484 POST `/dns-query` (`application/dns-message`) on 127.0.0.1:`port`.
+ * A/AAAA answers from `set()` records by address family, NXDOMAIN for unknown names, HTTP 503 while down,
+ * 400 / 413 / 415 for malformed requests. Every request counts as a hit. It logs nothing.
+ */
+async function startDohResolver(port: number): Promise<StackDns & { close(): Promise<void> }> {
+  const records = new Map<string, Uint8Array[]>();
+  const sockets = new Set<net.Socket>();
+  let hits = 0;
+  let down = false;
+  const server = http.createServer((req, res) => {
+    hits++;
+    const reply = (status: number, type: string, body: Uint8Array | string) => {
+      res.writeHead(status, { "content-type": type, "content-length": String(Buffer.byteLength(body)), "cache-control": "no-store" });
+      res.end(body);
+    };
+    if (down) {
+      req.resume();
+      return reply(503, "text/plain", "resolver down");
+    }
+    const ctype = (req.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
+    if (req.method !== "POST" || (req.url ?? "").split("?")[0] !== "/dns-query") {
+      req.resume();
+      return reply(400, "text/plain", "bad request");
+    }
+    if (ctype !== "application/dns-message") {
+      req.resume();
+      return reply(415, "text/plain", "unsupported media type");
+    }
+    const chunks: Buffer[] = [];
+    let n = 0;
+    let tooBig = false;
+    req.on("data", (c: Buffer) => {
+      n += c.length;
+      if (n > DOH_MAX_QUERY) tooBig = true;
+      else chunks.push(c);
+    });
+    req.on("error", () => res.destroy());
+    req.on("end", () => {
+      if (tooBig) return reply(413, "text/plain", "too large");
+      const q = Buffer.concat(chunks);
+      const question = parseDnsQuestion(q);
+      if (!question) return reply(400, "text/plain", "bad query");
+      const addrs = records.get(question.name);
+      const rdatas = (addrs ?? []).filter((a) => a.length === (question.qtype === DNS_TYPE_A ? 4 : question.qtype === DNS_TYPE_AAAA ? 16 : -1));
+      reply(200, "application/dns-message", dnsAnswer(q, question, addrs ? 0 : 3, rdatas));
+    });
+  });
+  server.requestTimeout = DOH_REQUEST_TIMEOUT_MS;
+  server.headersTimeout = DOH_REQUEST_TIMEOUT_MS;
+  server.on("connection", (s: net.Socket) => {
+    sockets.add(s);
+    s.once("close", () => sockets.delete(s));
+  });
+  await new Promise<void>((ok, fail) => {
+    server.once("error", (e: NodeJS.ErrnoException) =>
+      fail(new Error(e.code === "EADDRINUSE" ? `DoH resolver port 127.0.0.1:${port} is in use (another stack running? scripts/dev-down.sh)` : `DoH resolver: ${e.message}`)),
+    );
+    server.listen(port, "127.0.0.1", () => ok());
+  });
+  let closing: Promise<void> | null = null;
+  return {
+    set(name: string, addrs: string[]): void {
+      if (typeof name !== "string" || name.length === 0 || name.length > 254) throw new Error("dns.set: bad name");
+      if (!Array.isArray(addrs) || addrs.length > DOH_MAX_ADDRS) throw new Error("dns.set: addrs must be an array of ≤ 32 IP literals");
+      const raw = addrs.map((a) => {
+        const b = parseIpv4(a) ?? parseIpv6(a);
+        if (!b) throw new Error(`dns.set: not an IP literal: ${String(a)}`);
+        return b;
+      });
+      records.set(dnsKey(name), raw);
+    },
+    hits: () => hits,
+    setDown(d: boolean): void {
+      down = d === true;
+    },
     close: () =>
       (closing ??= new Promise<void>((ok) => {
         server.close(() => ok());

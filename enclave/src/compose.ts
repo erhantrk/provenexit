@@ -5,7 +5,7 @@
  * module never re-serialises something it was given.
  */
 import { readFileSync } from "node:fs";
-import { PlrError, isHex } from "@plr/shared";
+import { PlrError, egressAllowed, isHex, isIpLiteral, parseIpv4 } from "@plr/shared";
 
 /** Upper bound for a compose document (SPEC §7: app_compose ≤ 8 KiB). */
 export const MAX_COMPOSE_BYTES = 8 * 1024;
@@ -155,23 +155,85 @@ export const VPN_ENTRY = "vpn.bundle.mjs";
 export interface VpnCompose {
   manifest_version: 1;
   name: "plr-vpn";
-  policy: { disk: "none"; egress: { allow_loopback: boolean; deny_private: true }; logs: "none" };
+  policy: {
+    disk: "none";
+    dns: { doh: string[] };
+    egress: { allow_loopback: boolean; deny_private: true };
+    logs: "none";
+  };
   vpn: { bundle_sha256: string; entry: typeof VPN_ENTRY; node_sha256: string };
 }
 
 export type ComposeService = "router" | "vpn";
+
+/** SPEC-VPN §2: production RFC 8484 resolvers (IP literals: no bootstrap DNS), tried in this order. */
+export const VPN_DOH_PRODUCTION: readonly string[] = Object.freeze(["https://1.1.1.1/dns-query", "https://9.9.9.9/dns-query"]);
+/** SPEC-VPN §2: the local test resolver of test-policy builds (allowed only with `allow_loopback`). */
+export const VPN_DOH_TEST: readonly string[] = Object.freeze(["http://127.0.0.1:18253/dns-query"]);
+/** At most this many resolvers (SPEC-VPN §2). */
+export const MAX_DOH_RESOLVERS = 4;
+/** Upper bound on one resolver URL (far above any real one; bounds what the exit ever parses). */
+export const MAX_DOH_URL_LEN = 256;
+
+/** The address of a URL host (`1.2.3.4` or `[v6]`, as `URL.hostname` spells it), or null if it is not an IP literal. */
+export function urlHostIp(hostname: string): string | null {
+  if (hostname.startsWith("[") && hostname.endsWith("]")) {
+    const v6 = hostname.slice(1, -1);
+    return isIpLiteral(v6) && parseIpv4(v6) === null ? v6 : null;
+  }
+  return parseIpv4(hostname) !== null ? hostname : null;
+}
+
+/**
+ * One `policy.dns.doh` entry (SPEC-VPN §2): an absolute URL in its own normalised form (so the measured string is
+ * exactly what is fetched), host an IP literal (no bootstrap DNS), no credentials / query / fragment, and either
+ * `https:` to an address the egress policy allows, or — only on `allow_loopback` builds — `http://127.0.0.1:<port>/…`.
+ * @returns the reason it is invalid, or null
+ */
+export function dohUrlProblem(url: unknown, allowLoopback: boolean): string | null {
+  if (typeof url !== "string" || url.length === 0 || url.length > MAX_DOH_URL_LEN) return "not a bounded string";
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return "not a URL";
+  }
+  if (u.href !== url) return "not in normalised form";
+  if (u.username !== "" || u.password !== "" || u.search !== "" || u.hash !== "") return "credentials, query or fragment";
+  const ip = urlHostIp(u.hostname);
+  if (ip === null) return "host is not an IP literal";
+  if (u.protocol === "https:") {
+    // The resolver itself is subject to the measured egress policy (never a private / metadata address).
+    return egressAllowed(ip, { allow_loopback: allowLoopback, deny_private: true }) ? null : "address not allowed";
+  }
+  if (u.protocol === "http:") {
+    if (!allowLoopback) return "plain http outside a loopback test build";
+    if (ip !== "127.0.0.1" || u.port === "") return "plain http only to 127.0.0.1:<port>";
+    return null;
+  }
+  return "scheme";
+}
+
+function validateDoh(dns: unknown, allowLoopback: boolean): void {
+  if (!exactKeys(dns, ["doh"])) bad("policy.dns keys");
+  const list = dns.doh;
+  if (!Array.isArray(list) || list.length < 1 || list.length > MAX_DOH_RESOLVERS) bad("policy.dns.doh size");
+  for (const u of list) if (dohUrlProblem(u, allowLoopback) !== null) bad("policy.dns.doh entry");
+  if (new Set(list).size !== list.length) bad("policy.dns.doh duplicates");
+}
 
 function validateVpnCompose(c: unknown): asserts c is VpnCompose {
   if (!exactKeys(c, ["manifest_version", "name", "policy", "vpn"])) bad("top-level keys");
   if (c.manifest_version !== 1) bad("manifest_version");
   if (c.name !== "plr-vpn") bad("name");
   const pol = c.policy;
-  if (!exactKeys(pol, ["disk", "egress", "logs"])) bad("policy keys");
+  if (!exactKeys(pol, ["disk", "dns", "egress", "logs"])) bad("policy keys");
   if (pol.disk !== "none" || pol.logs !== "none") bad("policy");
   const eg = pol.egress;
   if (!exactKeys(eg, ["allow_loopback", "deny_private"])) bad("policy.egress keys");
   if (typeof eg.allow_loopback !== "boolean") bad("policy.egress.allow_loopback");
   if (eg.deny_private !== true) bad("policy.egress.deny_private");
+  validateDoh(pol.dns, eg.allow_loopback);
   const v = c.vpn;
   if (!exactKeys(v, ["bundle_sha256", "entry", "node_sha256"])) bad("vpn keys");
   if (!isHex(v.bundle_sha256, 32)) bad("vpn.bundle_sha256");
@@ -179,12 +241,16 @@ function validateVpnCompose(c: unknown): asserts c is VpnCompose {
   if (v.entry !== VPN_ENTRY) bad("vpn.entry");
 }
 
-/** Builds a VPN compose object from its variable parts (validated). */
-export function makeVpnCompose(p: { bundleSha256: string; nodeSha256: string; allowLoopback: boolean }): VpnCompose {
+/**
+ * Builds a VPN compose object from its variable parts (validated). `doh` defaults to {@link VPN_DOH_TEST} on
+ * `allowLoopback` builds and to {@link VPN_DOH_PRODUCTION} otherwise (SPEC-VPN §2).
+ */
+export function makeVpnCompose(p: { bundleSha256: string; nodeSha256: string; allowLoopback: boolean; doh?: readonly string[] }): VpnCompose {
+  const doh = [...(p.doh ?? (p.allowLoopback ? VPN_DOH_TEST : VPN_DOH_PRODUCTION))];
   const c: VpnCompose = {
     manifest_version: 1,
     name: "plr-vpn",
-    policy: { disk: "none", egress: { allow_loopback: p.allowLoopback, deny_private: true }, logs: "none" },
+    policy: { disk: "none", dns: { doh }, egress: { allow_loopback: p.allowLoopback, deny_private: true }, logs: "none" },
     vpn: { bundle_sha256: p.bundleSha256, entry: VPN_ENTRY, node_sha256: p.nodeSha256 },
   };
   validateVpnCompose(c);

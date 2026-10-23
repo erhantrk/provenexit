@@ -72,6 +72,46 @@ describe("NearRegistry", () => {
     expect(await reg.getAnchor(0)).toEqual({ id: 0, key_hash: router.keyHash, root: "ee".repeat(32), first_seq: 0, count: 3, at_ms: 5 });
   });
 
+  it("copies org_id (SPEC §7 rev 1.2): approved org or null; a missing or malformed org_id is a malformed reply", async () => {
+    const router = makeFakeRouter();
+    let reply: unknown = { ...router.record, org_id: "org-a" };
+    const rpc = await startFakeRpc(async (m) => {
+      if (m === "get_instance") return reply;
+      throw new Error("x");
+    });
+    rpcs.push(rpc);
+    const reg = new NearRegistry({ rpcUrl: rpc.url, contractId: "registry.test.near" });
+    expect((await reg.getInstance(router.keyHash))!.org_id).toBe("org-a");
+    reply = { ...router.record, org_id: null };
+    expect((await reg.getInstance(router.keyHash))!.org_id).toBeNull();
+    reply = { ...router.record, org_id: "org-a", extra: 1 };
+    expect(Object.keys((await reg.getInstance(router.keyHash))!)).not.toContain("extra");
+    for (const bad of [{ ...router.record, org_id: "Org-A" }, { ...router.record, org_id: 7 }, { ...router.record, org_id: "-x" }, (({ org_id: _, ...r }) => r)(router.record)]) {
+      reply = bad;
+      await expect(reg.getInstance(router.keyHash), JSON.stringify(bad)).rejects.toThrow();
+    }
+  });
+
+  it("getOperator: org_id or null; malformed replies rejected; malformed account ids never queried", async () => {
+    let reply: unknown = "org-a";
+    const rpc = await startFakeRpc(async (m, args) => {
+      if (m === "get_operator" && args.account_id === "op.test.near") return reply;
+      throw new Error("x");
+    });
+    rpcs.push(rpc);
+    const reg = new NearRegistry({ rpcUrl: rpc.url, contractId: "registry.test.near" });
+    expect(await reg.getOperator("op.test.near")).toBe("org-a");
+    reply = null;
+    expect(await reg.getOperator("op.test.near")).toBeNull();
+    for (const bad of ["ORG", 5, { org: "a" }]) {
+      reply = bad;
+      await expect(reg.getOperator("op.test.near")).rejects.toThrow();
+    }
+    const n = rpc.calls.length;
+    expect(await reg.getOperator("Bad..Id")).toBeNull();
+    expect(rpc.calls.length).toBe(n);
+  });
+
   it("rejects malformed replies", async () => {
     const replies: [string, unknown][] = [
       ["get_root", { kind: "OTHER", p256: "ab".repeat(64) }],

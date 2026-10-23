@@ -30,7 +30,7 @@ export {
 export { merkleRoot, merkleProof, verifyMerkleProof, MAX_PROOF_LEN } from "./receipts/merkle.js";
 
 export {
-  MemoryRegistry, isHash32, isRegistryRoot, isInstanceRecord, isAnchorRecord,
+  MemoryRegistry, isHash32, isRegistryRoot, isInstanceRecord, isAnchorRecord, isOrgId, ORG_ID_RE,
   type RegistryReader, type RegistryRoot, type InstanceRecord, type AnchorRecord, type MemoryRegistryOptions,
 } from "./registry.js";
 
@@ -44,10 +44,13 @@ export {
   VPN_DOMAIN, TUNNEL, FRAME, FRAME_RULES, MAX_CONNECT_PAYLOAD, TUNNEL_STEP_TIMEOUT_MS, TUNNEL_IDLE_TIMEOUT_MS,
   isTunnelDir, frameAllowed, type TunnelDir, type FrameType,
 } from "./tunnel/constants.js";
-export { deriveTunnel, encodeHello, parseHello, tunnelClientInit, tunnelServerInit, type TunnelKeys } from "./tunnel/keys.js";
+export {
+  deriveTunnel, encodeHello, parseHello, encodeServerHello, parseServerHello, tunnelClientStart, tunnelServerAccept,
+  type TunnelKeys, type TunnelClientHandshake, type TunnelServerHandshake,
+} from "./tunnel/keys.js";
 export { TunnelWriter, TunnelReader, type TunnelFrame } from "./tunnel/frames.js";
 export {
-  CONNECT_ERR_CODES, isConnectErrCode, encodeConnect, parseConnect, encodeConnectErr, parseConnectErr,
+  CONNECT_ERR_CODES, CONNECT_PADDED_LEN, CONNECT_ERR_PADDED_LEN, isConnectErrCode, encodeConnect, parseConnect, encodeConnectErr, parseConnectErr,
   encodeReceiptPayload, parseReceiptPayload, type ConnectErrCode,
 } from "./tunnel/payloads.js";
 export {
@@ -61,3 +64,4 @@ export {
 export {
   SOCKS, SOCKS_REP, parseSocksGreeting, parseSocksRequest, encodeSocksReply, socksReplyFor, type SocksRequest,
 } from "./net/socks5.js";
+export { DNS, encodeDnsQuery, parseDnsResponse, isLocalhostName, type DnsType } from "./net/dns.js";

@@ -82,8 +82,11 @@ try {
   const regGas = gasOf(reg);
   const after = await operator.getBalance();
   console.log(`  register_instance gas burnt: ${Number(regGas) / 1e12} Tgas; operator paid ${Number(before - after) / 1e24} NEAR (deposit 0.1)`);
-  check(before - after > 0n && before - after < DEPOSIT / 2n, "excess storage deposit refunded");
   const kh = toHex(keyHash(xp, ep));
+  // Paid = storage (≈0.0035 NEAR) + the capped anchor credit (0.05 NEAR) + gas; the rest of the 0.1 is refunded.
+  const MAX_CREDIT = 50_000_000_000_000_000_000_000n;
+  check((await view("get_anchor_credit", { key_hash: kh })) === MAX_CREDIT.toString(), "excess deposit kept as capped anchor credit");
+  check(before - after > MAX_CREDIT && before - after < MAX_CREDIT + DEPOSIT / 10n, "rest of the excess deposit refunded");
   const rec = await view("get_instance", { key_hash: kh });
   check(rec?.operator === operator.accountId && rec.next_seq === 0 && rec.compose_hash === composeHash && typeof rec.expires_at_ms === "number", "get_instance record");
   check((await view("get_instance", { key_hash: toHex(randomBytes(32)) })) === null, "unknown instance is null");
@@ -108,6 +111,20 @@ try {
   await expectFail(call(stranger, "anchor_receipts", { key_hash: kh, root: toHex(rootHash), first_seq: 0, count: 2, sig: toHex(sig) }), "E_SEQ", "anchor replay");
   const logs = anc.receipts_outcome.flatMap((o) => o.outcome.logs);
   check(logs.some((l) => l.startsWith('EVENT_JSON:{"standard":"plr","version":"1.0.0","event":"receipts_anchored"')), "NEP-297 receipts_anchored event");
+
+  // Operator organizations (SPEC §7 rev 1.2).
+  check(rec.org_id === null, "get_instance org_id is null before approval");
+  await expectFail(call(stranger, "approve_operator", { account_id: operator.accountId, org_id: "org-a" }), "E_UNAUTHORIZED", "approve_operator by a stranger");
+  await expectFail(call(owner, "approve_operator", { account_id: operator.accountId, org_id: "Org-A" }), "E_BAD_INPUT", "bad org_id");
+  const bal0 = await registry.getBalance();
+  const appr = await call(owner, "approve_operator", { account_id: operator.accountId, org_id: "acme-hosting.eu" });
+  console.log(`  approve_operator gas burnt: ${Number(gasOf(appr)) / 1e12} Tgas; contract balance Δ ${Number((await registry.getBalance()) - bal0) / 1e24} NEAR`);
+  check((await view("get_operator", { account_id: operator.accountId })) === "acme-hosting.eu", "get_operator");
+  check((await view("get_operator", { account_id: "NOT VALID" })) === null, "get_operator on a malformed account id is null");
+  check((await view("get_instance", { key_hash: kh })).org_id === "acme-hosting.eu", "get_instance org_id is live");
+  check(appr.receipts_outcome.flatMap((o) => o.outcome.logs).some((l) => l.includes('"event":"operator_approved"')), "NEP-297 operator_approved event");
+  await call(owner, "revoke_operator", { account_id: operator.accountId });
+  check((await view("get_operator", { account_id: operator.accountId })) === null && (await view("get_instance", { key_hash: kh })).org_id === null, "revoke_operator");
 } finally {
   await sandbox?.tearDown(true);
 }

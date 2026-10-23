@@ -20,7 +20,7 @@ export async function attest(url: string, rootPub: Uint8Array, opts: { registere
     compose: [composeHash],
     os: [os],
     instances: opts.registered === false ? {} : {
-      [kh]: { compose_hash: composeHash, os_measurement: os, x25519: bundle.x25519, ed25519: bundle.ed25519, operator: "op.test", registered_at_ms: Date.now(), expires_at_ms: Date.now() + 3_600_000, next_seq: 0 },
+      [kh]: { compose_hash: composeHash, os_measurement: os, x25519: bundle.x25519, ed25519: bundle.ed25519, operator: "op.test", org_id: null, registered_at_ms: Date.now(), expires_at_ms: Date.now() + 3_600_000, next_seq: 0 },
     },
   });
   const v = await verifyAttestation({ bundle, nonce, verifier: new MockVerifier(rootPub), registry, trustedRoot: rootPub });

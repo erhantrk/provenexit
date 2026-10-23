@@ -1,6 +1,6 @@
 // In-process fake PLR-VPN exit (SPEC-VPN §3–§5) built only from @plr/shared primitives + MemoryRegistry, plus a
 // local HTTP destination. Misbehaviours are switchable per test. The fake records what it saw only so tests can
-// assert on it (a real exit must not).
+// assert on it (a real exit must not). Several fakes may share one root + registry (two-hop tests).
 import { createServer, type Server, type IncomingMessage } from "node:http";
 import { connect as tcpConnect, isIP, type AddressInfo, type Socket } from "node:net";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -21,11 +21,14 @@ import {
   mockOsReport,
   osMeasurement,
   parseConnect,
+  parseHello,
+  deriveTunnel,
+  encodeServerHello,
   reportData,
   signVpnReceipt,
   toHex,
   fromHex,
-  tunnelServerInit,
+  tunnelServerAccept,
   vpnReceiptLeaf,
   type AttestationBundle,
   type ConnectErrCode,
@@ -33,17 +36,21 @@ import {
   type VpnReceipt,
 } from "@plr/shared";
 
-export const VPN_COMPOSE =
+export const vpnCompose = (bundleSha = "33".repeat(32)): string =>
   JSON.stringify(
     {
       manifest_version: 1,
       name: "plr-vpn",
       policy: { disk: "none", egress: { allow_loopback: true, deny_private: true }, logs: "none" },
-      vpn: { bundle_sha256: "33".repeat(32), entry: "vpn.bundle.mjs", node_sha256: "44".repeat(32) },
+      vpn: { bundle_sha256: bundleSha, entry: "vpn.bundle.mjs", node_sha256: "44".repeat(32) },
     },
     null,
     2,
   ) + "\n";
+export const VPN_COMPOSE = vpnCompose();
+
+/** Anchors added by fakes per registry (several fakes may share one registry; anchor ids are global). */
+const anchorCounts = new WeakMap<MemoryRegistry, number>();
 
 export interface ExitBehaviour {
   /** Advertise a different x25519 key than the one the quote binds. */
@@ -72,6 +79,16 @@ export interface ExitBehaviour {
   upgradeStatus?: number;
   /** Bytes to stream to the client after CONNECT_OK instead of relaying the upstream (then FIN). */
   blast?: number;
+  /** Send `101 ‖ server_hello` in one write, before the hello arrives (precomputed exit ephemeral). */
+  serverHelloInHead?: boolean;
+  /** Send the server_hello one byte at a time. */
+  dribbleServerHello?: boolean;
+  /** Replace the server_hello by these bytes. */
+  rawServerHello?: Uint8Array;
+  /** Never send the server_hello (count what the client sends meanwhile). */
+  withholdServerHello?: boolean;
+  /** Send the server_hello glued to an (authentic) unsolicited DATA frame in one write. */
+  dataAfterServerHello?: boolean;
 }
 
 export interface FakeExit {
@@ -85,7 +102,7 @@ export interface FakeExit {
   behaviour: ExitBehaviour;
   /** Fake exit-side DNS: name → IP (the client must never resolve these). */
   dns: Map<string, string>;
-  stats: { attestations: number; tunnels: number; connects: number; maxC2sPayload: number; blastSent: number };
+  stats: { attestations: number; tunnels: number; connects: number; maxC2sPayload: number; blastSent: number; destinations: string[]; hellos: string[]; bytesWithoutServerHello: number };
   receipts: VpnReceipt[];
   /** Anchors every receipt so far as one batch on the registry (first_seq = registry next_seq). */
   anchorAll(): void;
@@ -94,9 +111,21 @@ export interface FakeExit {
 
 const enc = new TextEncoder();
 
-export async function startFakeExit(): Promise<FakeExit> {
-  const root = MockRoot.generate();
-  const composeBytes = enc.encode(VPN_COMPOSE);
+export interface FakeExitOptions {
+  /** Share an attestation root (two-hop: both hops under one pinned root). */
+  root?: MockRoot;
+  /** Share a registry: the exit adds its compose / OS / instance to it. */
+  registry?: MemoryRegistry;
+  /** Operator account of the instance (default `vpn-operator.test.near`). */
+  operator?: string;
+  /** Another build: `vpn.bundle_sha256` of the compose (default 33…33). */
+  bundleSha?: string;
+}
+
+export async function startFakeExit(o: FakeExitOptions = {}): Promise<FakeExit> {
+  const root = o.root ?? MockRoot.generate();
+  const composeText = vpnCompose(o.bundleSha);
+  const composeBytes = enc.encode(composeText);
   const attester = new MockTdxAttester({ root, composeBytes });
   const xs = x25519.utils.randomSecretKey();
   const xp = x25519.getPublicKey(xs);
@@ -110,20 +139,29 @@ export async function startFakeExit(): Promise<FakeExit> {
     os_measurement: osHash,
     x25519: toHex(xp),
     ed25519: toHex(ep),
-    operator: "vpn-operator.test.near",
+    operator: o.operator ?? "vpn-operator.test.near",
+    org_id: null,
     registered_at_ms: 1,
     expires_at_ms: Date.now() + 3_600_000,
     next_seq: 0,
   };
-  const registry = new MemoryRegistry({
-    root: { kind: "MOCK", p256: toHex(root.publicKey) },
-    compose: [composeHash],
-    os: [osHash],
-    instances: { [kh]: record },
-  });
+  let registry: MemoryRegistry;
+  if (o.registry !== undefined) {
+    registry = o.registry;
+    registry.allowCompose(composeHash);
+    registry.allowOs(osHash);
+    registry.putInstance(kh, record);
+  } else {
+    registry = new MemoryRegistry({
+      root: { kind: "MOCK", p256: toHex(root.publicKey) },
+      compose: [composeHash],
+      os: [osHash],
+      instances: { [kh]: record },
+    });
+  }
   const behaviour: ExitBehaviour = {};
   const dns = new Map<string, string>();
-  const stats = { attestations: 0, tunnels: 0, connects: 0, maxC2sPayload: 0, blastSent: 0 };
+  const stats = { attestations: 0, tunnels: 0, connects: 0, maxC2sPayload: 0, blastSent: 0, destinations: [] as string[], hellos: [] as string[], bytesWithoutServerHello: 0 };
   const receipts: VpnReceipt[] = [];
   const anchored: { firstSeq: number; count: number; anchorId: number }[] = [];
   let firstBundle: AttestationBundle | undefined;
@@ -148,7 +186,7 @@ export async function startFakeExit(): Promise<FakeExit> {
           root_kind: "MOCK",
           quote: toHex(quote),
           event_log: eventLog,
-          app_compose: VPN_COMPOSE,
+          app_compose: composeText,
           x25519: behaviour.mitmKey ? toHex(x25519.getPublicKey(x25519.utils.randomSecretKey())) : toHex(xp),
           ed25519: toHex(ep),
         };
@@ -188,13 +226,37 @@ export async function startFakeExit(): Promise<FakeExit> {
       socket.end(`HTTP/1.1 ${behaviour.upgradeStatus} Nope\r\nconnection: close\r\ncontent-length: 0\r\n\r\n`);
       return;
     }
-    socket.write("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: plr-vpn/1\r\n\r\n");
     stats.tunnels++;
     tunnel(socket, new Uint8Array(head));
   });
 
+  const UPGRADED = "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: plr-vpn/1\r\n\r\n";
+
   function tunnel(sock: Socket, head: Uint8Array): void {
     const b = { ...behaviour };
+    // Early server_hello: the exit ephemeral does not depend on the client hello, so it can go out with the 101.
+    let early: { ess: Uint8Array; epkS: Uint8Array } | undefined;
+    if (b.serverHelloInHead) {
+      const ess = x25519.utils.randomSecretKey();
+      early = { ess, epkS: x25519.getPublicKey(ess) };
+      sock.write(Buffer.concat([Buffer.from(UPGRADED), encodeServerHello(early.epkS)]));
+    } else sock.write(UPGRADED);
+    const sendServerHello = (sh: Uint8Array, then?: Uint8Array): void => {
+      const bytes = b.rawServerHello ?? sh;
+      if (b.dribbleServerHello) {
+        let i = 0;
+        const tick = (): void => {
+          if (sock.destroyed) return;
+          if (i < bytes.length) {
+            sock.write(bytes.subarray(i, ++i));
+            setImmediate(tick);
+          } else if (then) sock.write(then);
+        };
+        tick();
+        return;
+      }
+      sock.write(then ? Buffer.concat([bytes, then]) : bytes);
+    };
     const tsOpen = Date.now();
     let hello = new Uint8Array(0);
     let reader: TunnelReader | undefined;
@@ -240,6 +302,7 @@ export async function startFakeExit(): Promise<FakeExit> {
     };
     const onConnect = (host: string, port: number): void => {
       stats.connects++;
+      stats.destinations.push(`${host}:${port}`);
       if (b.rawConnectErr) return void (send(FRAME.CONNECT_ERR, b.rawConnectErr), sock.end());
       if (b.connectErr) return void (send(FRAME.CONNECT_ERR, encodeConnectErr(b.connectErr)), sock.end());
       if (b.dataBeforeOk) return void send(FRAME.DATA, enc.encode("early"));
@@ -300,6 +363,10 @@ export async function startFakeExit(): Promise<FakeExit> {
       }
     };
     const onData = (c: Uint8Array): void => {
+      if (b.withholdServerHello) {
+        stats.bytesWithoutServerHello += c.length;
+        return;
+      }
       try {
         if (reader === undefined) {
           const all = new Uint8Array(hello.length + c.length);
@@ -309,10 +376,24 @@ export async function startFakeExit(): Promise<FakeExit> {
             hello = all;
             return;
           }
-          const keys = tunnelServerInit({ xs, xp, ep, hello: all.subarray(0, TUNNEL.HELLO_LEN) });
+          const clientHello = all.subarray(0, TUNNEL.HELLO_LEN);
+          stats.hellos.push(toHex(clientHello));
+          let keys: { th: Uint8Array; kC2s: Uint8Array; kS2c: Uint8Array };
+          let serverHello: Uint8Array | undefined;
+          if (early) {
+            const { attNonce, epkC } = parseHello(clientHello);
+            keys = deriveTunnel({ dh1: x25519.getSharedSecret(xs, epkC), dh2: x25519.getSharedSecret(early.ess, epkC), attNonce, epkC, epkS: early.epkS, xp, ep });
+          } else {
+            const acc = tunnelServerAccept({ xs, xp, ep, hello: clientHello });
+            keys = acc;
+            serverHello = acc.serverHello;
+          }
           th = keys.th;
           reader = new TunnelReader(keys.kC2s, keys.th, TUNNEL.DIR_C2S);
           writer = new TunnelWriter(keys.kS2c, keys.th, TUNNEL.DIR_S2C);
+          if (serverHello !== undefined) {
+            sendServerHello(serverHello, b.dataAfterServerHello ? writer.seal(FRAME.DATA, enc.encode("unsolicited")) : undefined);
+          }
           c = all.subarray(TUNNEL.HELLO_LEN);
         }
         onFrames(c);
@@ -345,7 +426,8 @@ export async function startFakeExit(): Promise<FakeExit> {
       const count = receipts.length - first;
       if (count < 1) return;
       const leaves = receipts.slice(first).map(vpnReceiptLeaf);
-      const anchorId = anchored.length;
+      const anchorId = anchorCounts.get(registry) ?? 0;
+      anchorCounts.set(registry, anchorId + 1);
       registry.addAnchor({ id: anchorId, key_hash: kh, root: toHex(merkleRoot(leaves)), first_seq: first, count, at_ms: Date.now() });
       anchored.push({ firstSeq: first, count, anchorId });
     },

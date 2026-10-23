@@ -110,10 +110,10 @@ const isInstanceOrNull = (v: unknown): v is InstanceRecord | null => v === null 
  * Registry re-check of an already verified attestation (SPEC §9 checks 8–10, SPEC-VPN §7 step 2): the compose
  * hash and OS measurement are still allowed and the instance is still registered, unexpired, with exactly these
  * keys / compose / OS. Used on every new connection, even with a cached attestation, so an owner revocation
- * applies to the very next connection.
+ * applies to the very next connection. Returns the live instance record (incl. its operator's `org_id`).
  * @throws PlrError E_COMPOSE_NOT_ALLOWED, E_OS_NOT_ALLOWED, E_INSTANCE_NOT_REGISTERED, E_REGISTRY_UNAVAILABLE
  */
-export async function recheckRegistry(registry: RegistryReader, v: VerifiedRouter, now: number = Date.now()): Promise<void> {
+export async function recheckRegistry(registry: RegistryReader, v: VerifiedRouter, now: number = Date.now()): Promise<InstanceRecord> {
   const composeHex = toHex(v.composeHash);
   const osHex = toHex(v.osMeasurement);
   if (!(await regCall(() => registry.isComposeAllowed(composeHex), isBool))) throw new PlrError("E_COMPOSE_NOT_ALLOWED");
@@ -129,4 +129,5 @@ export async function recheckRegistry(registry: RegistryReader, v: VerifiedRoute
   ) {
     throw new PlrError("E_INSTANCE_NOT_REGISTERED");
   }
+  return inst;
 }

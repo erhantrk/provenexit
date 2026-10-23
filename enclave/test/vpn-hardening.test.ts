@@ -1,21 +1,23 @@
 /**
- * Regression tests for the adversarial review of PLR-VPN-v1:
- *   1. replayed tunnel hellos (same keys + nonces) are refused; hellos must name a nonce this exit attested to;
+ * Regression tests for the adversarial reviews of PLR-VPN:
+ *   1. handshake v2 (SPEC-VPN §4.1): a replayed hello meets a fresh exit ephemeral key, so replayed frames fail
+ *      authentication and nothing is dialled; no hello state is needed (the interim HelloGuard is gone);
  *   2. a tunnel that ends without an authenticated c2s FIN aborts the destination with a RST, never a clean EOF;
  *   3. egress refuses host-only services in "public" space (Azure WireServer) and the exit's own addresses.
+ * Timeouts are driven by a manual clock and every wait is event-driven (no fixed sleeps).
  */
 import net from "node:net";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { randomBytes } from "@noble/hashes/utils.js";
+import { x25519 } from "@noble/curves/ed25519.js";
 import {
-  FRAME, TUNNEL, TunnelReader, TunnelWriter, egressIdentity, encodeConnect, tunnelClientInit, type EgressPolicy, type TunnelFrame,
+  FRAME, TUNNEL, TunnelReader, TunnelWriter, egressIdentity, encodeConnect, encodeHello, parseServerHello, toHex, type EgressPolicy, type TunnelFrame,
 } from "@plr/shared";
 import { HOST_ONLY_PUBLIC_ADDRESSES, hostOnlyDenied, resolveEgress, type LookupAll } from "../src/vpn/egress.js";
-import { HelloGuard } from "../src/vpn/replay.js";
-import { TestTunnel, attestExit, startEchoUpstream, startTestExit, upgrade, type TestExit } from "./vpn-helpers.js";
+import { VpnKeys } from "../src/vpn/keys.js";
+import { ManualTimers, TestTunnel, attestExit, eventually, handshake, readExactly, startEchoUpstream, startTestExit, upgrade, type TestExit } from "./vpn-helpers.js";
 
 const enc = (s: string) => new TextEncoder().encode(s);
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const exits: TestExit[] = [];
 async function exitWith(o: Parameters<typeof startTestExit>[0] = {}): Promise<TestExit> {
@@ -25,156 +27,147 @@ async function exitWith(o: Parameters<typeof startTestExit>[0] = {}): Promise<Te
 }
 afterEach(async () => { for (const e of exits.splice(0)) await e.close(); });
 
-/** A raw tunnel whose c2s bytes are recorded, so they can be replayed byte for byte on another connection. */
-async function rawTunnel(port: number, k: { hello: Uint8Array; th: Uint8Array; kC2s: Uint8Array; kS2c: Uint8Array }) {
+/** An upgraded socket that records every byte the exit sends and whether it closed. */
+async function rawSocket(port: number) {
   const u = await upgrade(port);
   expect(u.status).toBe(101);
-  const r = new TunnelReader(k.kS2c, k.th, TUNNEL.DIR_S2C);
-  const frames: TunnelFrame[] = [];
-  let error: string | null = null;
+  const got: Buffer[] = [Buffer.from(u.head)];
   let closed = false;
-  const onData = (c: Uint8Array) => {
-    try { frames.push(...r.push(c)); } catch (e) { error = (e as { code?: string }).code ?? "E_?"; }
-  };
-  if (u.head.length) onData(u.head);
-  u.sock.on("data", onData);
+  u.sock.on("data", (c: Buffer) => got.push(c));
   u.sock.on("close", () => { closed = true; });
   u.sock.on("error", () => undefined);
   u.sock.resume();
   return {
     sock: u.sock,
-    frames,
-    get error() { return error; },
+    received: () => Buffer.concat(got),
     get closed() { return closed; },
-    async until(pred: () => boolean, ms = 3000) {
-      const end = Date.now() + ms;
-      while (!pred() && Date.now() < end) await sleep(20);
-      return pred();
-    },
   };
 }
 
-describe("anti-replay of tunnel hellos (review finding: replayed hello ⇒ identical keys/nonces)", () => {
+describe("handshake v2: exit ephemeral key ⇒ replay protection + forward secrecy (SPEC-VPN §4.1)", () => {
   let up: Awaited<ReturnType<typeof startEchoUpstream>>;
   beforeAll(async () => { up = await startEchoUpstream(); });
   afterAll(async () => { await up.close(); });
 
-  it("a byte-for-byte replay of a victim's hello + CONNECT + DATA on a second connection is closed before anything is dialled", async () => {
+  it("server_hello (version 2, 33 bytes) arrives right after a valid hello, before any frame is sent", async () => {
     const e = await exitWith();
     const v = await attestExit(e.url, e.root.publicKey);
-    const k = tunnelClientInit({ xp: v.x25519, ep: v.ed25519, attNonce: v.nonce });
-    const w = new TunnelWriter(k.kC2s, k.th, TUNNEL.DIR_C2S);
-    const recorded = Buffer.concat([k.hello, w.seal(FRAME.CONNECT, encodeConnect("127.0.0.1", up.port)), w.seal(FRAME.DATA, enc("POST /pay amount=100"))]);
+    const u = await upgrade(e.port);
+    const h = await handshake(u.sock, u.head, v, v.nonce);
+    expect(h.serverHello.length).toBe(TUNNEL.SERVER_HELLO_LEN);
+    expect(h.serverHello[0]).toBe(2);
+    expect(h.rest.length).toBe(0);
+    // ...and the derived keys are the exit's: a CONNECT sealed under them is answered.
+    const r = new TunnelReader(h.keys.kS2c, h.keys.th, TUNNEL.DIR_S2C);
+    const frames: TunnelFrame[] = [];
+    u.sock.on("data", (c: Uint8Array) => frames.push(...r.push(c)));
+    u.sock.resume();
+    u.sock.write(new TunnelWriter(h.keys.kC2s, h.keys.th, TUNNEL.DIR_C2S).seal(FRAME.CONNECT, encodeConnect("127.0.0.1", up.port)));
+    expect(await eventually(() => frames.length >= 1)).toBe(true);
+    expect(frames[0]!.type).toBe(FRAME.CONNECT_OK);
+    u.sock.destroy();
+  });
 
-    const victim = await rawTunnel(e.port, k);
-    victim.sock.write(recorded);
-    expect(await victim.until(() => victim.frames.length >= 2)).toBe(true); // CONNECT_OK + echoed DATA
-    expect(victim.frames[0]!.type).toBe(FRAME.CONNECT_OK);
+  it("a byte-for-byte replay of a victim's hello + CONNECT + DATA gets a fresh server_hello, then closes; nothing is dialled", async () => {
+    const e = await exitWith();
+    const v = await attestExit(e.url, e.root.publicKey);
+    const vu = await upgrade(e.port);
+    const victim = await handshake(vu.sock, vu.head, v, v.nonce);
+    const w = new TunnelWriter(victim.keys.kC2s, victim.keys.th, TUNNEL.DIR_C2S);
+    const frames = Buffer.concat([w.seal(FRAME.CONNECT, encodeConnect("127.0.0.1", up.port)), w.seal(FRAME.DATA, enc("POST /pay amount=100"))]);
+    const vr = new TunnelReader(victim.keys.kS2c, victim.keys.th, TUNNEL.DIR_S2C);
+    const vFrames: TunnelFrame[] = [];
+    vu.sock.on("data", (c: Uint8Array) => vFrames.push(...vr.push(c)));
+    vu.sock.resume();
+    vu.sock.write(frames);
+    expect(await eventually(() => vFrames.length >= 2)).toBe(true); // CONNECT_OK + echoed DATA
+    expect(vFrames[0]!.type).toBe(FRAME.CONNECT_OK);
     const dialled = up.connections();
+    const receivedBefore = up.received().length;
 
-    const replay = await rawTunnel(e.port, k);
-    replay.sock.write(recorded);
-    expect(await replay.until(() => replay.closed)).toBe(true);
-    expect(replay.frames).toEqual([]); // no CONNECT_OK, no s2c frame sealed under the victim's keys
+    // The attacker recorded every c2s byte of the victim and replays them on a new connection.
+    const replay = await rawSocket(e.port);
+    replay.sock.write(Buffer.concat([victim.hello, frames]));
+    expect(await eventually(() => replay.closed)).toBe(true);
+    const sent = replay.received();
+    expect(sent.length).toBe(TUNNEL.SERVER_HELLO_LEN); // only a server_hello: no CONNECT_OK / frame of any kind
+    expect(parseServerHello(new Uint8Array(sent)).epkS).not.toEqual(parseServerHello(victim.serverHello).epkS);
     expect(up.connections()).toBe(dialled); // the destination was not contacted again
+    expect(up.received().length).toBe(receivedBefore); // and no replayed byte reached it
+    expect(e.receipts.size).toBe(0);
     // The victim's tunnel is unaffected.
-    expect(victim.closed).toBe(false);
-    victim.sock.destroy();
+    expect(vu.sock.destroyed).toBe(false);
+    vu.sock.destroy();
   });
 
-  it("the replay is refused even while the victim's tunnel is already closed (keys remembered per live nonce)", async () => {
+  it("replays after the victim's tunnel closed, and replays of a single frame, fail the same way", async () => {
     const e = await exitWith();
     const v = await attestExit(e.url, e.root.publicKey);
-    const k = tunnelClientInit({ xp: v.x25519, ep: v.ed25519, attNonce: v.nonce });
-    const first = await rawTunnel(e.port, k);
-    first.sock.write(k.hello);
-    await sleep(100);
-    first.sock.destroy();
-    await sleep(100);
-    const again = await rawTunnel(e.port, k);
-    again.sock.write(Buffer.concat([k.hello, new TunnelWriter(k.kC2s, k.th, TUNNEL.DIR_C2S).seal(FRAME.CONNECT, encodeConnect("127.0.0.1", up.port))]));
-    expect(await again.until(() => again.closed)).toBe(true);
-    expect(again.frames).toEqual([]);
-  });
-
-  it("a hello naming a nonce the exit never attested to is refused", async () => {
-    const e = await exitWith();
-    const v = await attestExit(e.url, e.root.publicKey);
+    const vu = await upgrade(e.port);
+    const victim = await handshake(vu.sock, vu.head, v, v.nonce);
+    const connect = new TunnelWriter(victim.keys.kC2s, victim.keys.th, TUNNEL.DIR_C2S).seal(FRAME.CONNECT, encodeConnect("127.0.0.1", up.port));
+    vu.sock.destroy();
     const before = up.connections();
-    const t = await TestTunnel.open(e.port, v, randomBytes(32));
-    t.connect("127.0.0.1", up.port);
-    expect(await t.waitClosed()).toBe(true);
-    expect(t.types()).toEqual([]);
+    for (const bytes of [Buffer.concat([victim.hello, connect]), Buffer.from(victim.hello)]) {
+      const r = await rawSocket(e.port);
+      r.sock.write(bytes);
+      if (bytes.length > TUNNEL.HELLO_LEN) expect(await eventually(() => r.closed)).toBe(true);
+      else {
+        expect(await eventually(() => r.received().length >= TUNNEL.SERVER_HELLO_LEN)).toBe(true);
+        r.sock.write(connect); // the recorded CONNECT, sent separately
+        expect(await eventually(() => r.closed)).toBe(true);
+      }
+      expect(r.received().length).toBe(TUNNEL.SERVER_HELLO_LEN);
+    }
     expect(up.connections()).toBe(before);
   });
 
-  it("an expired attestation nonce no longer opens tunnels; a fresh attestation does", async () => {
-    const e = await exitWith({ replay: { nonceTtlMs: 300 } });
-    const v = await attestExit(e.url, e.root.publicKey);
-    await sleep(400);
-    const old = await TestTunnel.open(e.port, v, v.nonce);
-    old.connect("127.0.0.1", up.port);
-    expect(await old.waitClosed()).toBe(true);
-    expect(old.types()).toEqual([]);
-    const v2 = await attestExit(e.url, e.root.publicKey);
-    const t = await TestTunnel.open(e.port, v2, v2.nonce);
-    t.connect("127.0.0.1", up.port);
-    expect(await t.until(() => t.frames.length >= 1)).toBe(true);
-    expect(t.types()).toEqual([FRAME.CONNECT_OK]);
-    t.sock.destroy();
+  it("the same hello accepted twice yields unrelated tunnel keys (fresh exit ephemeral per tunnel)", () => {
+    const keys = VpnKeys.generate();
+    const hello = encodeHello(randomBytes(32), x25519.getPublicKey(x25519.utils.randomSecretKey()));
+    const a = keys.tunnelAccept(hello), b = keys.tunnelAccept(hello);
+    expect(toHex(a.serverHello)).not.toBe(toHex(b.serverHello));
+    expect(toHex(a.th)).not.toBe(toHex(b.th));
+    expect(toHex(a.kC2s)).not.toBe(toHex(b.kC2s));
+    expect(toHex(a.kS2c)).not.toBe(toHex(b.kS2c));
   });
 
-  it("many tunnels under one cached attestation (fresh epk each) all work", async () => {
+  it("no hello state: any number of tunnels (also under one cached attestation, and with a never-attested nonce) work", async () => {
     const e = await exitWith();
     const v = await attestExit(e.url, e.root.publicKey);
-    for (let i = 0; i < 5; i++) {
-      const t = await TestTunnel.open(e.port, v, v.nonce);
+    for (const nonce of [v.nonce, v.nonce, v.nonce, randomBytes(32)]) {
+      const t = await TestTunnel.open(e.port, v, nonce);
       t.connect("127.0.0.1", up.port);
       expect(await t.until(() => t.frames.length >= 1)).toBe(true);
       expect(t.types()).toEqual([FRAME.CONNECT_OK]);
       t.sock.destroy();
     }
+    // The nonce binds the client's own verification into th; the exit attests to any well-formed nonce.
+    expect((await fetch(`${e.url}/v1/attestation?nonce=${"ab".repeat(32)}`)).status).toBe(200);
   });
 
-  it("bounded nonce table: unused nonces are evicted oldest first; when every nonce is in use, attestation is 503", async () => {
-    const e = await exitWith({ replay: { maxNonces: 2 } });
-    const a = await attestExit(e.url, e.root.publicKey);
-    const b = await attestExit(e.url, e.root.publicKey);
-    const c = await attestExit(e.url, e.root.publicKey); // evicts a (unused)
-    const ta = await TestTunnel.open(e.port, a, a.nonce);
-    expect(await ta.waitClosed()).toBe(true);
-    for (const v of [b, c]) {
-      const t = await TestTunnel.open(e.port, v, v.nonce);
-      t.connect("127.0.0.1", up.port);
-      expect(await t.until(() => t.frames.length >= 1)).toBe(true);
-      t.sock.destroy();
-    }
-    const res = await fetch(`${e.url}/v1/attestation?nonce=${"ab".repeat(32)}`);
-    expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ error: "E_UPSTREAM" });
+  it("frames pipelined behind the hello but sealed for another tunnel are never delivered", async () => {
+    const e = await exitWith();
+    const v = await attestExit(e.url, e.root.publicKey);
+    const before = up.connections();
+    const t = await TestTunnel.open(e.port, v, v.nonce);
+    // A client that does not wait for server_hello cannot know the keys: a guess (here: other keys) fails.
+    const r = await rawSocket(e.port);
+    r.sock.write(Buffer.concat([Buffer.from(encodeHello(v.nonce, x25519.getPublicKey(x25519.utils.randomSecretKey()))), Buffer.from(t.seal(FRAME.CONNECT, encodeConnect("127.0.0.1", up.port)))]));
+    expect(await eventually(() => r.closed)).toBe(true);
+    expect(r.received().length).toBe(TUNNEL.SERVER_HELLO_LEN);
+    expect(up.connections()).toBe(before);
+    t.sock.destroy();
   });
 
-  it("HelloGuard: one admission per (nonce, epk), total bound, expiry frees memory", () => {
-    let now = 0;
-    const g = new HelloGuard({ nonceTtlMs: 1000, maxHellos: 3, clock: () => now });
-    const n1 = randomBytes(32), n2 = randomBytes(32);
-    const [k1, k2, k3, k4] = [randomBytes(32), randomBytes(32), randomBytes(32), randomBytes(32)];
-    expect(g.admit(n1, k1)).toBe(false); // not issued
-    expect(g.issue(n1)).toBe(true);
-    expect(g.admit(n1, k1)).toBe(true);
-    expect(g.admit(n1, k1)).toBe(false); // replay
-    expect(g.issue(n1)).toBe(true); // re-issue keeps the remembered keys
-    expect(g.admit(n1, k1)).toBe(false);
-    expect(g.admit(n1, k2)).toBe(true);
-    expect(g.issue(n2)).toBe(true);
-    expect(g.admit(n2, k3)).toBe(true);
-    expect(g.admit(n2, k4)).toBe(false); // total bound reached: fail closed
-    expect(g.size).toEqual({ nonces: 2, hellos: 3 });
-    now = 1001;
-    expect(g.admit(n1, k4)).toBe(false); // expired
-    expect(g.size).toEqual({ nonces: 0, hellos: 0 });
-    expect(g.issue(new Uint8Array(31))).toBe(false);
-    expect(g.admit(n1, new Uint8Array(31))).toBe(false);
+  it("readExactly helper: a server_hello split across reads is reassembled", async () => {
+    const e = await exitWith();
+    const v = await attestExit(e.url, e.root.publicKey);
+    const u = await upgrade(e.port);
+    const h = await handshake(u.sock, u.head, v, v.nonce);
+    expect(h.serverHello.length).toBe(TUNNEL.SERVER_HELLO_LEN);
+    await expect(readExactly(u.sock, new Uint8Array(0), 1, 50)).rejects.toThrow(); // nothing more is sent unprompted
+    u.sock.destroy();
   });
 });
 
@@ -212,14 +205,11 @@ describe("c2s truncation / tampering never reaches the destination as a clean EO
     t.connect("127.0.0.1", dest.port);
     expect(await t.until(() => t.frames.length >= 1)).toBe(true);
     t.send(FRAME.DATA, enc(body));
-    const end = Date.now() + 3000;
-    while (!dest.received().includes(body) && Date.now() < end) await sleep(10);
-    expect(dest.received()).toContain(body);
+    expect(await eventually(() => dest.received().includes(body))).toBe(true);
     return t;
   }
   async function nextOutcome(n: number): Promise<string> {
-    const end = Date.now() + 3000;
-    while (dest.outcomes.length <= n && Date.now() < end) await sleep(10);
+    await eventually(() => dest.outcomes.length > n);
     return dest.outcomes[n] ?? "TIMEOUT";
   }
 
@@ -241,10 +231,13 @@ describe("c2s truncation / tampering never reaches the destination as a clean EO
     expect(await nextOutcome(n)).toBe("ECONNRESET");
   });
 
-  it("idle timeout ⇒ destination gets ECONNRESET", async () => {
-    const e = await exitWith({ timeouts: { idleMs: 300 } });
+  it("idle timeout ⇒ destination gets ECONNRESET (manual clock)", async () => {
+    const timers = new ManualTimers();
+    const e = await exitWith({ timeouts: { idleMs: 300_000 }, timers });
     const n = dest.outcomes.length;
     await relayed(e, "amount=100-idle");
+    expect(dest.outcomes.length).toBe(n);
+    timers.advance(300_000);
     expect(await nextOutcome(n)).toBe("ECONNRESET");
   });
 

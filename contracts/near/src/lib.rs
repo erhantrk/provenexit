@@ -41,6 +41,8 @@ pub const MAX_ANCHOR_COUNT: u64 = 10_000;
 /// Upper bound of the per-instance anchor storage prepayment kept from a registration deposit (0.05 NEAR,
 /// roughly 35 anchors); any deposit beyond registration storage + this credit is refunded.
 pub const MAX_ANCHOR_CREDIT_YOCTO: u128 = 50_000_000_000_000_000_000_000;
+/// Maximum `org_id` length (SPEC §7 rev 1.2: `^[a-z0-9][a-z0-9._-]{0,63}$`).
+pub const MAX_ORG_ID_LEN: usize = 64;
 
 #[derive(BorshStorageKey)]
 #[near(serializers = [borsh])]
@@ -50,6 +52,8 @@ enum StorageKey {
     Instances,
     Anchors,
     AnchorCredit,
+    /// rev 1.2. Appended last: borsh enum indices of the existing prefixes must not move.
+    Operators,
 }
 
 /// A registered router instance (SPEC §7 `Instance`).
@@ -94,6 +98,8 @@ pub struct InstanceView {
     pub x25519: String,
     pub ed25519: String,
     pub operator: AccountId,
+    /// rev 1.2: the operator's organization at read time (live lookup in `operators`), or `null`.
+    pub org_id: Option<String>,
     pub registered_at_ms: u64,
     pub expires_at_ms: u64,
     pub next_seq: u64,
@@ -111,14 +117,16 @@ pub struct AnchorView {
     pub at_ms: u64,
 }
 
-impl From<&Instance> for InstanceView {
-    fn from(i: &Instance) -> Self {
+impl InstanceView {
+    /// The view of `i`, with `org_id` = the operator's organization as approved right now.
+    fn new(i: &Instance, org_id: Option<String>) -> Self {
         Self {
             compose_hash: encode_hex(&i.compose_hash),
             os_measurement: encode_hex(&i.os_measurement),
             x25519: encode_hex(&i.x25519),
             ed25519: encode_hex(&i.ed25519),
             operator: i.operator.clone(),
+            org_id,
             registered_at_ms: i.registered_at_ms,
             expires_at_ms: i.expires_at_ms,
             next_seq: i.next_seq,
@@ -141,6 +149,9 @@ pub struct Registry {
     /// Prepaid anchor storage per instance (yoctoNEAR), funded from registration deposits. `anchor_receipts`
     /// draws on it when the caller attaches no (or too little) deposit, so the contract balance never pays.
     anchor_credit: LookupMap<[u8; 32], u128>,
+    /// rev 1.2: owner-approved operator organizations, `account → org_id`. Two-hop clients require
+    /// `entry.org_id != exit.org_id` (SPEC-VPN). Appended last in the state layout.
+    operators: LookupMap<AccountId, String>,
 }
 
 // ---------- argument parsing (fail closed, never echo input) ----------
@@ -176,6 +187,31 @@ fn root_args(kind: &str, p256: &str) -> (RootKind, [u8; 64]) {
         fail_with(E_BAD_INPUT, "root p256 is not a valid P-256 point");
     }
     (kind, key)
+}
+
+/// `org_id` argument: `^[a-z0-9][a-z0-9._-]{0,63}$` (ASCII only), else `E_BAD_INPUT`.
+fn org_id_arg(s: &str) -> String {
+    if !is_valid_org_id(s) {
+        fail_with(E_BAD_INPUT, "org_id must match ^[a-z0-9][a-z0-9._-]{0,63}$");
+    }
+    s.to_string()
+}
+
+/// SPEC §7 rev 1.2 organization id syntax: `^[a-z0-9][a-z0-9._-]{0,63}$`.
+pub fn is_valid_org_id(s: &str) -> bool {
+    let b = s.as_bytes();
+    let head = |c: u8| c.is_ascii_lowercase() || c.is_ascii_digit();
+    match b.split_first() {
+        Some((&first, rest)) => {
+            b.len() <= MAX_ORG_ID_LEN && head(first) && rest.iter().all(|&c| head(c) || matches!(c, b'.' | b'_' | b'-'))
+        }
+        None => false,
+    }
+}
+
+/// View-side account parsing: an invalid account id is simply "not present" (views never panic on input).
+fn account_view(s: &str) -> Option<AccountId> {
+    s.parse::<AccountId>().ok()
 }
 
 fn ttl_arg(ttl: Option<u64>) -> u64 {
@@ -218,6 +254,7 @@ impl Registry {
             anchors: Vector::new(StorageKey::Anchors),
             instance_ttl_ms: ttl_arg(instance_ttl_ms),
             anchor_credit: LookupMap::new(StorageKey::AnchorCredit),
+            operators: LookupMap::new(StorageKey::Operators),
         };
         events::emit(events::ROOT_SET, json!({ "kind": kind.as_str(), "p256": encode_hex(&key) }));
         this
@@ -283,6 +320,31 @@ impl Registry {
         events::emit(events::OWNER_ACCEPTED, json!({ "old_owner": self.owner, "new_owner": caller }));
         self.owner = caller;
         self.pending_owner = None;
+    }
+
+    // ---------- operator organizations (SPEC §7 rev 1.2) ----------
+
+    /// Approves `account_id` as an operator of organization `org_id`. Approving an already approved account
+    /// changes its organization (the event carries the previous one). Takes effect immediately for every
+    /// instance that account registered (`get_instance` looks the org up live). Like the other owner methods,
+    /// the few hundred bytes of storage are paid from the contract balance (owner-only, so not a drain vector).
+    #[deny_unknown_arguments]
+    pub fn approve_operator(&mut self, account_id: AccountId, org_id: String) {
+        self.assert_owner();
+        let org = org_id_arg(&org_id);
+        let previous = self.operators.insert(account_id.clone(), org.clone());
+        self.operators.flush();
+        events::emit(events::OPERATOR_APPROVED, json!({ "account_id": account_id, "org_id": org, "previous_org_id": previous }));
+    }
+
+    /// Removes `account_id`'s organization; its instances then report `org_id: null`. Revoking an account that
+    /// is not approved is a no-op (the event still records it, with `previous_org_id: null`).
+    #[deny_unknown_arguments]
+    pub fn revoke_operator(&mut self, account_id: AccountId) {
+        self.assert_owner();
+        let previous = self.operators.remove(&account_id);
+        self.operators.flush();
+        events::emit(events::OPERATOR_REVOKED, json!({ "account_id": account_id, "previous_org_id": previous }));
     }
 
     // ---------- instances ----------
@@ -475,7 +537,12 @@ impl Registry {
     pub fn get_instance(&self, key_hash: String) -> Option<InstanceView> {
         let kh = hash32_view(&key_hash)?;
         let now = ctx::block_timestamp_ms();
-        self.instances.get(&kh).filter(|i| now < i.expires_at_ms).map(InstanceView::from)
+        self.instances.get(&kh).filter(|i| now < i.expires_at_ms).map(|i| InstanceView::new(i, self.operators.get(&i.operator).cloned()))
+    }
+
+    /// rev 1.2: the organization `account_id` is approved for, or `null` (also for a malformed account id).
+    pub fn get_operator(&self, account_id: String) -> Option<String> {
+        self.operators.get(&account_view(&account_id)?).cloned()
     }
 
     pub fn get_root(&self) -> RootView {

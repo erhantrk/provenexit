@@ -11,12 +11,14 @@
 //   app-compose.evil-logger.{mock,llama}.json its compose files (different bundle_sha256 ⇒ different hash)
 //   vpn-exit/<variant>/vpn.bundle.mjs              VPN exit builds (SPEC-VPN §2), one directory per variant because the
 //   vpn-exit/<variant>/app-compose.json            compose entry is always "vpn.bundle.mjs":
-//                                               vpn-honest       production policy (allow_loopback false)
-//                                               vpn-honest-test  same bundle, allow_loopback true (local tests only;
-//                                                                different compose hash, never passes as production)
+//                                               vpn-honest       production policy (allow_loopback false, DoH via
+//                                                                https://1.1.1.1 then https://9.9.9.9)
+//                                               vpn-honest-test  same bundle, allow_loopback true, DoH via the local
+//                                                                test resolver http://127.0.0.1:18253/dns-query (local
+//                                                                tests only; different compose hash, never production)
 //                                               vpn-evil-logger  ⚠️ honest source + evil/logging-dialer.ts, test policy
 //   build-info.json                           every hash above, for harnesses and the demo (VPN under the "vpn" key:
-//                                             { <variant>: { dir, bundle, bundle_sha256, allow_loopback,
+//                                             { <variant>: { dir, bundle, bundle_sha256, allow_loopback, doh,
 //                                                            compose: { file, compose_hash } } }, paths relative to OUT)
 //
 // Runtime pins: `router.node_sha256` = runtime closure digest of the node running this build (the host runs the
@@ -44,7 +46,7 @@ if (!existsSync(composeModule)) {
   process.stderr.write("build.mjs: dist/compose.js missing — run `tsc -b` first (npm run build does)\n");
   process.exit(1);
 }
-const { makeCompose, makeVpnCompose, composeBytes } = await import(pathToFileURL(composeModule).href);
+const { makeCompose, makeVpnCompose, composeBytes, VPN_DOH_PRODUCTION, VPN_DOH_TEST } = await import(pathToFileURL(composeModule).href);
 const { measureRuntime } = await import(pathToFileURL(join(HERE, "dist", "mock-tdx", "runtime.js")).href);
 const LLAMA_SERVER = process.env.PLR_LLAMA_SERVER || "/opt/homebrew/bin/llama-server";
 let nodeRuntime, llamaRuntime;
@@ -135,22 +137,24 @@ const vpnBundles = {
   honest: await bundle("src/vpn/entry.ts", "vpn-exit/vpn.bundle.mjs"),
   evil: await bundle("evil/vpn-entry.ts", "vpn-exit/vpn.bundle.mjs"),
 };
+// SPEC-VPN §2: test-policy builds resolve through the local test resolver; production through 1.1.1.1 + 9.9.9.9.
 const vpnVariants = [
-  { name: "vpn-honest", source: "honest", allowLoopback: false },
-  { name: "vpn-honest-test", source: "honest", allowLoopback: true },
-  { name: "vpn-evil-logger", source: "evil", allowLoopback: true },
+  { name: "vpn-honest", source: "honest", allowLoopback: false, doh: VPN_DOH_PRODUCTION },
+  { name: "vpn-honest-test", source: "honest", allowLoopback: true, doh: VPN_DOH_TEST },
+  { name: "vpn-evil-logger", source: "evil", allowLoopback: true, doh: VPN_DOH_TEST },
 ];
 info.vpn = {};
 for (const v of vpnVariants) {
   const dir = `vpn-exit/${v.name}`;
   const bundleSha = writeOut(`${dir}/vpn.bundle.mjs`, vpnBundles[v.source]);
-  const cb = composeBytes(makeVpnCompose({ bundleSha256: bundleSha, nodeSha256: nodeRuntime.digest, allowLoopback: v.allowLoopback }));
+  const cb = composeBytes(makeVpnCompose({ bundleSha256: bundleSha, nodeSha256: nodeRuntime.digest, allowLoopback: v.allowLoopback, doh: v.doh }));
   const composeHash = writeOut(`${dir}/app-compose.json`, cb);
   info.vpn[v.name] = {
     dir,
     bundle: `${dir}/vpn.bundle.mjs`,
     bundle_sha256: bundleSha,
     allow_loopback: v.allowLoopback,
+    doh: [...v.doh],
     compose: { file: `${dir}/app-compose.json`, compose_hash: composeHash },
   };
 }

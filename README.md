@@ -207,9 +207,9 @@ exit (`plr-vpn` build, `127.0.0.1:18200` by default) runs under the same mock TD
 ```
   app ──SOCKS5──► plr vpn :18180 ──── per connection: attestation (cached ≤ 60 s) + registry re-check ────┐
   (curl, browser)  VpnClient          GET /v1/tunnel (Upgrade: plr-vpn/1)                                 │
-                     │  hello(att_nonce, epk) → X25519 + HKDF → ChaCha20-Poly1305 frames (seq, direction)   │
+                     │  hello(att_nonce, epk_c) ⇄ server_hello(epk_s) → 2×X25519 + HKDF → ChaCha20-Poly1305  │
                      ▼                                                                                     ▼
-  host / network (UNTRUSTED): sees only ciphertext ─────► TD: plr-vpn exit ── resolves + dials by IP ──► destination
+  host / network (UNTRUSTED): sees only ciphertext ─────► TD: plr-vpn exit ── DoH lookup, dials by IP ──► destination
                                                               egress policy, no logs, signed session receipts
 ```
 
@@ -222,15 +222,23 @@ Before a single byte leaves your machine (SPEC-VPN §1, §7):
 2. the tunnel is end-to-end encrypted to the attested X25519 key: the operator, host and network see only
    ciphertext and cannot read, modify, reorder, truncate or reflect it undetected (`E_DECRYPT`, `E_TRUNCATED`:
    a cut stream is never a clean EOF — in either direction: if the client→exit stream is cut or tampered, the
-   exit aborts the destination connection with a TCP RST, never a FIN). A hello is accepted once, and only for
-   an attestation nonce the exit itself issued (≤ 2 h old), so a recorded tunnel cannot be replayed to re-run
-   the request or to splice the replay's frames into the live tunnel;
+   exit aborts the destination connection with a TCP RST, never a FIN). **Handshake v2 (SPEC-VPN §4.1):** the
+   exit answers every hello with a fresh ephemeral X25519 key, and the tunnel keys mix both the attested static
+   key (`dh1`, authenticates the exit) and the two ephemerals (`dh2`). So a recorded tunnel cannot be replayed —
+   the replayed hello meets a new `epk_s`, every replayed frame fails authentication and nothing reaches a
+   destination — and it has **forward secrecy**: both ephemeral secrets are zeroed once the keys are derived, so
+   a later leak of the exit's static key does not decrypt past tunnels;
 3. the approved code **retains nothing**: no destination, DNS name, IP, port, byte count or payload is logged,
    written, put in a receipt or on-chain. Session receipts carry only the transcript hash, compose/key hash,
    a sequence number and open/close timestamps, and are anchored on the VPN registry in Merkle batches;
-4. destinations are resolved **by the exit** (remote DNS) — the client never looks them up;
+4. destinations are resolved **by the exit** (remote DNS) — the client never looks them up — and the exit
+   resolves them **only over encrypted DNS** (RFC 8484 DoH, SPEC-VPN §6.1) to the resolvers measured in its
+   compose (`https://1.1.1.1/dns-query`, `https://9.9.9.9/dns-query`: IP literals, so no bootstrap lookup).
+   There is no plaintext fallback: if every resolver fails, the connection fails with `E_DNS` (SOCKS5 `0x04`)
+   and the host's resolver is never asked;
 5. the exit refuses loopback, private, link-local (incl. `169.254.169.254` cloud metadata), CGNAT, multicast
-   and reserved targets — every resolved address is checked, IPv4 embedded in IPv6 included — so it cannot be
+   and reserved targets — every resolved address is checked, IPv4 embedded in IPv6 included — and the names
+   `localhost` / `*.localhost` before any resolution (RFC 6761), so it cannot be
    turned against the host's own services (`E_EGRESS_DENIED`). Beyond the SPEC-VPN §6 table it also refuses
    host-only services that sit in public address space (Azure WireServer `168.63.129.16`) and the exit's own
    interface addresses, in any spelling;
@@ -239,24 +247,26 @@ Before a single byte leaves your machine (SPEC-VPN §1, §7):
 The e2e suite (`e2e/test/vpn.test.ts`) runs each of these against a real near-sandbox: honest exit (receipts
 verified and anchored), evil exit that logs destinations (`E_COMPOSE_NOT_ALLOWED`, destination never contacted),
 MITM key swap (`E_REPORT_DATA_KEYS`), replayed attestation (`E_NONCE`), tampered / truncated tunnel, revocation,
-production egress policy, unregistered instance, and a scan of the exit's output and the run directory for the
-destination and payload.
+production egress policy, unregistered instance, DoH (names only the local resolver knows, NXDOMAIN, resolver
+down ⇒ `E_DNS`, localhost names, a name resolving to a private address), and a scan of the exit's output and the
+run directory for the destination and payload. `e2e/test/twohop.test.ts` covers two-hop (below).
 
 ### What it does not prove
 
 - **The exit sees your destinations.** Any VPN exit must know the host/port it connects to and relays the
   bytes. PLR-VPN proves the approved code does not *keep* them — not that it never sees them.
-- **"No logs" covers the attested code, not the operator's network.** The exit resolves names with the host's
-  resolver (plaintext DNS) and dials over a NIC the host controls. So the **operator** — not only the exit's
-  ISP — can observe the upstream leg without touching the measured code: DNS queries, destination IP:port,
+- **"No logs" covers the attested code, not the operator's network.** DNS is no longer exposed: the exit's
+  host and ISP see only TLS to the resolver's IP, and the **resolver** sees the names the exit asks for, but
+  never your IP (only the exit's). The exit still dials over a NIC the host controls, so the **operator** — not
+  only the exit's ISP — can observe the upstream leg without touching the measured code: destination IP:port,
   timing, the TLS SNI, and every byte of plain-HTTP traffic. PLR-VPN proves the approved exit code retains
   nothing; it does not stop the operator's host from watching the exit's own traffic to destinations. Use
-  HTTPS (ideally with ECH) for anything sensitive. (Possible later revision: DoH/DoT from inside the TD to a
-  pinned resolver.)
+  HTTPS (ideally with ECH) for anything sensitive, and two-hop (below) so that operator does not also know
+  who you are.
 - **TLS is still needed for content.** For `https://` the exit relays TLS ciphertext; for plain `http://` the
   exit code processes the plaintext (it never stores it). The destination sees the exit's IP.
-- **Metadata.** Timing and sizes of tunnelled traffic are visible to the operator and the network (no padding,
-  no cover traffic). Your own IP is visible to the exit operator's network.
+- **Metadata.** Timing and sizes of tunnelled traffic are visible to the operator and the network (DATA is not
+  padded, no cover traffic; only the CONNECT / CONNECT_ERR payloads have fixed sizes). With one hop, your own IP is visible to the exit operator's network.
 - **Proxy mode only.** Only what you send through the SOCKS5 proxy is protected: TCP CONNECT, no UDP (no QUIC,
   no WebRTC media, no system-wide tunnel). Use `socks5h` (or "proxy DNS") so names are not resolved locally.
 - Everything listed for the router applies too: **MOCK ROOT, not Intel** in this milestone; the registry owner
@@ -266,7 +276,8 @@ destination and payload.
 
 ```sh
 PLR_LLM=mock scripts/dev-up.sh          # chain + both registries + honest router :18100 + production VPN exit :18200
-set -a; . .run/stack.env; set +a        # adds PLR_VPN_URL, PLR_VPN_REGISTRY, PLR_VPN_COMPOSE_HASH
+set -a; . .run/stack.env; set +a        # adds PLR_VPN_URL, PLR_VPN_REGISTRY, PLR_VPN_COMPOSE_HASH, PLR_VPN_ENTRY_URL
+unset PLR_VPN_ENTRY_URL                 # one hop (with it set, `plr vpn` is two-hop — see below)
 node client/dist/cli.js vpn verify      # every check, ✔/✘, against the VPN registry
 node client/dist/cli.js vpn             # ✔ VPN exit verified …  ✔ SOCKS5 proxy on socks5h://127.0.0.1:18180
 curl --proxy socks5h://127.0.0.1:18180 https://example.com     # (another terminal; needs the machine online)
@@ -293,19 +304,119 @@ later connection fails the registry re-check, that connection gets SOCKS5 reply 
 Programmatic use: `new VpnClient({ exitUrl, registry: new NearRegistry({ rpcUrl, contractId }), trustedRoot })`,
 `await client.connect(host, port)` → a `Duplex` with `receipt()`; `startVpn({ port, client })` for the proxy.
 
-Builds (`enclave/build.mjs`): `vpn-honest` (production: `allow_loopback: false`), `vpn-honest-test` (loopback
-allowed so tests and the demo can reach a local destination — a different compose hash, so it can never pass as
-production), and ⚠️ `vpn-evil-logger` (prints destinations and the first relayed bytes; never approved).
+For two hops (entry → exit, different operator organizations) set `PLR_VPN_ENTRY_URL` — see
+[Two-hop routing](#two-hop-routing-and-operator-organizations-spec-vpn-10) below.
 
-### Running it in the cloud (Phala dstack) — costs
+Builds (`enclave/build.mjs`): `vpn-honest` (production: `allow_loopback: false`, the public DoH resolvers),
+`vpn-honest-test` (loopback allowed and the local test resolver `http://127.0.0.1:18253/dns-query`, so tests and
+the demo can reach a local destination — a different compose hash, so it can never pass as production), and ⚠️
+`vpn-evil-logger` (prints destinations and the first relayed bytes; test policy; never approved).
+
+### Two-hop routing and operator organizations (SPEC-VPN §10)
+
+One exit always knows two things about you at once: your IP (it accepts your connection) and your destinations
+(it dials them). Two-hop splits them across two attested `plr-vpn` instances run by **different organizations**:
+
+```
+  you ──tunnel A (to the entry's attested key)──► ENTRY ──CONNECT exit:port──► EXIT ──DoH, dial──► destination
+       └──── tunnel B (nested inside A, end-to-end to the EXIT's attested key) ────┘
+```
+
+`TwoHopClient` (and `plr vpn` with `PLR_VPN_ENTRY_URL` set) attests the entry directly, then fetches the exit's
+attestation *through* a tunnel to the entry — the client never contacts or resolves the exit itself. Both hops
+must be approved `plr-vpn` builds on the VPN registry, and both operators must be mapped to an organization by
+the registry owner (`approve_operator(account_id, org_id)`, SPEC §7 rev 1.2; `get_instance` returns the
+operator's **live** `org_id`). The orgs must differ: `E_OPERATOR_UNAPPROVED` / `E_SAME_OPERATOR` (SOCKS5
+`0x02`). Every new connection re-checks both hops' compose, OS, instance and org rules, so a revocation or an
+org change applies to the very next connection, even with cached attestations. Each connection returns two
+verified session receipts: `receipt()` from the exit and `entryReceipt()` from the entry.
+
+Who knows what:
+
+| party | your IP | exit's address | destination host:port | DNS names | payload |
+|---|---|---|---|---|---|
+| your network / ISP | ✔ | ✔ | — | — | — (ciphertext) |
+| entry (operator org A) and its host | ✔ | ✔ | — | — | — (inner tunnel is end-to-end to the exit) |
+| network between the hops | entry's IP | ✔ | — | — | — |
+| exit (operator org B) and its host | — (sees the entry's IP) | — | ✔ | — (host sees only TLS to the resolver) | TLS ciphertext (plaintext for `http://`) |
+| exit's DoH resolver | — | — | — | ✔ (asked by the exit) | — |
+| destination | — (sees the exit's IP) | — | ✔ | — | ✔ |
+
+The e2e suite (`e2e/test/twohop.test.ts`) proves the operator rules on a real chain and that even an approved
+entry that **logs everything** (the evil build, approved for the test) records only the exit's address — never
+the destination name, path or payload.
+
+Remaining limits:
+
+- **Timing correlation across both hops.** An adversary that watches the entry's and the exit's networks (or
+  both operators colluding) can match flows by timing and size — no padding or cover traffic.
+- **Owner trust for org approvals.** The registry owner decides which accounts belong to which organization. An
+  owner that approves one real-world company under two `org_id`s defeats the separation (later: multisig /
+  staking-backed org registration). Clients see the org ids that `plr vpn verify` prints.
+- **Who registers a key decides its org.** The contract records as `operator` whoever lands the *first*
+  `register_instance` for a key (re-registration keeps it), and the registration quote does not name the account.
+  So nobody else can obtain one early, an instance never quotes the registration nonce of the registries named in its
+  environment (`PLR_REGISTRY` / `PLR_VPN_REGISTRY`) on its public `/v1/attestation` (`400 E_BAD_REQUEST`); only its own
+  anchorer gets that quote, through the host's quote socket. After each registration the exit reads the record back.
+  If the operator is not its own account (for example, a front-run of its first transaction), it logs
+  `registration_failed code=E_OPERATOR_MISMATCH`, stops serving, and exits non-zero. A restart produces new keys.
+  Residual risk: an exit started with **no** registry configured cannot know which nonce to refuse, so anyone can
+  register it. Binding the operator account into the signed registration (an enclave signature over
+  `contract ‖ operator`) needs a SPEC §5/§7 revision.
+- **Frame sizes.** CONNECT payloads are always 512 bytes and CONNECT_ERR payloads 32 bytes (space-padded JSON). The
+  entry, which sees the inner frames' lengths, therefore cannot learn the destination name's length or which
+  error the exit returned. Later DATA frames still have their natural sizes (TLS records).
+- The single-hop limits above still apply to the exit's upstream leg (destination IP:port, SNI, plain HTTP).
+
+Run it locally — `scripts/dev-up.sh` approves `operator` as `org-a` and `operator2` as `org-b`, and starts the
+production exit (`PLR_VPN_URL`, org-a), a second production exit (`PLR_VPN2_URL`, org-b) and a two-hop entry
+(`PLR_VPN_ENTRY_URL`, org-b). The entry is the approved **test** build: a production entry refuses to dial a
+loopback exit (its own egress policy), so on one machine only a loopback-allowing entry can reach the exit; in the
+cloud both hops are production builds with public addresses.
+
+```sh
+PLR_LLM=mock scripts/dev-up.sh
+set -a; . .run/stack.env; set +a        # PLR_VPN_ENTRY_URL set ⇒ `plr vpn` is two-hop
+node client/dist/cli.js vpn verify      # entry hop + exit hop (fetched through the entry) + organizations
+node client/dist/cli.js vpn             # ✔ two-hop VPN verified … entry (org-b) → exit (org-a) … SOCKS5 on :18180
+curl --proxy socks5h://127.0.0.1:18180 https://example.com     # online: entry → production exit → example.com
+PLR_VPN_URL=$PLR_VPN2_URL node client/dist/cli.js vpn verify   # same org on both hops ⇒ ✘ E_SAME_OPERATOR
+PLR_VPN_ENTRY_URL= node client/dist/cli.js vpn                 # one hop again (empty = unset)
+scripts/dev-down.sh
+```
+
+Programmatic: `new TwoHopClient({ entryUrl, exitUrl, registry, trustedRoot })`; `startVpn({ port, client })`
+accepts it like a `VpnClient`. Owner actions on the dev stack:
+`node e2e/dist/stack-cli.js owner approve_operator '{"account_id":"…","org_id":"org-c"}' --vpn`
+(also `revoke_operator`).
+
+### Running it in the cloud — costs and where to put the exit
+
+Phala Cloud (managed dstack CVMs) instance prices, as published (Oct 2026):
 
 | item | cost |
 |---|---|
-| VPN exit, Phala Cloud `tdx.small` (1 vCPU / 2 GB is plenty for a relay) | ≈ $0.06/h (≈ $44/month) |
-| LLM router + Qwen 0.5B, `tdx.medium` | ≈ $0.12/h (≈ $88/month) |
-| Phala free credit | $20 ≈ 2 weeks of the exit alone, ≈ 4–5 days of both |
+| Phala Cloud `tdx.small` | $0.06/h (≈ $44/month) |
+| Phala Cloud `tdx.medium` (e.g. the LLM router + Qwen 0.5B) | $0.12/h (≈ $88/month) |
+| Phala Cloud `tdx.large` | $0.23/h |
+| Phala Cloud egress | **no published per-GB price or quota** ("each machine includes bandwidth based on its size" — ask sales) |
+| Azure DCesv5 / ECesv5 (Intel TDX VMs, public IP) egress | first 100 GB/month free, then $0.087/GB |
+| GCP C3 Confidential VMs (TDX) egress | roughly $0.085–0.12/GB (unverified) |
 | NEAR storage per registry deployment (≈ 217 KB wasm + state, 1 NEAR / 100 KB staked, refundable) | ≈ 2–3 NEAR locked |
 | NEAR gas: `register_instance` (daily) and `anchor_receipts` batches | fractions of a milli-NEAR per tx |
+
+Where each service fits:
+
+- **LLM router → Phala Cloud** is a good fit (HTTPS ingress, little egress). The $20 free credit can be used for it.
+- **VPN exit → a TDX VM with its own public IP** (Azure DCesv5/ECesv5, or GCP C3 Confidential VMs) running
+  dstack self-hosted, or a replacement of the mock host on that VM. Reasons: Phala's Terms (§7.4) forbid VPN /
+  proxy / tunneling software on free or promotional credit, so the $20 credit cannot pay for the exit; managed
+  Phala CVMs have **no public IP** — ingress only via the dstack-gateway
+  (`https://<app-id>-<port>.dstack-pha-<node>.phala.network`, TLS/SNI-routed, TCP only, no UDP, which also rules
+  out a later WireGuard exit) and egress via a shared NAT; and VPN traffic is egress-heavy while Phala publishes
+  no egress price. For two-hop, put the entry and the exit in different clouds / organizations.
+- Whatever runs dstack: Phala's October 2026 post-mortem requires **dstack OS ≥ v0.6.1 / v0.5.12**; approve only
+  OS measurements of such images on the registries.
 
 For mainnet, raise `PLR_ANCHOR_INTERVAL_MS` to about 10 minutes (`600000`; local default 3 s for the exit):
 one `anchor_receipts` transaction per interval covers every receipt since the last one, so a longer interval
@@ -406,7 +517,9 @@ and the proxy take any `RegistryReader` unchanged. The router side needs the mat
 | router | `127.0.0.1:18100` (dev-up), ephemeral in tests and the demo |
 | VPN exit | `127.0.0.1:18200` (dev-up), ephemeral in tests and the demo |
 | client proxy | `127.0.0.1:18787` |
-| client SOCKS5 (`plr vpn`) | `127.0.0.1:18180` (the demo also uses 18181 for the production exit) |
+| VPN exit #2 / two-hop entry | ephemeral (URLs in `.run/stack.env`: `PLR_VPN2_URL`, `PLR_VPN_ENTRY_URL`) |
+| DoH resolver of the test builds | `127.0.0.1:18253` (`POST /dns-query`; measured in the test compose, so fixed; one stack per machine) |
+| client SOCKS5 (`plr vpn`) | `127.0.0.1:18180` (the demo also uses 18181–18183: production exit, two-hop, two-hop to production) |
 | near-sandbox RPC | `127.0.0.1:3030` (dev-up), ephemeral in tests and the demo; LLM registry `registry.<root>`, VPN registry `vpnregistry.<root>` |
 | run state | `.run/<id>/` (chain home under `near/`), host sockets in `.run/<id>-host/`; removed on stop (`PLR_KEEP_RUN=1` keeps them) |
 

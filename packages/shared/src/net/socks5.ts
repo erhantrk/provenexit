@@ -116,11 +116,14 @@ const VERIFICATION_CODES: ReadonlySet<string> = new Set([
   "E_OS_NOT_ALLOWED", "E_INSTANCE_NOT_REGISTERED", "E_REGISTRY_UNAVAILABLE",
 ]);
 
+/** Policy refusals that also map to "not allowed by ruleset" (SPEC-VPN §8, rev 2). */
+const POLICY_CODES: ReadonlySet<string> = new Set(["E_EGRESS_DENIED", "E_OPERATOR_UNAPPROVED", "E_SAME_OPERATOR"]);
+
 /** SPEC-VPN §8 mapping of a PLR error code (null = success) to the RFC 1928 REP byte. */
 export function socksReplyFor(code: string | null): number {
   if (code === null) return SOCKS_REP.SUCCEEDED;
   if (typeof code !== "string") return SOCKS_REP.GENERAL_FAILURE;
-  if (code === "E_EGRESS_DENIED" || VERIFICATION_CODES.has(code)) return SOCKS_REP.NOT_ALLOWED;
+  if (POLICY_CODES.has(code) || VERIFICATION_CODES.has(code)) return SOCKS_REP.NOT_ALLOWED;
   if (code === "E_DNS") return SOCKS_REP.HOST_UNREACHABLE;
   if (code === "E_CONNECT_FAILED") return SOCKS_REP.CONNECTION_REFUSED;
   return SOCKS_REP.GENERAL_FAILURE;

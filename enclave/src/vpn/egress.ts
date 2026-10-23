@@ -1,8 +1,12 @@
 /**
  * Exit-side destination handling (SPEC-VPN §4.3 step 2, §6):
  *
- *   validateDestination → resolve (exit-side DNS, all addresses) → egressAllowed on EVERY address →
- *   dial the first address **by IP literal** (no second resolution, the hostname never reaches net.connect).
+ *   validateDestination → RFC 6761 localhost names refused → resolve (exit-side DoH, all addresses, doh.ts) →
+ *   egressAllowed on EVERY address → dial the first address **by IP literal** (no second resolution, the hostname
+ *   never reaches net.connect).
+ *
+ * There is no system-resolver path at all: the only resolver is the {@link LookupAll} the caller passes (the exit
+ * passes the DoH lookup built from its measured compose), and net.connect is given a lookup that refuses.
  *
  * Fail closed: if any resolved address is denied, the whole destination is denied (a name that also resolves to
  * loopback/private space is refused, whatever else it resolves to). IPv4 addresses are preferred (stable order).
@@ -14,11 +18,10 @@
  * IPv4-mapped / NAT64 / 6to4 spellings of those addresses are caught as well.
  * Errors are `PlrError`s with a CONNECT_ERR code and a static message: never the host, an address or the port.
  */
-import dns from "node:dns";
 import net from "node:net";
 import os from "node:os";
 import {
-  PlrError, classifyIp, egressAllowed, egressIdentity, isIpLiteral, isPlrError, parseIpv4, validateDestination, type EgressPolicy,
+  PlrError, classifyIp, egressAllowed, egressIdentity, isIpLiteral, isLocalhostName, isPlrError, parseIpv4, validateDestination, type EgressPolicy,
 } from "@plr/shared";
 
 export interface Destination {
@@ -31,11 +34,11 @@ export interface ResolvedAddress {
   family: 4 | 6;
 }
 
-/** All addresses of `hostname` (no particular order). Must not be called for IP literals. */
-export type LookupAll = (hostname: string) => Promise<ReadonlyArray<{ address: string; family: number }>>;
-
-/** The system resolver (getaddrinfo via `dns.lookup`), all addresses. */
-export const systemLookup: LookupAll = (hostname) => dns.promises.lookup(hostname, { all: true, verbatim: true });
+/**
+ * All addresses of `hostname` (no particular order). Never called for IP literals or localhost names. `signal`
+ * aborts it (the tunnel's dial deadline / the tunnel closing).
+ */
+export type LookupAll = (hostname: string, signal?: AbortSignal) => Promise<ReadonlyArray<{ address: string; family: number }>>;
 
 /**
  * Host-only services that sit in "public" address space (SPEC-VPN §1.5 "metadata", not covered by the §6 table):
@@ -77,8 +80,8 @@ export function hostOnlyDenied(address: string, localAddresses: LocalAddresses):
 
 export interface DialOptions {
   policy: EgressPolicy;
-  /** Resolver (default {@link systemLookup}). */
-  lookup?: LookupAll;
+  /** The only resolver (the exit's DoH lookup, doh.ts). No default: there is no system-resolver fallback. */
+  lookup: LookupAll;
   /** The exit's own addresses (default {@link systemLocalAddresses}); tests inject fixed lists. */
   localAddresses?: LocalAddresses;
   /** Deadline for resolve + connect (SPEC-VPN §4.3: 10 s). */
@@ -102,7 +105,8 @@ function aborted(signal: AbortSignal, code: "E_DNS" | "E_CONNECT_FAILED"): Promi
 }
 
 /**
- * Validates, resolves and egress-checks a destination. IP literals are not resolved.
+ * Validates, resolves and egress-checks a destination. IP literals are not resolved; `localhost` / `*.localhost`
+ * (RFC 6761) are refused before any resolution, whatever the policy.
  * @throws PlrError E_BAD_INPUT | E_DNS | E_EGRESS_DENIED
  */
 export async function resolveEgress(
@@ -113,12 +117,13 @@ export async function resolveEgress(
   localAddresses: LocalAddresses = systemLocalAddresses,
 ): Promise<ResolvedAddress> {
   validateDestination(dest.host, dest.port); // E_BAD_INPUT
+  if (isLocalhostName(dest.host)) throw new PlrError("E_EGRESS_DENIED", "destination not allowed");
   let answers: ReadonlyArray<{ address: string; family: number }>;
   if (isIpLiteral(dest.host)) {
     answers = [{ address: dest.host, family: parseIpv4(dest.host) !== null ? 4 : 6 }];
   } else {
     try {
-      answers = await Promise.race([lookup(dest.host), aborted(signal, "E_DNS")]);
+      answers = await Promise.race([lookup(dest.host, signal), aborted(signal, "E_DNS")]);
     } catch {
       throw new PlrError("E_DNS", "resolution failed");
     }
@@ -171,7 +176,7 @@ export const dialEgress: Dialer = async (dest, o) => {
   const deadline = AbortSignal.timeout(o.timeoutMs);
   const signal = o.signal ? AbortSignal.any([deadline, o.signal]) : deadline;
   try {
-    const addr = await resolveEgress(dest, o.policy, o.lookup ?? systemLookup, signal, o.localAddresses ?? systemLocalAddresses);
+    const addr = await resolveEgress(dest, o.policy, o.lookup, signal, o.localAddresses ?? systemLocalAddresses);
     return await connectIp(addr, dest.port, signal);
   } catch (e) {
     if (isPlrError(e)) throw e;

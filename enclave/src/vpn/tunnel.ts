@@ -1,8 +1,9 @@
 /**
  * Exit side of one tunnel (SPEC-VPN §4.3), one per proxied TCP connection.
  *
- *   hello (≤ helloMs) → CONNECT as c2s frame 0 (≤ connectMs) → resolve + egress check + dial (≤ dialMs)
- *   → CONNECT_OK | CONNECT_ERR(code)+close → relay DATA / FIN both ways → both FIN'd → RECEIPT + close.
+ *   hello (≤ helloMs) → server_hello (fresh exit ephemeral, handshake v2) → CONNECT as c2s frame 0 (≤ connectMs)
+ *   → resolve (DoH) + egress check + dial (≤ dialMs) → CONNECT_OK | CONNECT_ERR(code)+close
+ *   → relay DATA / FIN both ways → both FIN'd → RECEIPT + close.
  *
  * Any protocol violation, authentication failure, client EOF before its FIN, or upstream error closes both
  * sockets immediately (no FIN, no RECEIPT). No frames for `idleMs` in either direction ⇒ close.
@@ -11,8 +12,9 @@
  * other way a tunnel ends early aborts the upstream connection with a TCP RST ({@link abortUpstream}), so a
  * truncated, tampered or cut c2s stream can never be committed by an EOF-delimited protocol as complete.
  *
- * A hello is accepted only once, and only for an attestation nonce this exit issued ({@link HelloGuard}):
- * a replayed hello would otherwise re-derive a victim tunnel's keys and nonces.
+ * Replay protection and forward secrecy come from the handshake itself (SPEC-VPN §4.1): every tunnel mixes a
+ * fresh exit ephemeral key into its keys, so a replayed hello gets a new `server_hello` and new keys, and every
+ * replayed frame fails authentication before anything is dialled. No hello state is kept between tunnels.
  *
  * Bounded: the hello buffer is 65 bytes, the TunnelReader holds at most one frame, upstream bytes are sealed in
  * ≤ 16 384-byte DATA frames, and both directions apply backpressure (the producer is paused while the consumer's
@@ -29,8 +31,8 @@ import {
 } from "@plr/shared";
 import type { Dialer, LookupAll } from "./egress.js";
 import type { VpnKeys } from "./keys.js";
-import type { HelloGuard } from "./replay.js";
 import type { VpnReceiptLog } from "./receipts.js";
+import type { TimerHandle, Timers } from "./timers.js";
 
 export interface TunnelTimeouts {
   /** Hello must arrive within this after the upgrade (SPEC-VPN §4.3: 10 s). */
@@ -58,14 +60,15 @@ export const MAX_PENDING_BYTES = 256 * 1024;
 
 export interface TunnelContext {
   keys: VpnKeys;
-  /** Anti-replay: issued attestation nonces and the hellos already admitted under them. */
-  hellos: HelloGuard;
   composeHash: Uint8Array;
   policy: EgressPolicy;
   receipts: VpnReceiptLog;
   dial: Dialer;
-  lookup?: LookupAll;
+  /** The exit's only resolver (DoH from the measured compose). */
+  lookup: LookupAll;
   timeouts: TunnelTimeouts;
+  /** Timer source for every tunnel deadline (Node timers; tests drive a manual clock). */
+  timers: Timers;
   now: () => number;
 }
 
@@ -103,9 +106,9 @@ export class ExitTunnel {
   #s2cBlocked = false;
   #pending: TunnelFrame[] = [];
   #pendingBytes = 0;
-  #stepTimer: NodeJS.Timeout | null = null;
-  #idleTimer: NodeJS.Timeout | null = null;
-  #lingerTimer: NodeJS.Timeout | null = null;
+  #stepTimer: TimerHandle | null = null;
+  #idleTimer: TimerHandle | null = null;
+  #lingerTimer: TimerHandle | null = null;
   readonly #tsOpen: number;
 
   /** Takes over an upgraded socket; `head` = bytes already read past the HTTP headers. */
@@ -114,8 +117,8 @@ export class ExitTunnel {
     this.#ctx = ctx;
     this.#onClosed = onClosed;
     this.#tsOpen = ctx.now();
-    this.#stepTimer = setTimeout(() => this.destroy(), ctx.timeouts.helloMs);
-    this.#idleTimer = setTimeout(() => this.destroy(), ctx.timeouts.idleMs);
+    this.#stepTimer = ctx.timers.set(() => this.destroy(), ctx.timeouts.helloMs);
+    this.#idleTimer = ctx.timers.set(() => this.destroy(), ctx.timeouts.idleMs);
     sock.on("data", (c: Buffer) => this.#onData(c));
     sock.on("end", () => this.#onClientEnd());
     sock.on("error", () => this.destroy());
@@ -131,7 +134,7 @@ export class ExitTunnel {
   destroy(): void {
     if (this.#state === "closed") return;
     this.#state = "closed";
-    for (const t of [this.#stepTimer, this.#idleTimer, this.#lingerTimer]) if (t) clearTimeout(t);
+    for (const t of [this.#stepTimer, this.#idleTimer, this.#lingerTimer]) t?.clear();
     this.#stepTimer = this.#idleTimer = this.#lingerTimer = null;
     this.#abort.abort();
     if (this.#upstream) abortUpstream(this.#upstream);
@@ -155,7 +158,7 @@ export class ExitTunnel {
   }
 
   #clearStep(): void {
-    if (this.#stepTimer) clearTimeout(this.#stepTimer);
+    this.#stepTimer?.clear();
     this.#stepTimer = null;
   }
 
@@ -172,19 +175,14 @@ export class ExitTunnel {
       if (this.#helloFill < TUNNEL.HELLO_LEN) return;
       let k;
       try {
-        k = this.#ctx.keys.tunnelInit(this.#hello);
+        // Handshake v2: fresh exit ephemeral per tunnel (zeroed once the keys are derived).
+        k = this.#ctx.keys.tunnelAccept(this.#hello);
       } catch {
-        return this.destroy(); // malformed hello / low-order epk
+        return this.destroy(); // wrong version / malformed hello / low-order epk_c: nothing is sent
+      } finally {
+        this.#hello.fill(0);
       }
-      // Replay: the nonce must be one we issued, and this epk must be new under it (else identical keys).
-      const admitted = this.#ctx.hellos.admit(k.attNonce, this.#hello.subarray(1 + 32, TUNNEL.HELLO_LEN));
-      this.#hello.fill(0);
-      if (!admitted) {
-        k.kC2s.fill(0);
-        k.kS2c.fill(0);
-        k.th.fill(0);
-        return this.destroy();
-      }
+      k.attNonce.fill(0); // only bound into th; not needed any further
       this.#th = k.th;
       this.#reader = new TunnelReader(k.kC2s, k.th, TUNNEL.DIR_C2S);
       this.#writer = new TunnelWriter(k.kS2c, k.th, TUNNEL.DIR_S2C);
@@ -192,7 +190,9 @@ export class ExitTunnel {
       k.kS2c.fill(0);
       this.#state = "connect";
       this.#clearStep();
-      this.#stepTimer = setTimeout(() => this.destroy(), this.#ctx.timeouts.connectMs);
+      this.#stepTimer = this.#ctx.timers.set(() => this.destroy(), this.#ctx.timeouts.connectMs);
+      // server_hello right after a valid hello, before any s2c frame (SPEC-VPN §4.1).
+      this.#sock.write(k.serverHello);
       if (rest.length === 0) return;
     }
     let frames: TunnelFrame[];
@@ -276,7 +276,7 @@ export class ExitTunnel {
         policy: this.#ctx.policy,
         timeoutMs: this.#ctx.timeouts.dialMs,
         signal: this.#abort.signal,
-        ...(this.#ctx.lookup ? { lookup: this.#ctx.lookup } : {}),
+        lookup: this.#ctx.lookup,
       })
       .then(
         (up) => this.#connected(up),
@@ -377,11 +377,11 @@ export class ExitTunnel {
     if (!this.#open()) return;
     this.#state = "closing";
     this.#clearStep();
-    if (this.#idleTimer) clearTimeout(this.#idleTimer);
+    this.#idleTimer?.clear();
     this.#idleTimer = null;
     this.#abort.abort();
     this.#sock.end();
     this.#sock.resume(); // discard anything further, but notice the peer closing
-    this.#lingerTimer = setTimeout(() => this.destroy(), this.#ctx.timeouts.lingerMs);
+    this.#lingerTimer = this.#ctx.timers.set(() => this.destroy(), this.#ctx.timeouts.lingerMs);
   }
 }

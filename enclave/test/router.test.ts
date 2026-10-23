@@ -3,7 +3,7 @@ import type http from "node:http";
 import type { AddressInfo } from "node:net";
 import { randomBytes } from "@noble/hashes/utils.js";
 import { x25519 } from "@noble/curves/ed25519.js";
-import { MockRoot, MockTdxAttester, PlrError, toHex } from "@plr/shared";
+import { MockRoot, MockTdxAttester, PlrError, registrationNonce, toHex } from "@plr/shared";
 import { createRouter } from "../src/router.js";
 import { RouterKeys } from "../src/keys.js";
 import { ReceiptLog } from "../src/receipts.js";
@@ -36,7 +36,7 @@ function captureStdio() {
 }
 
 interface Ctx { url: string; server: http.Server; receipts: ReceiptLog; keys: RouterKeys }
-async function startRouter(llm: LlmClient, extra: { maxSeenEpks?: number; maxInflight?: number; attester?: MockTdxAttester } = {}): Promise<Ctx> {
+async function startRouter(llm: LlmClient, extra: { maxSeenEpks?: number; maxInflight?: number; attester?: MockTdxAttester; reservedNonces?: Uint8Array[] } = {}): Promise<Ctx> {
   const keys = RouterKeys.generate();
   const receipts = new ReceiptLog();
   const server = createRouter({
@@ -44,6 +44,7 @@ async function startRouter(llm: LlmClient, extra: { maxSeenEpks?: number; maxInf
     log: new Logger("plr-router", (l) => logLines.push(l)),
     ...(extra.maxSeenEpks !== undefined ? { maxSeenEpks: extra.maxSeenEpks } : {}),
     ...(extra.maxInflight !== undefined ? { maxInflight: extra.maxInflight } : {}),
+    ...(extra.reservedNonces ? { reservedNonces: extra.reservedNonces } : {}),
   });
   const port = await listen(server);
   return { url: `http://127.0.0.1:${port}`, server, receipts, keys };
@@ -93,6 +94,18 @@ describe("attestation (SPEC §6.2)", () => {
   it("wrong method / unknown path", async () => {
     expect((await fetch(`${R.url}/v1/attestation?nonce=${"ab".repeat(32)}`, { method: "POST" })).status).toBe(405);
     expect((await fetch(`${R.url}/nope`)).status).toBe(404);
+  });
+
+  it("never quotes its registry's registration nonce (only its own anchorer may obtain a registration quote)", async () => {
+    let quoted = 0;
+    const counting = { getQuote: (rd: Uint8Array) => { quoted++; return attester.getQuote(rd); } } as unknown as MockTdxAttester;
+    const r = await startRouter(new HttpLlmClient(llmPort), { attester: counting, reservedNonces: [registrationNonce("registry.test.near")] });
+    const res = await fetch(`${r.url}/v1/attestation?nonce=${toHex(registrationNonce("registry.test.near"))}`);
+    expect([res.status, await res.json()]).toEqual([400, { error: "E_BAD_REQUEST" }]);
+    expect(quoted).toBe(0);
+    expect((await fetch(`${r.url}/v1/attestation?nonce=${"ab".repeat(32)}`)).status).toBe(200);
+    expect(quoted).toBe(1);
+    await closeServer(r.server);
   });
 
   it("quote service failure → 503 E_UPSTREAM", async () => {

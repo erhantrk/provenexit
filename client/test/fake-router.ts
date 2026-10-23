@@ -105,6 +105,7 @@ export function makeFakeRouter(o: { debug?: boolean } = {}): FakeRouter {
     x25519: toHex(xp),
     ed25519: toHex(ep),
     operator: "operator.test.near",
+    org_id: null,
     registered_at_ms: 1,
     expires_at_ms: Date.now() + 3_600_000,
     next_seq: 0,

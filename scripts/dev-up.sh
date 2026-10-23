@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # Leaves a local PLR stack running for manual use:
 #   near-sandbox (LLM registry + VPN registry deployed, fresh MOCK ROOT) + honest router and honest production
-#   VPN exit (PLR-VPN-v1), both launched and measured by the mock TDX host and registered on their registry.
+#   VPN exit (PLR-VPN-v1), both launched and measured by the mock TDX host and registered on their registry;
+#   for two-hop (SPEC-VPN §10) the owner approves operator → org-a and operator2 → org-b, and a second production
+#   exit plus a two-hop entry (the loopback-allowing test build: a production entry refuses a loopback exit) are
+#   registered by operator2. The test builds' DoH resolver runs on 127.0.0.1:18253 (production builds use the
+#   measured public resolvers 1.1.1.1 / 9.9.9.9).
 # Writes .run/stack.env (PLR_ROUTER_URL, PLR_NEAR_RPC, PLR_REGISTRY, PLR_TRUSTED_ROOT, PLR_VPN_URL,
-# PLR_VPN_REGISTRY, PLR_VPN_COMPOSE_HASH, …) for the `plr` CLI:
+# PLR_VPN_ENTRY_URL, PLR_VPN2_URL, PLR_VPN_REGISTRY, PLR_VPN_COMPOSE_HASH, …) for the `plr` CLI:
 #   set -a; . .run/stack.env; set +a; node client/dist/cli.js verify
-#   node client/dist/cli.js vpn verify; node client/dist/cli.js vpn   # SOCKS5 on 127.0.0.1:18180
+#   node client/dist/cli.js vpn verify; node client/dist/cli.js vpn   # two-hop (entry → exit), SOCKS5 on :18180
+#   PLR_VPN_ENTRY_URL= node client/dist/cli.js vpn                  # one hop (empty = unset), straight to PLR_VPN_URL
 # Stop with scripts/dev-down.sh.
 #
 # Env: PLR_LLM=llama|mock (default llama: real Qwen 0.5B), PLR_RPC_PORT (default 3030),
@@ -49,7 +54,8 @@ for _ in $(seq 1 1200); do
     printf '\n✔ stack ready:\n'; grep -v '^#' "$ENV_FILE" | sed 's/^/    /'
     printf '\n  use it:   set -a; . %s; set +a; node client/dist/cli.js verify\n' "$ENV_FILE"
     printf '  OpenAI:   node client/dist/cli.js proxy   # then point any OpenAI SDK at http://127.0.0.1:18787/v1\n'
-    printf '  VPN:      node client/dist/cli.js vpn verify; node client/dist/cli.js vpn   # SOCKS5 socks5h://127.0.0.1:18180\n'
+    printf '  VPN:      node client/dist/cli.js vpn verify; node client/dist/cli.js vpn   # two-hop entry → exit, SOCKS5 socks5h://127.0.0.1:18180\n'
+    printf '            PLR_VPN_ENTRY_URL= node client/dist/cli.js vpn                # one hop\n'
     printf '            curl --proxy socks5h://127.0.0.1:18180 https://example.com\n'
     printf '  stop:     scripts/dev-down.sh\n'
     exit 0

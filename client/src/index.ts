@@ -19,6 +19,7 @@ export { runCli, loadConfig, loadVpnConfig, readStdinText, MAX_STDIN_PROMPT, Con
 export { AttestationCache, recheckRegistry, type AttestationSession, type AttestationCacheOptions } from "./attestation.js";
 // PLR-VPN-v1 (SPEC-VPN §9.2)
 export { VpnClient, VPN_ATTEST_TTL_MS, type VpnClientOptions, type VpnClientTimeouts } from "./vpn/client.js";
-export { TunnelStream, type VpnStream, type VpnReceiptResult, type TunnelStreamParams } from "./vpn/stream.js";
-export { startVpn, type VpnProxyOptions, type VpnProxyHandle } from "./vpn/socks5-server.js";
-export { TUNNEL_UPGRADE, TransportError, type Lookup } from "./vpn/transport.js";
+export { TunnelStream, TwoHopTunnelStream, type VpnStream, type TwoHopStream, type VpnReceiptResult, type TunnelStreamParams } from "./vpn/stream.js";
+export { TwoHopClient, entryOrgOf, exitOrgOf, type TwoHopClientOptions, type TwoHopAttestation } from "./vpn/twohop.js";
+export { startVpn, type VpnProxyOptions, type VpnProxyHandle, type VpnConnector } from "./vpn/socks5-server.js";
+export { TUNNEL_UPGRADE, TransportError, type Lookup, type Dialer } from "./vpn/transport.js";
