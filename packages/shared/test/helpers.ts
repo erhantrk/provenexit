@@ -72,7 +72,7 @@ export function fixture(opts: { debug?: boolean; composeStr?: string } = {}): Fi
   const osHash = osMeasurement(mockOsReport());
   const record: InstanceRecord = {
     compose_hash: hex(composeHash), os_measurement: hex(osHash), x25519: hex(xp), ed25519: hex(ep),
-    operator: "op.test.near", registered_at_ms: 1, expires_at_ms: Date.now() + 3_600_000, next_seq: 0,
+    operator: "op.test.near", org_id: null, registered_at_ms: 1, expires_at_ms: Date.now() + 3_600_000, next_seq: 0,
   };
   const registry = new MemoryRegistry({
     root: { kind: "MOCK", p256: toHex(root.publicKey) },

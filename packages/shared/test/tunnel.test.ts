@@ -4,7 +4,8 @@ import { x25519, ed25519 } from "@noble/curves/ed25519.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
 import {
-  TUNNEL, FRAME, deriveTunnel, encodeHello, parseHello, tunnelClientInit, tunnelServerInit, TunnelWriter, TunnelReader,
+  TUNNEL, FRAME, deriveTunnel, encodeHello, parseHello, encodeServerHello, parseServerHello, tunnelClientStart, tunnelServerAccept,
+  TunnelWriter, TunnelReader,
   vpnReceiptMessage, signVpnReceipt, verifyVpnReceipt, vpnReceiptLeaf, PlrError, type VpnReceipt,
 } from "../src/index.js";
 import { sha256, enc, cat, u64be, hex, unhex, randomBytes } from "./helpers.js";
@@ -18,54 +19,86 @@ const keys = () => {
 const nonceFor = (dir: number, seq: number) => cat(u32be(dir), u64be(seq));
 
 describe("constants", () => {
-  it("match SPEC-VPN §4", () => {
-    expect(TUNNEL).toMatchObject({ VERSION: 1, HELLO_LEN: 65, MAX_PAYLOAD: 16384, MIN_FRAME_LEN: 17, MAX_FRAME_LEN: 16401, DIR_C2S: 1, DIR_S2C: 2 });
+  it("match SPEC-VPN §4 (rev 2)", () => {
+    expect(TUNNEL).toMatchObject({ VERSION: 2, HELLO_LEN: 65, SERVER_HELLO_LEN: 33, MAX_PAYLOAD: 16384, MIN_FRAME_LEN: 17, MAX_FRAME_LEN: 16401, DIR_C2S: 1, DIR_S2C: 2 });
     expect(FRAME).toEqual({ CONNECT: 1, CONNECT_OK: 2, CONNECT_ERR: 3, DATA: 4, FIN: 5, RECEIPT: 6 });
   });
 });
 
-describe("key schedule", () => {
-  it("deriveTunnel matches §4.1 and is domain-separated from PLR-v1", () => {
+describe("handshake v2 key schedule (§4.1)", () => {
+  it("deriveTunnel matches §4.1 and is domain-separated from v1 and PLR-v1", () => {
     const { xp, ep } = keys();
-    const shared = randomBytes(32), attNonce = randomBytes(32), epk = randomBytes(32);
-    const t = deriveTunnel({ shared, attNonce, epk, xp, ep });
-    const th = sha256(cat(enc("PLR-VPN-v1/tunnel"), attNonce, epk, xp, ep));
-    const okm = hkdf(sha256, shared, th, enc("PLR-VPN-v1/keys"), 64);
+    const dh1 = randomBytes(32), dh2 = randomBytes(32), attNonce = randomBytes(32), epkC = randomBytes(32), epkS = randomBytes(32);
+    const t = deriveTunnel({ dh1, dh2, attNonce, epkC, epkS, xp, ep });
+    const th = sha256(cat(enc("PLR-VPN-v2/tunnel"), attNonce, epkC, epkS, xp, ep));
+    const okm = hkdf(sha256, cat(dh1, dh2), th, enc("PLR-VPN-v2/keys"), 64);
     expect(t.th).toEqual(th);
     expect(t.kC2s).toEqual(okm.slice(0, 32));
     expect(t.kS2c).toEqual(okm.slice(32, 64));
-    expect(t.th).not.toEqual(sha256(cat(enc("PLR-v1/session"), attNonce, epk, xp, ep)));
+    expect(t.th).not.toEqual(sha256(cat(enc("PLR-VPN-v1/tunnel"), attNonce, epkC, xp, ep)));
+    expect(code(() => deriveTunnel({ dh1: new Uint8Array(32), dh2, attNonce, epkC, epkS, xp, ep }))).toBe("E_DECRYPT");
+    expect(code(() => deriveTunnel({ dh1, dh2: new Uint8Array(32), attNonce, epkC, epkS, xp, ep }))).toBe("E_DECRYPT");
   });
 
-  it("hello is u8(1)‖att_nonce‖epk and round-trips", () => {
-    const n = randomBytes(32), e = randomBytes(32);
+  it("hello / server_hello codecs", () => {
+    const n = randomBytes(32), e = randomBytes(32), s2 = randomBytes(32);
     const h = encodeHello(n, e);
-    expect(h).toEqual(cat(new Uint8Array([1]), n, e));
-    expect(parseHello(h)).toEqual({ attNonce: n, epk: e });
+    expect(h).toEqual(cat(new Uint8Array([2]), n, e));
+    expect(parseHello(h)).toEqual({ attNonce: n, epkC: e });
     expect(code(() => parseHello(h.slice(0, 64)))).toBe("E_TUNNEL_PROTOCOL");
-    expect(code(() => parseHello(cat(new Uint8Array([2]), n, e)))).toBe("E_TUNNEL_PROTOCOL");
+    expect(code(() => parseHello(cat(new Uint8Array([1]), n, e)))).toBe("E_TUNNEL_PROTOCOL"); // v1 is gone
     expect(code(() => parseHello(cat(h, new Uint8Array(1))))).toBe("E_TUNNEL_PROTOCOL");
+    const sh = encodeServerHello(s2);
+    expect(sh).toEqual(cat(new Uint8Array([2]), s2));
+    expect(parseServerHello(sh)).toEqual({ epkS: s2 });
+    expect(code(() => parseServerHello(sh.slice(0, 32)))).toBe("E_TUNNEL_PROTOCOL");
+    expect(code(() => parseServerHello(cat(new Uint8Array([1]), s2)))).toBe("E_TUNNEL_PROTOCOL");
   });
 
-  it("client and server derive the same keys; fresh ephemeral per tunnel", () => {
+  it("client and server agree; keys match an independent derivation from both DH outputs", () => {
     const k = keys();
     const attNonce = randomBytes(32);
-    const c = tunnelClientInit({ xp: k.xp, ep: k.ep, attNonce });
-    const s = tunnelServerInit({ ...k, hello: c.hello });
+    const c = tunnelClientStart({ xp: k.xp, ep: k.ep, attNonce });
+    const s = tunnelServerAccept({ ...k, hello: c.hello });
+    expect(s.serverHello.length).toBe(33);
+    const ck = c.finish(s.serverHello);
     expect(s.attNonce).toEqual(attNonce);
-    expect(s.th).toEqual(c.th);
-    expect(s.kC2s).toEqual(c.kC2s);
-    expect(s.kS2c).toEqual(c.kS2c);
-    const shared = x25519.getSharedSecret(k.xs, c.hello.slice(33));
-    expect(deriveTunnel({ shared, attNonce, epk: c.hello.slice(33), xp: k.xp, ep: k.ep }).kC2s).toEqual(c.kC2s);
-    const c2 = tunnelClientInit({ xp: k.xp, ep: k.ep, attNonce });
-    expect(c2.hello.slice(33)).not.toEqual(c.hello.slice(33));
+    expect(ck.th).toEqual(s.th);
+    expect(ck.kC2s).toEqual(s.kC2s);
+    expect(ck.kS2c).toEqual(s.kS2c);
+    const epkC = c.hello.slice(33), epkS = s.serverHello.slice(1);
+    const th = sha256(cat(enc("PLR-VPN-v2/tunnel"), attNonce, epkC, epkS, k.xp, k.ep));
+    expect(s.th).toEqual(th);
+    // dh1 = X25519(xs, epk_c) is reproducible from the exit's static key; dh2 is not (ephemeral) — so a key
+    // derived WITHOUT the right dh2 must differ: compromise of xs alone does not give the tunnel keys.
+    const dh1 = x25519.getSharedSecret(k.xs, epkC);
+    const guess = hkdf(sha256, cat(dh1, new Uint8Array(32).fill(1)), th, enc("PLR-VPN-v2/keys"), 64);
+    expect(guess.slice(0, 32)).not.toEqual(s.kC2s);
+    expect(code(() => c.finish(s.serverHello))).toBe("E_TUNNEL_PROTOCOL"); // finish at most once
   });
 
-  it("server rejects low-order epk and garbage hello", () => {
+  it("replaying the same client hello yields fresh keys (replay ⇒ auth failure)", () => {
     const k = keys();
-    expect(code(() => tunnelServerInit({ ...k, hello: encodeHello(randomBytes(32), new Uint8Array(32)) }))).toBe("E_DECRYPT");
-    expect(code(() => tunnelServerInit({ ...k, hello: randomBytes(10) }))).toBe("E_TUNNEL_PROTOCOL");
+    const c = tunnelClientStart({ xp: k.xp, ep: k.ep, attNonce: randomBytes(32) });
+    const s1 = tunnelServerAccept({ ...k, hello: c.hello });
+    const s2 = tunnelServerAccept({ ...k, hello: c.hello });
+    expect(s2.serverHello).not.toEqual(s1.serverHello);
+    expect(s2.kC2s).not.toEqual(s1.kC2s);
+    const ck = c.finish(s1.serverHello);
+    const frame = new TunnelWriter(ck.kC2s, ck.th, 1).seal(FRAME.CONNECT, enc('{"host":"example.com","port":443}'));
+    expect(new TunnelReader(s1.kC2s, s1.th, 1).push(frame).length).toBe(1);
+    expect(code(() => new TunnelReader(s2.kC2s, s2.th, 1).push(frame))).toBe("E_DECRYPT");
+  });
+
+  it("fresh client ephemeral per tunnel; bad inputs rejected", () => {
+    const k = keys();
+    const attNonce = randomBytes(32);
+    const a = tunnelClientStart({ xp: k.xp, ep: k.ep, attNonce }), b = tunnelClientStart({ xp: k.xp, ep: k.ep, attNonce });
+    expect(a.hello.slice(33)).not.toEqual(b.hello.slice(33));
+    expect(code(() => tunnelServerAccept({ ...k, hello: encodeHello(randomBytes(32), new Uint8Array(32)) }))).toBe("E_DECRYPT");
+    expect(code(() => tunnelServerAccept({ ...k, hello: randomBytes(10) }))).toBe("E_TUNNEL_PROTOCOL");
+    expect(code(() => a.finish(encodeServerHello(new Uint8Array(32))))).toBe("E_DECRYPT");   // low-order server ephemeral
+    expect(code(() => b.finish(randomBytes(5)))).toBe("E_TUNNEL_PROTOCOL");
   });
 });
 

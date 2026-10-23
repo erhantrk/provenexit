@@ -195,6 +195,34 @@ describe("anchor_receipts", () => {
   });
 });
 
+describe("operator organizations (SPEC §7 rev 1.2)", () => {
+  it("only the owner can approve / revoke; org ids are validated", async () => {
+    await rejectsWith(S.call("stranger", "approve_operator", { account_id: S.accounts.operator, org_id: "org-a" }), /owner|E_UNAUTHORIZED/i);
+    await rejectsWith(S.call("operator", "approve_operator", { account_id: S.accounts.operator, org_id: "org-a" }), /owner|E_UNAUTHORIZED/i);
+    await rejectsWith(S.call("stranger", "revoke_operator", { account_id: S.accounts.operator }), /owner|E_UNAUTHORIZED/i);
+    for (const org_id of ["", "Org-A", "-org", "org a", "o".repeat(65), "org/a"])
+      await rejectsWith(S.call("owner", "approve_operator", { account_id: S.accounts.operator, org_id }), /E_BAD_INPUT/);
+    expect(await S.view("get_operator", { account_id: S.accounts.operator })).toBeNull();
+  });
+
+  it("get_instance carries the operator's live org_id", async () => {
+    await S.approveBuild("honest");
+    const { k, args } = await regArgs("honest");
+    await register(args);
+    const kh = toHex(keyHash(k.xp, k.ep));
+    expect((await S.registry.getInstance(kh))!.org_id).toBeNull();
+    await S.call("owner", "approve_operator", { account_id: S.accounts.operator, org_id: "acme-hosting.eu" });
+    expect(await S.view("get_operator", { account_id: S.accounts.operator })).toBe("acme-hosting.eu");
+    expect((await S.registry.getInstance(kh))!.org_id).toBe("acme-hosting.eu");
+    expect((await S.view<{ org_id: string | null }>("get_instance", { key_hash: kh }))!.org_id).toBe("acme-hosting.eu");
+    await S.call("owner", "approve_operator", { account_id: S.accounts.operator, org_id: "acme-2" }); // re-approve = change
+    expect((await S.registry.getInstance(kh))!.org_id).toBe("acme-2");
+    await S.call("owner", "revoke_operator", { account_id: S.accounts.operator });
+    expect(await S.view("get_operator", { account_id: S.accounts.operator })).toBeNull();
+    expect((await S.registry.getInstance(kh))!.org_id).toBeNull();
+  });
+});
+
 describe("ownership transfer (two-step) — runs last", () => {
   it("pending owner must accept; old owner loses rights", async () => {
     await rejectsWith(S.call("stranger", "accept_owner", {}), /owner|E_UNAUTHORIZED/i);

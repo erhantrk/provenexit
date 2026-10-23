@@ -21,6 +21,7 @@ beforeAll(async () => {
   await S.approveVpnBuild("vpn-honest-test");
   exit = await S.startExit("vpn-honest-test");
   dest = await S.startDestination();
+  S.dns.set("dest.plr.test", ["127.0.0.1"]); // only the local DoH resolver knows this name
 }, 300_000);
 afterAll(async () => { await S?.stop(); });
 
@@ -115,11 +116,11 @@ describe("1. honest exit", () => {
     lookups.length = 0;
     const p = await startVpn({ port: 0, client: vpn(exit.url) });
     expect(p.url).toMatch(/^socks5h:\/\/127\.0\.0\.1:\d+$/);
-    const { rep, sock } = await socks(p.port, "localhost", dest.port);
+    const { rep, sock } = await socks(p.port, "dest.plr.test", dest.port);
     expect(rep).toBe(0);
     const r = await httpOver(sock, `/${MARK}/socks`);
     expect(r.data).toContain(`dest-ok:/${MARK}/socks`);
-    expect(lookups).not.toContain("localhost");
+    expect(lookups).not.toContain("dest.plr.test");
     await p.close();
   });
 });
@@ -242,5 +243,36 @@ describe("10. registries are independent", () => {
     expect(await codeOf(new PrivateClient({ routerUrl: exit.url, registry: S.registry, trustedRoot: S.trustedRoot }).attest())).toBe("E_COMPOSE_NOT_ALLOWED");
     expect(await codeOf(vpn(router.url).attest())).toBe("E_COMPOSE_NOT_ALLOWED");
     await router.stop();
+  });
+});
+
+describe("11. encrypted DNS inside the exit (DoH, no plaintext fallback)", () => {
+  it("resolves names only through the measured DoH resolver", async () => {
+    const before = S.dns.hits();
+    const s1 = await vpn(exit.url).connect("dest.plr.test", dest.port); // unresolvable by the system resolver (.test)
+    expect((await httpOver(s1, "/doh")).data).toContain("dest-ok:/doh");
+    expect(S.dns.hits()).toBeGreaterThan(before);
+  });
+  it("NXDOMAIN ⇒ E_DNS, destination never contacted", async () => {
+    const before = dest.hits();
+    expect(await codeOf(vpn(exit.url).connect("missing.plr.test", dest.port))).toBe("E_DNS");
+    expect(dest.hits()).toBe(before);
+  });
+  it("resolver down ⇒ E_DNS (never falls back to the host resolver)", async () => {
+    S.dns.setDown(true);
+    try {
+      expect(await codeOf(vpn(exit.url).connect("dest.plr.test", dest.port))).toBe("E_DNS");
+      expect(await codeOf(vpn(exit.url).connect("example.com", 443))).toBe("E_DNS");
+    } finally { S.dns.setDown(false); }
+  });
+  it("localhost names are refused before resolution even on the loopback-allowing test build", async () => {
+    const before = S.dns.hits();
+    for (const h of ["localhost", "LOCALHOST.", "x.localhost"])
+      expect(await codeOf(vpn(exit.url).connect(h, dest.port)), h).toBe("E_EGRESS_DENIED");
+    expect(S.dns.hits()).toBe(before);
+  });
+  it("a name resolving to a private address is refused by egress", async () => {
+    S.dns.set("private.plr.test", ["10.0.0.5"]);
+    expect(await codeOf(vpn(exit.url).connect("private.plr.test", 80))).toBe("E_EGRESS_DENIED");
   });
 });

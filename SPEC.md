@@ -1,6 +1,6 @@
 # PLR-v1 — Provably-Private LLM Router: Protocol Specification
 
-Status: **FROZEN** for milestone 1 (rev 1.1, 2026-10-23: runtime measurement in §4, from security review). Changes require an explicit spec revision; implementations and the
+Status: **FROZEN** for milestone 1 (rev 1.1, 2026-10-23: runtime measurement in §4, from security review; rev 1.2: operator organizations in §7). Changes require an explicit spec revision; implementations and the
 locked tests (`packages/shared/test`, `e2e/test`) are written against this document.
 
 Notation: `‖` = byte concatenation. `u16le/u32le` little-endian, `u64be` big-endian. `utf8(s)` = UTF-8 bytes.
@@ -232,6 +232,7 @@ State:
   `Instance = { compose_hash, os_measurement, x25519, ed25519, operator, registered_at_ms, expires_at_ms, next_seq }`
 - `anchors: vec<Anchor>`; `Anchor = { id, key_hash, root, first_seq, count, at_ms }`
 - `instance_ttl_ms` (default 86_400_000)
+- `operators: map<account → org_id>` (rev 1.2; `org_id` matches `^[a-z0-9][a-z0-9._-]{0,63}$`)
 
 Methods (NEAR: JSON args, hex strings; zero hash `00…00` always rejected):
 | method | who | effect |
@@ -241,10 +242,12 @@ Methods (NEAR: JSON args, hex strings; zero hash `00…00` always rejected):
 | `allow_os(hash)` / `revoke_os(hash)` | owner | event `os_allowed` / `os_revoked` |
 | `set_root(kind, p256)` | owner | event `root_set` |
 | `propose_owner(id)` / `accept_owner()` | owner / pending | two-step transfer |
+| `approve_operator(account_id, org_id)` / `revoke_operator(account_id)` | owner | rev 1.2; event `operator_approved` / `operator_revoked`; bad org_id ⇒ `E_BAD_INPUT` |
+| `get_operator(account_id) → org_id \| null` | view | rev 1.2 |
 | `register_instance(quote, event_log, app_compose, x25519, ed25519)` | anyone (operator), payable for storage | verifies on-chain (below); event `instance_registered` |
 | `anchor_receipts(key_hash, root, first_seq, count, sig)` | anyone | event `receipts_anchored` |
 | `is_allowed(compose_hash, os_measurement) → bool` | view | |
-| `get_instance(key_hash) → Instance \| null` | view | returns null if expired |
+| `get_instance(key_hash) → Instance \| null` | view | returns null if expired; rev 1.2: includes `org_id` (live lookup of the operator's org, or null) |
 | `get_root() → {kind,p256}` | view | |
 | `get_anchor(id) → Anchor \| null`, `anchor_count() → u64` | view | |
 
@@ -386,7 +389,7 @@ anchorMessage(p: { contractId: string; keyHash: Uint8Array; root: Uint8Array; fi
 
 // registry (chain-agnostic)
 interface InstanceRecord { compose_hash: string; os_measurement: string; x25519: string; ed25519: string;
-                           operator: string; registered_at_ms: number; expires_at_ms: number; next_seq: number }
+                           operator: string; org_id: string | null; registered_at_ms: number; expires_at_ms: number; next_seq: number }
 interface RegistryReader {
   readonly chain: string; readonly contractId: string;
   getRoot(): Promise<{ kind: "MOCK" | "INTEL"; p256: string }>;
