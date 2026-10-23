@@ -1,6 +1,6 @@
 # PLR-v1 — Provably-Private LLM Router: Protocol Specification
 
-Status: **FROZEN** for milestone 1 (rev 1.1, 2026-10-23: runtime measurement in §4, from security review; rev 1.2: operator organizations in §7). Changes require an explicit spec revision; implementations and the
+Status: **FROZEN** for milestone 1 (rev 1.1, 2026-10-23: runtime measurement in §4, from security review; rev 1.2: operator organizations in §7; rev 1.3: quote-purpose domain separation + operator-bound registration in §5/§7, combined deployment in SPEC-COMBO.md). Changes require an explicit spec revision; implementations and the
 locked tests (`packages/shared/test`, `e2e/test`) are written against this document.
 
 Notation: `‖` = byte concatenation. `u16le/u32le` little-endian, `u64be` big-endian. `utf8(s)` = UTF-8 bytes.
@@ -151,10 +151,17 @@ holds the ROOT or AK private keys.
 Router generates at boot, in memory only: X25519 keypair `(xs, xp)`, Ed25519 keypair `(es, ep)`.
 
 `key_hash = SHA256(DOMAIN ‖ xp(32) ‖ ep(32))`
-`report_data = key_hash(32) ‖ nonce(32)`
 
-Session quotes use the client's 32-byte random nonce. Registration quotes (§7) use
-`nonce = SHA256(utf8("PLR-v1/register") ‖ utf8(registry_contract_id))`.
+**rev 1.3 — every quote states its purpose**, so no quote can serve another purpose:
+```
+session:       report_data = key_hash ‖ SHA256(utf8("PLR-v1/session-nonce") ‖ client_nonce(32))
+registration:  report_data = key_hash ‖ registration_nonce
+               registration_nonce = SHA256(utf8("PLR-v1/register/2") ‖ u8(len c) ‖ c ‖ u8(len o) ‖ o)
+               c = utf8(registry contract account id), o = utf8(operator account id), both ≤ 64 bytes (NEAR limit)
+```
+Routers and exits only ever produce session report_data for `/v1/attestation`; the raw client nonce never appears in a
+quote. Producing a registration quote from a session request would need a SHA-256 preimage. Binding the operator means a
+registration quote can only be submitted by the operator account the enclave chose (its configured `PLR_OPERATOR_ID`).
 
 ---
 
@@ -178,9 +185,7 @@ Listens on a Unix socket under the run directory (mode 0600); path given to the 
   "ed25519": "<64 hex>"
 }
 ```
-Bad/missing nonce → `400 {"error":"E_BAD_REQUEST"}`. (rev 1.2) A nonce equal to the registration nonce (§5) of any registry the
-instance is configured for (`PLR_REGISTRY` / `PLR_VPN_REGISTRY`) is a bad nonce: a session quote never doubles as a
-registration quote.
+Bad/missing nonce → `400 {"error":"E_BAD_REQUEST"}`.
 
 ### 6.3 `POST /v1/private/chat`
 Request body (JSON, ≤ 1 MiB):
@@ -260,14 +265,10 @@ Methods (NEAR: JSON args, hex strings; zero hash `00…00` always rejected):
 4. event log replays to rtmr3 and has a valid boot sequence, `E_EVENT_LOG` / `E_RTMR3`
 5. `SHA256(app_compose) == compose-hash event`, `E_COMPOSE_MISMATCH`
 6. compose and OS measurement allowed, `E_COMPOSE_NOT_ALLOWED` / `E_OS_NOT_ALLOWED`
-7. `report_data == SHA256(DOMAIN‖x25519‖ed25519) ‖ SHA256("PLR-v1/register" ‖ contract_account_id)`, `E_REPORT_DATA`
+7. `report_data == SHA256(DOMAIN‖x25519‖ed25519) ‖ registration_nonce(current_account_id, predecessor_account_id)` (§5 rev 1.3), `E_REPORT_DATA`
 
-Re-registering the same key_hash refreshes `expires_at_ms` and keeps `next_seq` and `operator`. Replay of a registration
-quote can only re-register keys whose private halves stay in the enclave and never changes `operator`. Because the
-**first** registration decides `operator` (and so `org_id`, rev 1.2), only the instance's own anchorer may obtain a
-registration quote (§6.2), and a VPN exit reads `get_instance(key).operator` back after registering: if it is not its
-own account it stops serving (fail closed; a restart generates new keys). Binding the operator account into an
-enclave-signed registration is future work.
+Re-registering the same key_hash refreshes `expires_at_ms` and keeps `next_seq` and `operator` (only the bound operator
+can submit it, rev 1.3). Replaying a registration quote can only re-register the same keys under the same operator.
 
 `anchor_receipts`: instance exists, is unexpired, its compose and OS are still allowed; `first_seq == next_seq`;
 `1 ≤ count ≤ 10_000`; `sig` = Ed25519(instance ed25519,
@@ -315,7 +316,7 @@ Fail closed. The first failing check throws `PlrError(code)`; nothing is sent.
 2. quote structure — `E_QUOTE_FORMAT`; tee type — `E_TEE_TYPE`
 3. signature chain to trusted root (root from config, MUST equal registry `get_root`) — `E_ROOT_UNTRUSTED` / `E_QUOTE_SIG`
 4. DEBUG bit clear — `E_DEBUG_TD`
-5. `report_data[0:32] == key_hash(x25519, ed25519)` — `E_REPORT_DATA_KEYS`; `report_data[32:64] == nonce` — `E_NONCE`
+5. `report_data[0:32] == key_hash(x25519, ed25519)` — `E_REPORT_DATA_KEYS`; `report_data[32:64] == SHA256("PLR-v1/session-nonce" ‖ nonce)` — `E_NONCE` (rev 1.3)
 6. event log digests + boot sequence — `E_EVENT_LOG`; replay == rtmr3 — `E_RTMR3`
 7. `SHA256(app_compose bytes) == compose-hash` — `E_COMPOSE_MISMATCH`
 8. registry `is_allowed(compose, os)` — `E_COMPOSE_NOT_ALLOWED` / `E_OS_NOT_ALLOWED` (each checked separately)
@@ -361,8 +362,9 @@ bootEvents(composeBytes: Uint8Array, instanceId: Uint8Array): TdxEvent[]
 
 // key binding
 keyHash(x25519: Uint8Array, ed25519: Uint8Array): Uint8Array
-reportData(x25519: Uint8Array, ed25519: Uint8Array, nonce: Uint8Array): Uint8Array
-registrationNonce(contractId: string): Uint8Array
+reportData(x25519, ed25519, clientNonce): Uint8Array                  // rev 1.3: key_hash ‖ SHA256("PLR-v1/session-nonce" ‖ nonce)
+registrationNonce(contractId: string, operatorId: string): Uint8Array   // rev 1.3 (§5)
+registrationReportData(x25519, ed25519, contractId: string, operatorId: string): Uint8Array
 
 // attestation
 interface Attester { getQuote(reportData: Uint8Array): Promise<{ quote: Uint8Array; eventLog: TdxEvent[] }> }

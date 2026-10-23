@@ -7,6 +7,7 @@ import {
   MockTdxAttester,
   MemoryRegistry,
   keyHash,
+  reportData,
   toHex,
   osMeasurement,
   mockOsReport,
@@ -85,7 +86,7 @@ export function fixture(opts: { debug?: boolean; composeStr?: string } = {}): Fi
     async bundle(nonce, over = {}) {
       const bxp = over.xp ?? xp, bep = over.ep ?? ep;
       // Quote always binds the REAL keys; `over.xp/ep` only changes what the bundle advertises.
-      const rd = cat(keyHash(xp, ep), nonce);
+      const rd = reportData(xp, ep, nonce);
       const { quote, eventLog } = await (over.attester ?? attester).getQuote(rd);
       return {
         v: "PLR-v1", root_kind: "MOCK", quote: hex(quote), event_log: eventLog,

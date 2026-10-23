@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { x25519, ed25519 } from "@noble/curves/ed25519.js";
 import { randomBytes } from "@noble/hashes/utils.js";
-import { keyHash, reportData, registrationNonce, anchorMessage, merkleRoot, toHex, type TdxEvent } from "@plr/shared";
+import { keyHash, reportData, registrationNonce, registrationReportData, anchorMessage, merkleRoot, toHex, type TdxEvent } from "@plr/shared";
 import { startStack, type Stack } from "../src/harness.js";
 
 const GAS = "300000000000000";
@@ -25,8 +25,9 @@ function keys() {
   return { xs, xp: x25519.getPublicKey(xs), es, ep: ed25519.getPublicKey(es) };
 }
 
-async function regArgs(variant: "honest" | "evil-logger" | "debug-td", k = keys(), nonce?: Uint8Array) {
-  const rd = reportData(k.xp, k.ep, nonce ?? registrationNonce(S.contractId));
+/** Registration quote for `operator` (§5 rev 1.3); with `sessionNonce`, a SESSION quote instead (must never register). */
+async function regArgs(variant: "honest" | "evil-logger" | "debug-td", k = keys(), sessionNonce?: Uint8Array, operator?: string) {
+  const rd = sessionNonce ? reportData(k.xp, k.ep, sessionNonce) : registrationReportData(k.xp, k.ep, S.contractId, operator ?? S.accounts.operator);
   const a = await S.attestFor(variant, rd);
   return {
     k,
@@ -92,6 +93,19 @@ describe("register_instance — on-chain quote verification", () => {
   it("E_REPORT_DATA: session nonce instead of the registration nonce", async () => {
     const { args } = await regArgs("honest", keys(), randomBytes(32));
     await rejectsWith(register(args), /E_REPORT_DATA/);
+  });
+
+  it("E_REPORT_DATA: a session quote whose client nonce IS the registration nonce (hijack attempt, rev 1.3)", async () => {
+    const { args } = await regArgs("honest", keys(), registrationNonce(S.contractId, S.accounts.stranger));
+    await rejectsWith(register(args, "stranger"), /E_REPORT_DATA/);
+  });
+
+  it("E_REPORT_DATA: a registration quote bound to the operator cannot be submitted by anyone else", async () => {
+    const { args } = await regArgs("honest");                 // bound to accounts.operator
+    await rejectsWith(register(args, "stranger"), /E_REPORT_DATA/);
+    const mine = await regArgs("honest", keys(), undefined, S.accounts.stranger);
+    await register(mine.args, "stranger");                     // bound to stranger, submitted by stranger: fine
+    expect((await S.registry.getInstance(toHex(keyHash(mine.k.xp, mine.k.ep))))!.operator).toBe(S.accounts.stranger);
   });
 
   it("E_REPORT_DATA: claimed keys differ from the quoted keys", async () => {

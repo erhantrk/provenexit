@@ -2,7 +2,7 @@
 import { describe, it, expect } from "vitest";
 import { p256 } from "@noble/curves/nist.js";
 import {
-  MockRoot, MockTdxAttester, MockVerifier, parseQuote, replayRtmr3, keyHash, reportData, registrationNonce,
+  MockRoot, MockTdxAttester, MockVerifier, parseQuote, replayRtmr3, keyHash, reportData, registrationNonce, registrationReportData,
   PlrError, MOCK_QE_VENDOR_ID, isDebug,
 } from "../src/index.js";
 import { sha256, enc, cat, hex, COMPOSE_STR, randomBytes } from "./helpers.js";
@@ -12,13 +12,29 @@ const compose = enc(COMPOSE_STR);
 const p256verify = (sig: Uint8Array, msg: Uint8Array, pub64: Uint8Array) =>
   p256.verify(sig, msg, cat(new Uint8Array([4]), pub64), { prehash: true, lowS: true });
 
-describe("key binding", () => {
-  it("keyHash / reportData / registrationNonce follow §5", () => {
+describe("key binding (§5 rev 1.3: quote-purpose domain separation)", () => {
+  const lp = (str: string) => { const b = enc(str); return cat(new Uint8Array([b.length]), b); };
+  it("keyHash / reportData / registrationNonce / registrationReportData follow §5", () => {
     const x = randomBytes(32), e = randomBytes(32), n = randomBytes(32);
-    expect(hex(keyHash(x, e))).toBe(hex(sha256(cat(enc("PLR-v1"), x, e))));
-    expect(reportData(x, e, n)).toEqual(cat(sha256(cat(enc("PLR-v1"), x, e)), n));
-    expect(registrationNonce("registry.test.near")).toEqual(sha256(cat(enc("PLR-v1/register"), enc("registry.test.near"))));
+    const kh = sha256(cat(enc("PLR-v1"), x, e));
+    expect(hex(keyHash(x, e))).toBe(hex(kh));
+    expect(reportData(x, e, n)).toEqual(cat(kh, sha256(cat(enc("PLR-v1/session-nonce"), n))));
+    const rn = sha256(cat(enc("PLR-v1/register/2"), lp("registry.test.near"), lp("op.test.near")));
+    expect(registrationNonce("registry.test.near", "op.test.near")).toEqual(rn);
+    expect(registrationReportData(x, e, "registry.test.near", "op.test.near")).toEqual(cat(kh, rn));
     expect(() => reportData(x, e, randomBytes(31))).toThrow(PlrError);
+  });
+  it("length prefixes make (contract, operator) unambiguous", () => {
+    expect(registrationNonce("ab", "c")).not.toEqual(registrationNonce("a", "bc"));
+    expect(() => registrationNonce("", "op")).toThrow(PlrError);
+    expect(() => registrationNonce("c".repeat(65), "op")).toThrow(PlrError);
+    expect(() => registrationNonce("reg", "o".repeat(65))).toThrow(PlrError);
+  });
+  it("a session quote can never equal a registration quote, whatever nonce the client picks", () => {
+    const x = randomBytes(32), e = randomBytes(32);
+    const reg = registrationReportData(x, e, "registry.test.near", "attacker.test.near");
+    // the attacker asks for a session quote using the registration nonce itself as its "client nonce"
+    expect(reportData(x, e, registrationNonce("registry.test.near", "attacker.test.near"))).not.toEqual(reg);
   });
 });
 
