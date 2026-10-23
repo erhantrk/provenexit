@@ -2,5 +2,5 @@
   "extends": "../tsconfig.base.json",
   "compilerOptions": { "rootDir": "src", "outDir": "dist" },
   "include": ["src"],
-  "references": [{ "path": "../packages/shared" }, { "path": "../client" }]
+  "references": [{ "path": "../packages/shared" }, { "path": "../client" }, { "path": "../enclave" }]
 }

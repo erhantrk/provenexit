@@ -174,7 +174,7 @@ describe("anchor_receipts", () => {
   });
 
   it("E_SEQ: count out of range", async () => {
-    await rejectsWith(anchor(3, 0), /E_SEQ/);
+    await rejectsWith(anchor(3, 0, { root: randomBytes(32) }), /E_SEQ/);
     await rejectsWith(anchor(3, 10_001), /E_SEQ/);
   });
 

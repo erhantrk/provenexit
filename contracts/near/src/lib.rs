@@ -1,0 +1,553 @@
+//! PLR-v1 registry contract (SPEC §7): owner-governed allowlist of compose hashes and OS measurements, on-chain
+//! verification of MOCK TDX registration quotes, and Ed25519-authorised Merkle anchoring of receipts.
+//!
+//! Every failure panics with a SPEC error code (see [`errors`]); panic messages never echo caller input.
+
+pub mod binding;
+pub mod bytes;
+mod ctx;
+pub mod ecdsa;
+pub mod errors;
+pub mod events;
+pub mod eventlog;
+pub mod hash;
+pub mod quote;
+pub mod verify;
+
+#[cfg(test)]
+mod test_host;
+#[cfg(test)]
+mod tests;
+
+use near_sdk::serde_json::{json, Value};
+use near_sdk::store::{LookupMap, LookupSet, Vector};
+use near_sdk::{env, near, AccountId, BorshStorageKey, NearToken, PanicOnDefault, Promise};
+
+use crate::binding::anchor_message;
+use crate::bytes::{decode_hex, decode_hex_array, encode_hex, is_all_zero};
+use crate::errors::*;
+use crate::verify::{verify_registration, Policy, Registration, RootKind};
+
+/// Default instance TTL: 24 h.
+pub const DEFAULT_INSTANCE_TTL_MS: u64 = 86_400_000;
+/// Upper bound for the instance TTL: 365 days.
+pub const MAX_INSTANCE_TTL_MS: u64 = 365 * 86_400_000;
+/// `quote` argument bound: 4 KiB of hex (SPEC §7 NEAR notes).
+pub const MAX_QUOTE_HEX_LEN: usize = 4096;
+/// `app_compose` argument bound: 8 KiB (SPEC §7 NEAR notes).
+pub const MAX_APP_COMPOSE_LEN: usize = 8 * 1024;
+/// `anchor_receipts` batch size bounds.
+pub const MAX_ANCHOR_COUNT: u64 = 10_000;
+/// Upper bound of the per-instance anchor storage prepayment kept from a registration deposit (0.05 NEAR,
+/// roughly 35 anchors); any deposit beyond registration storage + this credit is refunded.
+pub const MAX_ANCHOR_CREDIT_YOCTO: u128 = 50_000_000_000_000_000_000_000;
+
+#[derive(BorshStorageKey)]
+#[near(serializers = [borsh])]
+enum StorageKey {
+    AllowedCompose,
+    AllowedOs,
+    Instances,
+    Anchors,
+    AnchorCredit,
+}
+
+/// A registered router instance (SPEC §7 `Instance`).
+#[near(serializers = [borsh])]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Instance {
+    pub compose_hash: [u8; 32],
+    pub os_measurement: [u8; 32],
+    pub x25519: [u8; 32],
+    pub ed25519: [u8; 32],
+    pub operator: AccountId,
+    pub registered_at_ms: u64,
+    pub expires_at_ms: u64,
+    pub next_seq: u64,
+}
+
+/// An anchored receipt batch (SPEC §7 `Anchor`; `id` is its index).
+#[near(serializers = [borsh])]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Anchor {
+    pub key_hash: [u8; 32],
+    pub root: [u8; 32],
+    pub first_seq: u64,
+    pub count: u64,
+    pub at_ms: u64,
+}
+
+/// `get_root` view.
+#[near(serializers = [json])]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RootView {
+    pub kind: String,
+    pub p256: String,
+}
+
+/// `get_instance` view (SPEC §10 `InstanceRecord`; u64 fields as JSON numbers).
+#[near(serializers = [json])]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstanceView {
+    pub compose_hash: String,
+    pub os_measurement: String,
+    pub x25519: String,
+    pub ed25519: String,
+    pub operator: AccountId,
+    pub registered_at_ms: u64,
+    pub expires_at_ms: u64,
+    pub next_seq: u64,
+}
+
+/// `get_anchor` view.
+#[near(serializers = [json])]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnchorView {
+    pub id: u64,
+    pub key_hash: String,
+    pub root: String,
+    pub first_seq: u64,
+    pub count: u64,
+    pub at_ms: u64,
+}
+
+impl From<&Instance> for InstanceView {
+    fn from(i: &Instance) -> Self {
+        Self {
+            compose_hash: encode_hex(&i.compose_hash),
+            os_measurement: encode_hex(&i.os_measurement),
+            x25519: encode_hex(&i.x25519),
+            ed25519: encode_hex(&i.ed25519),
+            operator: i.operator.clone(),
+            registered_at_ms: i.registered_at_ms,
+            expires_at_ms: i.expires_at_ms,
+            next_seq: i.next_seq,
+        }
+    }
+}
+
+#[near(contract_state)]
+#[derive(PanicOnDefault)]
+pub struct Registry {
+    owner: AccountId,
+    pending_owner: Option<AccountId>,
+    root_kind: RootKind,
+    root_p256: [u8; 64],
+    allowed_compose: LookupSet<[u8; 32]>,
+    allowed_os: LookupSet<[u8; 32]>,
+    instances: LookupMap<[u8; 32], Instance>,
+    anchors: Vector<Anchor>,
+    instance_ttl_ms: u64,
+    /// Prepaid anchor storage per instance (yoctoNEAR), funded from registration deposits. `anchor_receipts`
+    /// draws on it when the caller attaches no (or too little) deposit, so the contract balance never pays.
+    anchor_credit: LookupMap<[u8; 32], u128>,
+}
+
+// ---------- argument parsing (fail closed, never echo input) ----------
+
+/// A 32-byte hash argument: strict lowercase hex (`E_BAD_HEX`), never all-zero (`E_ZERO_HASH`).
+fn hash32_arg(s: &str) -> [u8; 32] {
+    let h: [u8; 32] = decode_hex_array(s).unwrap_or_else(|| fail_with(E_BAD_HEX, "expected 32-byte lowercase hex"));
+    if is_all_zero(&h) {
+        fail_with(E_ZERO_HASH, "zero hash");
+    }
+    h
+}
+
+/// A 32-byte public key argument: strict lowercase hex (`E_BAD_HEX`), never all-zero (`E_BAD_INPUT`).
+fn key32_arg(s: &str) -> [u8; 32] {
+    let k: [u8; 32] = decode_hex_array(s).unwrap_or_else(|| fail_with(E_BAD_HEX, "expected 32-byte lowercase hex key"));
+    if is_all_zero(&k) {
+        fail_with(E_BAD_INPUT, "zero key");
+    }
+    k
+}
+
+/// View-side hash parsing: malformed or zero hashes are simply "not present" (fail closed, no panic).
+fn hash32_view(s: &str) -> Option<[u8; 32]> {
+    decode_hex_array::<32>(s).filter(|h| !is_all_zero(h))
+}
+
+/// Root key arguments: kind `MOCK`|`INTEL` and a valid P-256 point as 128 hex chars.
+fn root_args(kind: &str, p256: &str) -> (RootKind, [u8; 64]) {
+    let kind = RootKind::parse(kind).unwrap_or_else(|| fail_with(E_BAD_INPUT, "root kind must be MOCK or INTEL"));
+    let key: [u8; 64] = decode_hex_array(p256).unwrap_or_else(|| fail_with(E_BAD_HEX, "root p256 must be 64-byte hex"));
+    if !ecdsa::is_valid_pub(&key) {
+        fail_with(E_BAD_INPUT, "root p256 is not a valid P-256 point");
+    }
+    (kind, key)
+}
+
+fn ttl_arg(ttl: Option<u64>) -> u64 {
+    let ttl = ttl.unwrap_or(DEFAULT_INSTANCE_TTL_MS);
+    if ttl == 0 || ttl > MAX_INSTANCE_TTL_MS {
+        fail_with(E_BAD_INPUT, "instance_ttl_ms out of range");
+    }
+    ttl
+}
+
+impl Policy for Registry {
+    fn root(&self) -> (RootKind, [u8; 64]) {
+        (self.root_kind, self.root_p256)
+    }
+    fn compose_allowed(&self, h: &[u8; 32]) -> bool {
+        self.allowed_compose.contains(h)
+    }
+    fn os_allowed(&self, h: &[u8; 32]) -> bool {
+        self.allowed_os.contains(h)
+    }
+}
+
+#[near]
+impl Registry {
+    /// Initialises the registry. `#[private]`: only the contract account itself may initialise (no front-running
+    /// between deploy and init). `instance_ttl_ms` defaults to 86 400 000.
+    #[init]
+    #[private]
+    #[deny_unknown_arguments]
+    pub fn new(owner_id: AccountId, root_kind: String, root_p256: String, instance_ttl_ms: Option<u64>) -> Self {
+        let (kind, key) = root_args(&root_kind, &root_p256);
+        let this = Self {
+            owner: owner_id,
+            pending_owner: None,
+            root_kind: kind,
+            root_p256: key,
+            allowed_compose: LookupSet::new(StorageKey::AllowedCompose),
+            allowed_os: LookupSet::new(StorageKey::AllowedOs),
+            instances: LookupMap::new(StorageKey::Instances),
+            anchors: Vector::new(StorageKey::Anchors),
+            instance_ttl_ms: ttl_arg(instance_ttl_ms),
+            anchor_credit: LookupMap::new(StorageKey::AnchorCredit),
+        };
+        events::emit(events::ROOT_SET, json!({ "kind": kind.as_str(), "p256": encode_hex(&key) }));
+        this
+    }
+
+    // ---------- owner policy ----------
+
+    #[deny_unknown_arguments]
+    pub fn allow_compose(&mut self, hash: String) {
+        self.assert_owner();
+        let h = hash32_arg(&hash);
+        self.allowed_compose.insert(h);
+        events::emit(events::COMPOSE_ALLOWED, json!({ "hash": encode_hex(&h) }));
+    }
+
+    #[deny_unknown_arguments]
+    pub fn revoke_compose(&mut self, hash: String) {
+        self.assert_owner();
+        let h = hash32_arg(&hash);
+        self.allowed_compose.remove(&h);
+        events::emit(events::COMPOSE_REVOKED, json!({ "hash": encode_hex(&h) }));
+    }
+
+    #[deny_unknown_arguments]
+    pub fn allow_os(&mut self, hash: String) {
+        self.assert_owner();
+        let h = hash32_arg(&hash);
+        self.allowed_os.insert(h);
+        events::emit(events::OS_ALLOWED, json!({ "hash": encode_hex(&h) }));
+    }
+
+    #[deny_unknown_arguments]
+    pub fn revoke_os(&mut self, hash: String) {
+        self.assert_owner();
+        let h = hash32_arg(&hash);
+        self.allowed_os.remove(&h);
+        events::emit(events::OS_REVOKED, json!({ "hash": encode_hex(&h) }));
+    }
+
+    #[deny_unknown_arguments]
+    pub fn set_root(&mut self, kind: String, p256: String) {
+        self.assert_owner();
+        let (kind, key) = root_args(&kind, &p256);
+        self.root_kind = kind;
+        self.root_p256 = key;
+        events::emit(events::ROOT_SET, json!({ "kind": kind.as_str(), "p256": encode_hex(&key) }));
+    }
+
+    /// Step 1 of the two-step ownership transfer. Proposing again replaces the pending owner.
+    #[deny_unknown_arguments]
+    pub fn propose_owner(&mut self, id: AccountId) {
+        self.assert_owner();
+        events::emit(events::OWNER_PROPOSED, json!({ "owner": self.owner, "pending_owner": id }));
+        self.pending_owner = Some(id);
+    }
+
+    /// Step 2: only the pending owner can accept.
+    pub fn accept_owner(&mut self) {
+        let caller = ctx::predecessor_account_id();
+        if self.pending_owner.as_ref() != Some(&caller) {
+            fail_with(E_UNAUTHORIZED, "caller is not the pending owner");
+        }
+        events::emit(events::OWNER_ACCEPTED, json!({ "old_owner": self.owner, "new_owner": caller }));
+        self.owner = caller;
+        self.pending_owner = None;
+    }
+
+    // ---------- instances ----------
+
+    /// Verifies a registration quote on-chain (SPEC §7 steps 1-7) and records/refreshes the instance.
+    /// The caller pays for the storage it adds. Deposit beyond that tops up the instance's anchor storage credit
+    /// (up to [`MAX_ANCHOR_CREDIT_YOCTO`]); the rest is refunded. Returns the key hash (hex).
+    #[payable]
+    #[deny_unknown_arguments]
+    pub fn register_instance(
+        &mut self,
+        quote: String,
+        event_log: Value,
+        app_compose: String,
+        x25519: String,
+        ed25519: String,
+    ) -> String {
+        if quote.len() > MAX_QUOTE_HEX_LEN {
+            fail_with(E_QUOTE_FORMAT, "quote too large");
+        }
+        let quote = decode_hex(&quote).unwrap_or_else(|| fail_with(E_QUOTE_FORMAT, "quote is not lowercase hex"));
+        if app_compose.is_empty() || app_compose.len() > MAX_APP_COMPOSE_LEN {
+            fail_with(E_BAD_INPUT, "app_compose size");
+        }
+        let xp = key32_arg(&x25519);
+        let ep = key32_arg(&ed25519);
+        let contract_id = ctx::current_account_id();
+
+        let reg = Registration { quote: &quote, event_log: &event_log, app_compose: app_compose.as_bytes(), x25519: &xp, ed25519: &ep };
+        let v = verify_registration(&reg, &*self, contract_id.as_str()).or_fail();
+
+        let now = ctx::block_timestamp_ms();
+        let expires_at_ms = now.checked_add(self.instance_ttl_ms).unwrap_or_else(|| fail_with(E_BAD_INPUT, "time overflow"));
+        let operator = ctx::predecessor_account_id();
+        let storage_before = env::storage_usage();
+        let refreshed = match self.instances.get_mut(&v.key_hash) {
+            Some(rec) => {
+                // Same keys ⇒ same enclave boot. Keep operator, registered_at_ms and next_seq; refresh the rest.
+                rec.compose_hash = v.compose_hash;
+                rec.os_measurement = v.os_measurement;
+                rec.expires_at_ms = expires_at_ms;
+                true
+            }
+            None => {
+                self.instances.insert(
+                    v.key_hash,
+                    Instance {
+                        compose_hash: v.compose_hash,
+                        os_measurement: v.os_measurement,
+                        x25519: xp,
+                        ed25519: ep,
+                        operator: operator.clone(),
+                        registered_at_ms: now,
+                        expires_at_ms,
+                        next_seq: 0,
+                    },
+                );
+                false
+            }
+        };
+        self.instances.flush();
+        let added = env::storage_usage().saturating_sub(storage_before);
+        let deposit = ctx::attached_deposit().as_yoctonear();
+        let cost = storage_cost(added);
+        if deposit < cost {
+            fail_with(E_DEPOSIT, "attached deposit does not cover storage");
+        }
+        let mut excess = deposit - cost;
+        if excess > 0 {
+            // Top up the anchor credit. Its own map entry costs storage too, paid from the same excess.
+            let existing = self.anchor_credit.get(&v.key_hash).copied();
+            let credit = existing.unwrap_or(0);
+            let room = MAX_ANCHOR_CREDIT_YOCTO.saturating_sub(credit);
+            if room > 0 {
+                let before = env::storage_usage();
+                self.anchor_credit.insert(v.key_hash, credit);
+                self.anchor_credit.flush();
+                let entry_cost = storage_cost(env::storage_usage().saturating_sub(before));
+                if excess > entry_cost {
+                    let add = (excess - entry_cost).min(room);
+                    self.anchor_credit.insert(v.key_hash, credit + add);
+                    self.anchor_credit.flush();
+                    excess -= entry_cost + add;
+                } else if existing.is_none() {
+                    // Not enough to pay for a credit entry: undo it and refund everything.
+                    self.anchor_credit.remove(&v.key_hash);
+                    self.anchor_credit.flush();
+                }
+            }
+        }
+        if excess > 0 {
+            Promise::new(operator.clone()).transfer(NearToken::from_yoctonear(excess)).detach();
+        }
+
+        events::emit(
+            events::INSTANCE_REGISTERED,
+            json!({
+                "key_hash": encode_hex(&v.key_hash),
+                "compose_hash": encode_hex(&v.compose_hash),
+                "os_measurement": encode_hex(&v.os_measurement),
+                "x25519": encode_hex(&xp),
+                "ed25519": encode_hex(&ep),
+                "operator": operator,
+                "expires_at_ms": expires_at_ms,
+                "refreshed": refreshed,
+            }),
+        );
+        encode_hex(&v.key_hash)
+    }
+
+    // ---------- receipts ----------
+
+    /// Anchors the Merkle root of receipts `[first_seq, first_seq + count)` for an instance. Returns the anchor id.
+    ///
+    /// The storage the anchor adds is paid by the attached deposit (excess refunded to the caller) and, for
+    /// any shortfall, by the instance's prepaid anchor credit; otherwise `E_DEPOSIT`. The contract's own
+    /// balance never pays, so a registered instance cannot drain it.
+    #[payable]
+    #[deny_unknown_arguments]
+    pub fn anchor_receipts(&mut self, key_hash: String, root: String, first_seq: u64, count: u64, sig: String) -> u64 {
+        let kh = hash32_arg(&key_hash);
+        let root = hash32_arg(&root);
+        let sig: [u8; 64] = decode_hex_array(&sig).unwrap_or_else(|| fail_with(E_BAD_HEX, "sig must be 64-byte hex"));
+        let now = ctx::block_timestamp_ms();
+
+        let inst = match self.instances.get(&kh) {
+            Some(i) if now < i.expires_at_ms => i.clone(),
+            _ => fail_with(E_INSTANCE_NOT_REGISTERED, ""),
+        };
+        if !self.allowed_compose.contains(&inst.compose_hash) {
+            fail_with(E_COMPOSE_NOT_ALLOWED, "");
+        }
+        if !self.allowed_os.contains(&inst.os_measurement) {
+            fail_with(E_OS_NOT_ALLOWED, "");
+        }
+        if count == 0 || count > MAX_ANCHOR_COUNT {
+            fail_with(E_SEQ, "count out of range");
+        }
+        let msg = anchor_message(ctx::current_account_id().as_str(), &kh, &root, first_seq, count);
+        if !env::ed25519_verify(&sig, &msg, &inst.ed25519) {
+            fail_with(E_ANCHOR_SIG, "");
+        }
+        if first_seq != inst.next_seq {
+            fail_with(E_SEQ, "first_seq != next_seq");
+        }
+        let next = first_seq.checked_add(count).unwrap_or_else(|| fail_with(E_SEQ, "sequence overflow"));
+
+        let id = u64::from(self.anchors.len());
+        if self.anchors.len() == u32::MAX {
+            fail_with(E_SEQ, "anchor log full");
+        }
+        let storage_before = env::storage_usage();
+        if let Some(rec) = self.instances.get_mut(&kh) {
+            rec.next_seq = next;
+        }
+        self.instances.flush();
+        self.anchors.push(Anchor { key_hash: kh, root, first_seq, count, at_ms: now });
+        self.anchors.flush();
+        let added = env::storage_usage().saturating_sub(storage_before);
+        self.pay_anchor_storage(&kh, storage_cost(added));
+        events::emit(
+            events::RECEIPTS_ANCHORED,
+            json!({
+                "id": id,
+                "key_hash": encode_hex(&kh),
+                "root": encode_hex(&root),
+                "first_seq": first_seq,
+                "count": count,
+                "at_ms": now,
+            }),
+        );
+        id
+    }
+
+    // ---------- views ----------
+
+    pub fn is_allowed(&self, compose_hash: String, os_measurement: String) -> bool {
+        self.is_compose_allowed(compose_hash) && self.is_os_allowed(os_measurement)
+    }
+
+    pub fn is_compose_allowed(&self, hash: String) -> bool {
+        hash32_view(&hash).is_some_and(|h| self.allowed_compose.contains(&h))
+    }
+
+    pub fn is_os_allowed(&self, hash: String) -> bool {
+        hash32_view(&hash).is_some_and(|h| self.allowed_os.contains(&h))
+    }
+
+    /// The live instance for `key_hash`, or `null` if unknown, expired, or `key_hash` is malformed.
+    pub fn get_instance(&self, key_hash: String) -> Option<InstanceView> {
+        let kh = hash32_view(&key_hash)?;
+        let now = ctx::block_timestamp_ms();
+        self.instances.get(&kh).filter(|i| now < i.expires_at_ms).map(InstanceView::from)
+    }
+
+    pub fn get_root(&self) -> RootView {
+        RootView { kind: self.root_kind.as_str().to_string(), p256: encode_hex(&self.root_p256) }
+    }
+
+    pub fn get_anchor(&self, id: u64) -> Option<AnchorView> {
+        let idx = u32::try_from(id).ok()?;
+        self.anchors.get(idx).map(|a| AnchorView {
+            id,
+            key_hash: encode_hex(&a.key_hash),
+            root: encode_hex(&a.root),
+            first_seq: a.first_seq,
+            count: a.count,
+            at_ms: a.at_ms,
+        })
+    }
+
+    pub fn anchor_count(&self) -> u64 {
+        u64::from(self.anchors.len())
+    }
+
+    pub fn get_owner(&self) -> AccountId {
+        self.owner.clone()
+    }
+
+    pub fn get_pending_owner(&self) -> Option<AccountId> {
+        self.pending_owner.clone()
+    }
+
+    pub fn get_instance_ttl_ms(&self) -> u64 {
+        self.instance_ttl_ms
+    }
+
+    /// Remaining prepaid anchor storage credit of an instance, in yoctoNEAR (decimal string).
+    pub fn get_anchor_credit(&self, key_hash: String) -> String {
+        hash32_view(&key_hash).and_then(|kh| self.anchor_credit.get(&kh).copied()).unwrap_or(0).to_string()
+    }
+}
+
+/// Cost of `bytes` of contract storage in yoctoNEAR.
+fn storage_cost(bytes: u64) -> u128 {
+    env::storage_byte_cost()
+        .as_yoctonear()
+        .checked_mul(u128::from(bytes))
+        .unwrap_or_else(|| fail_with(E_DEPOSIT, "storage cost overflow"))
+}
+
+impl Registry {
+    fn assert_owner(&self) {
+        if ctx::predecessor_account_id() != self.owner {
+            fail_with(E_UNAUTHORIZED, "only the owner");
+        }
+    }
+
+    /// Pays `cost` yoctoNEAR of anchor storage: attached deposit first (excess refunded to the caller), then
+    /// the instance's prepaid credit. Panics with `E_DEPOSIT` (rolling the anchor back) if neither suffices.
+    fn pay_anchor_storage(&mut self, kh: &[u8; 32], cost: u128) {
+        let deposit = ctx::attached_deposit().as_yoctonear();
+        if deposit >= cost {
+            let refund = deposit - cost;
+            if refund > 0 {
+                Promise::new(ctx::predecessor_account_id()).transfer(NearToken::from_yoctonear(refund)).detach();
+            }
+            return;
+        }
+        let shortfall = cost - deposit;
+        let credit = self.anchor_credit.get(kh).copied().unwrap_or(0);
+        if credit < shortfall {
+            fail_with(E_DEPOSIT, "attach a deposit: anchor storage credit exhausted");
+        }
+        self.anchor_credit.insert(*kh, credit - shortfall);
+        self.anchor_credit.flush();
+    }
+}

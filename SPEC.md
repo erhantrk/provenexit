@@ -1,6 +1,6 @@
 # PLR-v1 — Provably-Private LLM Router: Protocol Specification
 
-Status: **FROZEN** for milestone 1. Changes require an explicit spec revision; implementations and the
+Status: **FROZEN** for milestone 1 (rev 1.1, 2026-10-23: runtime measurement in §4, from security review). Changes require an explicit spec revision; implementations and the
 locked tests (`packages/shared/test`, `e2e/test`) are written against this document.
 
 Notation: `‖` = byte concatenation. `u16le/u32le` little-endian, `u64be` big-endian. `utf8(s)` = UTF-8 bytes.
@@ -128,9 +128,15 @@ Reserved names: the five above. Max events: 64. Max payload: 256 bytes.
   "manifest_version": 1,
   "name": "plr-router",
   "policy": { "disk": "none", "egress": [], "logs": "none" },
-  "router": { "bundle_sha256": "<64 hex>", "entry": "router.bundle.mjs" }
+  "router": { "bundle_sha256": "<64 hex>", "entry": "router.bundle.mjs", "node_sha256": "<64 hex>" }
 }
 ```
+**rev 1.1 — runtime measurement.** `llm.runtime_sha256` and `router.node_sha256` pin the executables that see
+plaintext (llama-server / node). Because both are thin launchers, the digest is SHA-256 over a sorted manifest of
+the executable, every non-system dylib it links (transitively) and runtime-loaded plugins (ggml libexec). For
+`llm.kind == "mock"`, `llm.runtime_sha256 == router.node_sha256`. The host refuses to launch on mismatch
+(`E_MEASUREMENT_MISMATCH`), runs private re-hashed copies, and gives the LLM a per-boot API key so only the router can
+reach it; the LLM runs with prompt-cache reuse disabled. Verifiers still hash the compose bytes as received.
 
 The **mock TDX host** (the local stand-in for the dstack guest OS) is the only component that measures:
 it reads `app-compose.json`, hashes the router bundle file and the model/mock-LLM file, refuses to launch

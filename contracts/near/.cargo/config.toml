@@ -1,0 +1,9 @@
+# Native `cargo test` builds only (never wasm).
+#
+# near-sdk refuses to compile off-wasm unless one of a few cfgs/features is set. Its `unit-testing` feature needs
+# `near-vm-runner`, which is not available to this (offline) build, and `cfg(near)` is rejected off-wasm by
+# near-sdk-env. Instead the tests link `src/test_host.rs`, a native implementation of the NEAR host functions,
+# and pass the guard with `cfg(clippy)`; in this dependency tree that cfg is read only by those two guards
+# (checked: grep of all dependency sources). `cargo near build` targets wasm32 and is unaffected.
+[target.'cfg(not(target_arch = "wasm32"))']
+rustflags = ["--cfg", "clippy"]

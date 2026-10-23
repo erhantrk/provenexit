@@ -1,0 +1,30 @@
+[package]
+name = "plr-registry"
+version = "0.1.0"
+edition = "2021"
+description = "PLR-v1 registry: on-chain MOCK TDX quote verification, compose/OS allowlist, receipt anchoring (SPEC §7)"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+near-sdk = "=5.29.1"
+sha2 = { version = "0.10.9", default-features = false }
+# Only used to check that 64-byte x‖y keys are valid P-256 points before compressing them for the host.
+p256 = { version = "0.13.2", default-features = false, features = ["arithmetic"] }
+
+[dev-dependencies]
+# Native test host (src/test_host.rs) implements the NEAR crypto host functions with these crates.
+p256 = { version = "0.13.2", default-features = false, features = ["arithmetic", "ecdsa"] }
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["fast", "zeroize"] }
+
+[profile.release]
+codegen-units = 1
+opt-level = "z"
+lto = true
+debug = false
+panic = "abort"
+overflow-checks = true
+

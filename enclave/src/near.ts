@@ -1,0 +1,115 @@
+/**
+ * NEAR implementation of the registry operations the router performs (SPEC §7): `register_instance`,
+ * `anchor_receipts` and the views needed to resynchronise anchoring state. Every view result is
+ * shape-checked; nothing returned by the RPC is trusted blindly.
+ */
+import { Account, JsonRpcProvider, KeyPairSigner, type KeyPairString } from "near-api-js";
+import { PlrError, isHex, type TdxEvent } from "@plr/shared";
+
+export interface RegisterArgs {
+  quote: string;
+  event_log: TdxEvent[];
+  app_compose: string;
+  x25519: string;
+  ed25519: string;
+}
+
+export interface AnchorArgs {
+  key_hash: string;
+  root: string;
+  first_seq: number;
+  count: number;
+  sig: string;
+}
+
+export interface AnchorView {
+  id: number;
+  key_hash: string;
+  root: string;
+  first_seq: number;
+  count: number;
+}
+
+/** What the router needs from the registry chain. Implemented for NEAR below; faked in unit tests. */
+export interface RegistryWriter {
+  readonly contractId: string;
+  registerInstance(args: RegisterArgs): Promise<void>;
+  /** Returns the contract's return value (the anchor id if the contract returns one). */
+  anchorReceipts(args: AnchorArgs): Promise<unknown>;
+  getInstanceNextSeq(keyHash: string): Promise<number | null>;
+  anchorCount(): Promise<number>;
+  getAnchor(id: number): Promise<AnchorView | null>;
+}
+
+export const NEAR_ACCOUNT_RE = /^(?=.{2,64}$)(?:(?:[a-z\d]+[-_])*[a-z\d]+\.)*(?:[a-z\d]+[-_])*[a-z\d]+$/;
+export const NEAR_KEY_RE = /^ed25519:[1-9A-HJ-NP-Za-km-z]{32,128}$/;
+const TGAS = 1_000_000_000_000n;
+
+const isUint = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
+
+export function isAnchorView(a: unknown): a is AnchorView {
+  if (typeof a !== "object" || a === null) return false;
+  const r = a as Record<string, unknown>;
+  return isUint(r.id) && isHex(r.key_hash, 32) && isHex(r.root, 32) && isUint(r.first_seq) && isUint(r.count);
+}
+
+export class NearRegistryWriter implements RegistryWriter {
+  readonly contractId: string;
+  readonly #provider: JsonRpcProvider;
+  readonly #account: Account;
+  readonly #deposit: bigint;
+  readonly #anchorDeposit: bigint;
+
+  constructor(o: { rpcUrl: string; contractId: string; operatorId: string; operatorKey: string; registerDeposit: bigint; anchorDeposit?: bigint }) {
+    if (!NEAR_ACCOUNT_RE.test(o.contractId) || !NEAR_ACCOUNT_RE.test(o.operatorId)) throw new PlrError("E_BAD_INPUT", "account id");
+    if (!NEAR_KEY_RE.test(o.operatorKey)) throw new PlrError("E_BAD_INPUT", "operator key");
+    this.contractId = o.contractId;
+    this.#provider = new JsonRpcProvider({ url: o.rpcUrl });
+    this.#account = new Account(o.operatorId, this.#provider, KeyPairSigner.fromSecretKey(o.operatorKey as KeyPairString));
+    this.#deposit = o.registerDeposit;
+    this.#anchorDeposit = o.anchorDeposit ?? 0n;
+    if (this.#deposit < 0n || this.#anchorDeposit < 0n) throw new PlrError("E_BAD_INPUT", "deposit");
+  }
+
+  async #view(method: string, args: Record<string, unknown>): Promise<unknown> {
+    return this.#provider.callFunction({ contractId: this.contractId, method, args });
+  }
+
+  async #call(methodName: string, args: object, deposit: bigint): Promise<unknown> {
+    return this.#account.callFunction({ contractId: this.contractId, methodName, args: args as Record<string, unknown>, gas: 300n * TGAS, deposit });
+  }
+
+  async registerInstance(args: RegisterArgs): Promise<void> {
+    await this.#call("register_instance", args, this.#deposit);
+  }
+
+  /** Attaches the anchor storage deposit (excess refunded by the contract; shortfall drawn from the prepaid credit). */
+  anchorReceipts(args: AnchorArgs): Promise<unknown> {
+    return this.#call("anchor_receipts", args, this.#anchorDeposit);
+  }
+
+  /** The deposit attached to each `anchor_receipts` call (yoctoNEAR). */
+  get anchorDeposit(): bigint {
+    return this.#anchorDeposit;
+  }
+
+  async getInstanceNextSeq(keyHash: string): Promise<number | null> {
+    const r = await this.#view("get_instance", { key_hash: keyHash });
+    if (r === null || r === undefined) return null;
+    if (typeof r !== "object" || !isUint((r as Record<string, unknown>).next_seq)) throw new PlrError("E_BAD_RESPONSE", "get_instance");
+    return (r as { next_seq: number }).next_seq;
+  }
+
+  async anchorCount(): Promise<number> {
+    const n = await this.#view("anchor_count", {});
+    if (!isUint(n)) throw new PlrError("E_BAD_RESPONSE", "anchor_count");
+    return n;
+  }
+
+  async getAnchor(id: number): Promise<AnchorView | null> {
+    const a = await this.#view("get_anchor", { id });
+    if (a === null || a === undefined) return null;
+    if (!isAnchorView(a)) throw new PlrError("E_BAD_RESPONSE", "get_anchor");
+    return a;
+  }
+}

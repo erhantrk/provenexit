@@ -3,10 +3,24 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./mock-tdx": {
+      "types": "./dist/mock-tdx/host.d.ts",
+      "default": "./dist/mock-tdx/host.js"
+    },
+    "./compose": {
+      "types": "./dist/compose.d.ts",
+      "default": "./dist/compose.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "plr-tdx-host": "./dist/mock-tdx/cli.js"
+  },
   "scripts": {
-    "build": "tsc -b && node build.mjs",
+    "build": "tsc -b && tsc -p evil/tsconfig.json && tsc -p test/tsconfig.json && node build.mjs",
     "test": "vitest run",
-    "start": "node dist/router.bundle.mjs"
+    "start": "node dist/mock-tdx/cli.js launch --compose dist/app-compose.mock.json"
   },
   "dependencies": {
     "@plr/shared": "*",
