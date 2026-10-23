@@ -1,0 +1,27 @@
+{
+  "name": "private-llm-router",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/shared",
+    "enclave",
+    "client",
+    "e2e"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc -b",
+    "test": "npm test -w packages/shared -w client -w enclave --if-present",
+    "test:contract": "cd contracts/near && cargo test",
+    "e2e": "npm test -w e2e"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "^4.0.0",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.0",
+    "tsx": "^4.20.0"
+  }
+}

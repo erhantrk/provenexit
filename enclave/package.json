@@ -1,0 +1,15 @@
+{
+  "name": "@plr/enclave",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b && node build.mjs",
+    "test": "vitest run",
+    "start": "node dist/router.bundle.mjs"
+  },
+  "dependencies": {
+    "@plr/shared": "*",
+    "near-api-js": "^7.3.1"
+  }
+}

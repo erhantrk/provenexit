@@ -1,0 +1,9 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/shared" },
+    { "path": "enclave" },
+    { "path": "client" },
+    { "path": "e2e" }
+  ]
+}
