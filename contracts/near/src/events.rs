@@ -17,6 +17,8 @@ pub const INSTANCE_REGISTERED: &str = "instance_registered";
 pub const RECEIPTS_ANCHORED: &str = "receipts_anchored";
 pub const OPERATOR_APPROVED: &str = "operator_approved";
 pub const OPERATOR_REVOKED: &str = "operator_revoked";
+/// rev 1.3 `migrate`: every compose approval of the rev ≤ 1.2 state was dropped.
+pub const COMPOSE_ALLOWLIST_RESET: &str = "compose_allowlist_reset";
 
 /// Logs one NEP-297 event with a single data entry.
 pub fn emit(event: &str, data: Value) {

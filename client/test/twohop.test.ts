@@ -222,6 +222,14 @@ describe("TwoHopClient — attacks and failures", () => {
     expect(X.stats.tunnels).toBe(0);
   });
 
+  it("rev 1.3: an exit quoting the raw nonce or a registration report_data ⇒ E_NONCE; no inner tunnel", async () => {
+    for (const purpose of ["raw-nonce", "registration"] as const) {
+      X.behaviour.quotePurpose = purpose;
+      expect(await codeOf(two().connect("127.0.0.1", D.port)), purpose).toBe("E_NONCE");
+    }
+    expect(X.stats.tunnels).toBe(0);
+  });
+
   it("a replayed exit attestation ⇒ E_NONCE", async () => {
     X.behaviour.replayAttestation = true;
     await two().attest();

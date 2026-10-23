@@ -11,12 +11,16 @@
  *   const d = await S.startDestination();
  *   S.dns.set("dest.plr.test", ["127.0.0.1"]);   // the test builds' DoH resolver (127.0.0.1:18253)
  *   await S.approveOperator("operator", "org-a");   // two-hop (SPEC-VPN §10): operator organizations
+ *   await S.approveComboBuild("combo-test");          // SPEC-COMBO: router + exit in one TD, approved per registry
+ *   const c = await S.startCombo("combo-test");       // c.routerUrl / c.vpnUrl, registered on both registries
  *   …
  *   await S.stop();
  *
  * Layout: `<repo>/.run/<id>/` is the stack's `runDir` (near-sandbox home under `near/`); the mock host's
  * private socket directories live in the sibling `<repo>/.run/<id>-host/` (a Unix socket cannot be read as a
  * file, and macOS limits socket paths to 104 bytes). Both are removed by `stop()` unless `PLR_KEEP_RUN=1`.
+ * Registration (SPEC §5 rev 1.3) is operator-bound: every launch gets `PLR_OPERATOR_ID` (and a fresh key of that
+ * account), and the enclave binds exactly that account into its registration quote.
  * Nothing listens on a fixed port unless asked to (`rpcPort`, `routerPort`), except the local DoH resolver: the
  * test builds measure `http://127.0.0.1:18253/dns-query` (SPEC-VPN §2), so every stack runs it on exactly that port
  * (one stack at a time on a machine; a busy port fails `startStack`).
@@ -32,7 +36,7 @@ import { randomBytes as nodeRandomBytes } from "node:crypto";
 import { Account, JsonRpcProvider, KeyPair, KeyPairSigner, type KeyPairString } from "near-api-js";
 import { parseIpv4, parseIpv6, toHex, type RegistryReader, type TdxEvent } from "@plr/shared";
 import { NearRegistry } from "@plr/client";
-import { generateRootSecret, measureBoot, measureVpnBoot } from "@plr/enclave/mock-tdx";
+import { generateRootSecret, measureBoot, measureComboBoot, measureVpnBoot } from "@plr/enclave/mock-tdx";
 import { isAttack, startAttackProxy, type AttackProxy } from "./attacks.js";
 import { isVpnAttack, startVpnAttackProxy } from "./vpn-attacks.js";
 import { startManaged, waitFor, type ManagedProcess } from "./procs.js";
@@ -51,6 +55,9 @@ export const VPN_BUILDS = ["vpn-honest", "vpn-honest-test", "vpn-evil-logger"] a
 export type VpnBuild = (typeof VPN_BUILDS)[number];
 export const VPN_VARIANTS = [...VPN_BUILDS, "vpn-mitm-key", "vpn-replay-quote", "vpn-tamper-stream", "vpn-truncate-stream"] as const;
 export type VpnVariant = (typeof VPN_VARIANTS)[number];
+/** SPEC-COMBO §1: the LLM router + VPN exit in one TD; `combo` = production VPN policy, `combo-test` = test policy. */
+export const COMBO_VARIANTS = ["combo", "combo-test"] as const;
+export type ComboVariant = (typeof COMBO_VARIANTS)[number];
 
 export interface StackOptions {
   llm: LlmChoice;
@@ -100,6 +107,32 @@ export interface ExitHandle {
   composeHash: string;
   keyHash: string;
   /** exit + host stdout+stderr (and the attacker proxy's log for network variants). */
+  output(): string;
+  stop(): Promise<void>;
+}
+
+export interface ComboOptions {
+  /** Register both roles at boot (router → LLM registry, exit → VPN registry; default true). Failure ⇒ still serving. */
+  register?: boolean;
+  /** The operator account that registers both roles (default "operator"). */
+  operator?: OperatorAccount;
+  /** Router / exit listen ports (default 0 = ephemeral). */
+  routerPort?: number;
+  exitPort?: number;
+  /** Output label for `onRouterOutput` (default: the variant), `[a-z0-9-]{1,40}`. */
+  label?: string;
+}
+
+/** A combo TD (SPEC-COMBO §4): one measurement, two services with their own keys. */
+export interface ComboHandle {
+  routerUrl: string;
+  vpnUrl: string;
+  composeHash: string;
+  routerKeyHash: string;
+  vpnKeyHash: string;
+  /** The router's listen port (to show that the exit cannot reach it). */
+  routerPort: number;
+  /** host + LLM + router + exit stdout+stderr. */
   output(): string;
   stop(): Promise<void>;
 }
@@ -154,7 +187,14 @@ export interface Stack {
   revokeOperator(account: OperatorAccount): Promise<void>;
   /** The test builds' DoH resolver (always running while the stack is up). */
   dns: StackDns;
-  /** Stops every router, exit, attacker proxy, destination, the DoH resolver and the chain. */
+  /**
+   * SPEC-COMBO §3/§4: the owner allows the combo compose hash + OS measurement (stack's LLM choice) on the LLM registry
+   * (`llm`, router role) and/or the VPN registry (`vpn`, exit role); default both.
+   */
+  approveComboBuild(v: ComboVariant, o?: { llm?: boolean; vpn?: boolean }): Promise<{ composeHash: string; osMeasurement: string }>;
+  /** Launches a combo TD through the mock TDX host; resolves once both services listen and (if registering) both registrations ended. */
+  startCombo(v: ComboVariant, o?: ComboOptions): Promise<ComboHandle>;
+  /** Stops every router, exit, combo, attacker proxy, destination, the DoH resolver and the chain. */
   stop(): Promise<void>;
 }
 
@@ -180,6 +220,7 @@ const INSTANCE_TTL_MS = 86_400_000;
 interface BuildInfo {
   variants: Record<"honest" | "evil-logger", { compose: Record<LlmChoice, { file: string; compose_hash: string }> }>;
   vpn: Record<VpnBuild, { compose: { file: string; compose_hash: string } }>;
+  combo: Record<ComboVariant, { compose: Record<LlmChoice, { file: string; compose_hash: string }> }>;
 }
 
 function loadBuildInfo(): BuildInfo {
@@ -194,6 +235,11 @@ function loadBuildInfo(): BuildInfo {
   }
   for (const v of VPN_BUILDS) {
     if (typeof o.vpn?.[v]?.compose?.file !== "string") throw new Error(`build-info.json: missing vpn/${v} (rebuild: npm run build -w @plr/enclave)`);
+  }
+  for (const v of COMBO_VARIANTS) {
+    for (const k of ["mock", "llama"] as const) {
+      if (typeof o.combo?.[v]?.compose?.[k]?.file !== "string") throw new Error(`build-info.json: missing combo/${v}/${k} (rebuild: npm run build -w @plr/enclave)`);
+    }
   }
   return o;
 }
@@ -218,6 +264,7 @@ function vpnBuildOf(variant: VpnVariant): VpnBuild {
 }
 
 const RUN_ID_RE = /^[a-z0-9][a-z0-9-]{0,40}$/;
+const LABEL_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 // ------------------------------------------------------------------------------------------------ startStack
 
@@ -386,25 +433,37 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
       return { quote, eventLog, appCompose: new TextDecoder("utf-8", { fatal: true }).decode(m.composeBytes) };
     };
 
-    /** One measured launch through the mock TDX host CLI (router or VPN exit). */
+    type Service = "router" | "vpn";
+    /** One measured launch through the mock TDX host CLI (a router, a VPN exit, or both in a combo TD). */
     interface HostLaunch {
-      service: "router" | "vpn";
+      /** The services this TD runs (each prints its own listening + registration lines). */
+      services: readonly Service[];
       /** Output label (log file name in the dev stack). */
       label: string;
-      /** Diagnostics, e.g. "router honest" / "exit vpn-honest-test". */
+      /** Diagnostics, e.g. "router honest" / "exit vpn-honest-test" / "combo combo-test". */
       what: string;
       /** Host CLI arguments after `launch`. */
       hostArgs: string[];
       register: boolean;
-      /** The account that registers the instance (default "operator"). */
+      /** The account that registers the instance(s) (default "operator"). */
       operator?: OperatorAccount;
-      /** The registry variable for this service (`PLR_REGISTRY` / `PLR_VPN_REGISTRY`) → contract id. */
+      /** The registry variable(s) (`PLR_REGISTRY` / `PLR_VPN_REGISTRY`) → contract id. */
       registryEnv: Record<string, string>;
       listenTimeoutMs: number;
     }
+    interface ServiceInfo {
+      url: string;
+      keyHash: string;
+      composeHash: string;
+    }
+    interface HostTd {
+      services: Partial<Record<Service, ServiceInfo>>;
+      output(): string;
+      stop(): Promise<void>;
+    }
 
     /** Launches a measured build through the mock TDX host CLI (separate process, lifeline-bound). */
-    const launchHost = async (l: HostLaunch): Promise<RouterHandle> => {
+    const launchHost = async (l: HostLaunch): Promise<HostTd> => {
       const env: Record<string, string> = {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         HOME: process.env.HOME ?? homedir(),
@@ -412,15 +471,17 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
         PLR_ANCHOR_INTERVAL_MS: String(o.anchorIntervalMs ?? 1000),
       };
       if (l.register) {
-        // A dedicated full-access key per instance on the operator account: no nonce races between instances or
-        // with the harness's own operator calls. (Function-call keys cannot attach the storage deposit.)
+        // A dedicated full-access key per TD on the operator account: no nonce races between TDs or with the
+        // harness's own operator calls (a combo's two services share it; near-api-js retries InvalidNonce).
+        // Function-call keys cannot attach the storage deposit. PLR_OPERATOR_ID is the account the enclave binds
+        // into its registration quote (SPEC §5 rev 1.3): only that account can submit it.
         const op = l.operator ?? "operator";
         const instanceKey = KeyPair.fromRandom("ed25519");
         await signers[op].addFullAccessKey(instanceKey.getPublicKey().toString());
         Object.assign(env, { PLR_NEAR_RPC: rpcUrl, ...l.registryEnv, PLR_OPERATOR_ID: names[op], PLR_OPERATOR_KEY: instanceKey.toString() });
       }
       const proc: ManagedProcess = startManaged({
-        name: `${l.service}:${l.label}`,
+        name: `${l.services.join("+")}:${l.label}`,
         cmd: process.execPath,
         args: [HOST_CLI, "launch", ...l.hostArgs],
         env,
@@ -435,50 +496,63 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
           teardowns.delete(stopProc);
         }));
       teardowns.add(stopProc);
-      if (stopping) await stopProc(); // raced with stack.stop(): the wait below fails fast
+      if (stopping) await stopProc(); // raced with stack.stop(): the waits below fail fast
       try {
-        const m = await waitFor(
-          `${l.what} to listen`,
-          () => {
-            const out = proc.output();
-            const ok = LISTEN_RE[l.service].exec(out);
-            if (ok) return ok;
-            const bad = HOST_FAIL_RE.exec(out);
-            if (bad) throw new Error(`${l.what} failed to start: ${bad[1]}`);
-            if (proc.exited) throw new Error(`${l.what} exited before listening:\n${out.slice(-4000)}`);
-            return undefined;
-          },
-          l.listenTimeoutMs,
-        );
-        const url = m[1]!;
-        await waitFor(`${l.what} /healthz`, async () => {
-          if (proc.exited) throw new Error(`${l.what} exited`);
-          try {
-            const r = await fetch(`${url}/healthz`, { signal: AbortSignal.timeout(2000) });
-            const j = r.ok ? ((await r.json()) as { ok?: unknown }) : null;
-            return j?.ok === true ? true : undefined;
-          } catch {
-            return undefined;
-          }
-        }, 30_000, 200);
-        if (l.register) {
-          // Registration may legitimately fail (unapproved or debug builds): the instance keeps serving.
-          await waitFor(`${l.what} registration outcome`, () => {
+        const waitService = async (service: Service): Promise<ServiceInfo> => {
+          const what = l.services.length > 1 ? `${l.what} (${service})` : l.what;
+          const m = await waitFor(
+            `${what} to listen`,
+            () => {
+              const out = proc.output();
+              const ok = LISTEN_RE[service].exec(out);
+              if (ok) return ok;
+              const bad = HOST_FAIL_RE.exec(out);
+              if (bad) throw new Error(`${l.what} failed to start: ${bad[1]}`);
+              if (proc.exited) throw new Error(`${l.what} exited before listening:\n${out.slice(-4000)}`);
+              return undefined;
+            },
+            l.listenTimeoutMs,
+          );
+          const url = m[1]!;
+          await waitFor(`${what} /healthz`, async () => {
             if (proc.exited) throw new Error(`${l.what} exited`);
-            return REG_RE[l.service].exec(proc.output()) ? true : undefined;
-          }, 120_000, 100);
-        }
-        return { url, keyHash: m[2]!, composeHash: m[3]!, output: () => proc.output(), stop: stopProc };
+            try {
+              const r = await fetch(`${url}/healthz`, { signal: AbortSignal.timeout(2000) });
+              const j = r.ok ? ((await r.json()) as { ok?: unknown }) : null;
+              return j?.ok === true ? true : undefined;
+            } catch {
+              return undefined;
+            }
+          }, 30_000, 200);
+          if (l.register) {
+            // Registration may legitimately fail (unapproved or debug builds): the instance keeps serving.
+            await waitFor(`${what} registration outcome`, () => {
+              if (proc.exited) throw new Error(`${l.what} exited`);
+              return REG_RE[service].exec(proc.output()) ? true : undefined;
+            }, 120_000, 100);
+          }
+          return { url, keyHash: m[2]!, composeHash: m[3]! };
+        };
+        const infos = await Promise.all(l.services.map(waitService));
+        const services: Partial<Record<Service, ServiceInfo>> = {};
+        l.services.forEach((sv, i) => (services[sv] = infos[i]!));
+        return { services, output: () => proc.output(), stop: stopProc };
       } catch (e) {
         await stopProc();
         throw e;
       }
     };
 
-    const launchBuild = (variant: Variant, ro: RouterOptions, label: Variant = variant): Promise<RouterHandle> => {
+    /** A single-service TD as a router / exit handle. */
+    const single = (td: HostTd, service: Service): RouterHandle => {
+      const i = td.services[service]!;
+      return { url: i.url, keyHash: i.keyHash, composeHash: i.composeHash, output: td.output, stop: td.stop };
+    };
+
+    const launchBuild = async (variant: Variant, ro: RouterOptions, label: Variant = variant): Promise<RouterHandle> => {
       const b = buildOf(variant);
-      return launchHost({
-        service: "router",
+      const td = await launchHost({
+        services: ["router"],
         label,
         what: `router ${variant}`,
         hostArgs: [
@@ -494,6 +568,7 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
         registryEnv: { PLR_REGISTRY: contractId },
         listenTimeoutMs: o.llm === "llama" ? 300_000 : 60_000,
       });
+      return single(td, "router");
     };
 
     /** Wraps a launched instance behind an attacker proxy; stopping the handle stops both. */
@@ -540,9 +615,9 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
       return { composeHash: m.composeHash, osMeasurement: m.osMeasurement };
     };
 
-    const launchExit = (build: VpnBuild, xo: ExitOptions, label: string): Promise<ExitHandle> =>
-      launchHost({
-        service: "vpn",
+    const launchExit = async (build: VpnBuild, xo: ExitOptions, label: string): Promise<ExitHandle> =>
+      single(await launchHost({
+        services: ["vpn"],
         label,
         what: `exit ${label}`,
         hostArgs: ["--compose", vpnComposePathOf(build), "--run-dir", hostDir, "--exit-port", String(xo.port ?? 0)],
@@ -550,13 +625,13 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
         operator: xo.operator ?? "operator",
         registryEnv: { PLR_VPN_REGISTRY: vpnContractId },
         listenTimeoutMs: 60_000,
-      });
+      }), "vpn");
 
     const startExit = async (variant: VpnVariant, xo: ExitOptions = {}): Promise<ExitHandle> => {
       if (stopping) throw new Error("stack is stopped");
       const build = vpnBuildOf(variant);
       if (xo.operator !== undefined && !OPERATORS.includes(xo.operator)) throw new Error(`startExit: unknown operator: ${String(xo.operator)}`);
-      if (xo.label !== undefined && !/^[a-z0-9][a-z0-9-]{0,39}$/.test(xo.label)) throw new Error("startExit: bad label");
+      if (xo.label !== undefined && !LABEL_RE.test(xo.label)) throw new Error("startExit: bad label");
       const label = xo.label ?? variant;
       if (!isVpnAttack(variant)) return launchExit(build, xo, label);
       // Network attack: the approved, registered test build behind a malicious TCP/HTTP proxy.
@@ -573,6 +648,86 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
         throw e;
       }
       return behindProxy(inner, proxy, () => proxyLog);
+    };
+
+    // -------------------------------------------------------------------------------------------- combo (SPEC-COMBO)
+
+    const comboComposePathOf = (v: ComboVariant) => {
+      if (!(COMBO_VARIANTS as readonly string[]).includes(v)) throw new Error(`unknown combo variant: ${String(v)}`);
+      return join(ENCLAVE_DIST, info.combo[v].compose[o.llm].file);
+    };
+
+    const approveComboBuild = async (v: ComboVariant, ao: { llm?: boolean; vpn?: boolean } = {}) => {
+      const onLlm = ao.llm !== false;
+      const onVpn = ao.vpn !== false;
+      // Measured exactly like the host's combo launch path (same `measureComboBoot`, same LLM choice).
+      const m = await measureComboBoot({
+        composePath: comboComposePathOf(v),
+        root,
+        debug: false,
+        runtimeCache,
+        ...(llmFile ? { llmFile } : {}),
+        ...(process.env.PLR_LLAMA_SERVER ? { llamaServer: process.env.PLR_LLAMA_SERVER } : {}),
+      });
+      // Approval is per registry (SPEC-COMBO §3): the LLM registry approves the router role, the VPN one the exit.
+      if (onLlm) {
+        await call("owner", "allow_compose", { hash: m.composeHash });
+        await call("owner", "allow_os", { hash: m.osMeasurement });
+      }
+      if (onVpn) {
+        await callVpn("owner", "allow_compose", { hash: m.composeHash });
+        await callVpn("owner", "allow_os", { hash: m.osMeasurement });
+      }
+      return { composeHash: m.composeHash, osMeasurement: m.osMeasurement };
+    };
+
+    const startCombo = async (v: ComboVariant, co: ComboOptions = {}): Promise<ComboHandle> => {
+      if (stopping) throw new Error("stack is stopped");
+      const composePath = comboComposePathOf(v);
+      if (co.operator !== undefined && !OPERATORS.includes(co.operator)) throw new Error(`startCombo: unknown operator: ${String(co.operator)}`);
+      if (co.label !== undefined && !LABEL_RE.test(co.label)) throw new Error("startCombo: bad label");
+      const label = co.label ?? v;
+      const td = await launchHost({
+        services: ["router", "vpn"],
+        label,
+        what: `combo ${label}`,
+        hostArgs: [
+          "--compose", composePath,
+          "--run-dir", hostDir,
+          "--state-dir", runDir,
+          "--router-port", String(co.routerPort ?? 0),
+          "--exit-port", String(co.exitPort ?? 0),
+          ...(llmFile ? ["--llm-file", llmFile] : []),
+          ...(process.env.PLR_LLAMA_SERVER ? ["--llama-server", process.env.PLR_LLAMA_SERVER] : []),
+        ],
+        register: co.register !== false,
+        operator: co.operator ?? "operator",
+        // Each role on its own registry; the host hands each process only its own (SPEC-COMBO §2).
+        registryEnv: { PLR_REGISTRY: contractId, PLR_VPN_REGISTRY: vpnContractId },
+        listenTimeoutMs: o.llm === "llama" ? 300_000 : 60_000,
+      });
+      const r = td.services.router!;
+      const x = td.services.vpn!;
+      try {
+        // One measurement for the whole TD: both services must announce the same compose.
+        if (r.composeHash !== x.composeHash) throw new Error(`combo ${label}: router and exit announce different compose hashes`);
+        if (r.keyHash === x.keyHash) throw new Error(`combo ${label}: router and exit share a key`);
+        const routerPort = Number(new URL(r.url).port);
+        if (!Number.isInteger(routerPort) || routerPort <= 0 || routerPort > 65535) throw new Error(`combo ${label}: bad router url`);
+        return {
+          routerUrl: r.url,
+          vpnUrl: x.url,
+          composeHash: r.composeHash,
+          routerKeyHash: r.keyHash,
+          vpnKeyHash: x.keyHash,
+          routerPort,
+          output: td.output,
+          stop: td.stop,
+        };
+      } catch (e) {
+        await td.stop();
+        throw e;
+      }
     };
 
     const startDestination = async (): Promise<Destination> => {
@@ -619,6 +774,8 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
       approveOperator,
       revokeOperator,
       dns,
+      approveComboBuild,
+      startCombo,
       stop,
       exportSigner: (signer: Signer) => {
         const kp = keys.get(signer);

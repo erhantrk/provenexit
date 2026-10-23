@@ -46,6 +46,15 @@ export class TracingRegistry implements RegistryReader {
 
 const ORDER = Object.keys(CHECKS) as CheckKey[];
 
+/**
+ * CLI wording where it says more than the `CHECKS` name. SPEC §5 rev 1.3: a session quote carries
+ * `SHA256("PLR-v1/session-nonce" ‖ nonce)`, never the raw nonce, so it can never double as a registration quote.
+ */
+const LABELS: Partial<Record<CheckKey, string>> = {
+  NONCE: `report_data binds client nonce as a session quote (SHA256("PLR-v1/session-nonce" ‖ nonce))`,
+};
+const label = (k: CheckKey): string => LABELS[k] ?? CHECKS[k];
+
 const CODE_TO_CHECK: Partial<Record<PlrErrorCode, CheckKey>> = {
   E_BAD_RESPONSE: "RESPONSE",
   E_QUOTE_FORMAT: "QUOTE_FORMAT",
@@ -83,15 +92,15 @@ export interface CheckLine {
  * SPEC §9 order and stops at the first failure, so every earlier check passed and later ones did not run.
  */
 export function checkLines(err: unknown, lastRegistryCall?: RegistryMethod): CheckLine[] {
-  if (err === undefined) return ORDER.map((k) => ({ name: CHECKS[k], status: "pass" }));
+  if (err === undefined) return ORDER.map((k) => ({ name: label(k), status: "pass" }));
   const code: PlrErrorCode = err instanceof PlrError ? err.code : "E_BAD_RESPONSE";
   let failing: CheckKey | undefined = CODE_TO_CHECK[code];
   if (code === "E_REGISTRY_UNAVAILABLE") failing = lastRegistryCall ? REGISTRY_STEP[lastRegistryCall] : "ROOT";
   const idx = failing === undefined ? 0 : ORDER.indexOf(failing);
   return ORDER.map((k, i) => {
-    if (i < idx) return { name: CHECKS[k], status: "pass" };
-    if (i === idx) return { name: CHECKS[k], status: "fail", code };
-    return { name: CHECKS[k], status: "skipped" };
+    if (i < idx) return { name: label(k), status: "pass" };
+    if (i === idx) return { name: label(k), status: "fail", code };
+    return { name: label(k), status: "skipped" };
   });
 }
 

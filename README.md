@@ -10,7 +10,9 @@ The protocol is specified in [`SPEC.md`](SPEC.md) (frozen, authoritative). This 
 
 The same machinery also runs a **provably no-logs VPN exit** (PLR-VPN-v1, [`SPEC-VPN.md`](SPEC-VPN.md)): a SOCKS5
 proxy on your machine that only tunnels to an exit whose measured code is approved in a second NEAR registry —
-see [*PLR-VPN*](#plr-vpn--a-provably-no-logs-vpn-exit-proxy-mode).
+see [*PLR-VPN*](#plr-vpn--a-provably-no-logs-vpn-exit-proxy-mode). Both services can also run together in **one**
+TD (one confidential VM, [`SPEC-COMBO.md`](SPEC-COMBO.md)) — see
+[*Cheapest demo deployment: one VM*](#cheapest-demo-deployment-one-vm).
 
 ```
 bash scripts/demo.sh        # builds everything, runs the whole story with a real Qwen 0.5B model (+ the VPN story)
@@ -137,12 +139,16 @@ the refusals: evil build → `E_COMPOSE_NOT_ALLOWED`, MITM → `E_REPORT_DATA_KE
 against the VPN registry, a fetch through the SOCKS5 proxy and the attested tunnel to a local destination (test
 build), evil exit and MITM refused, revocation, the production exit refusing `127.0.0.1` and
 `169.254.169.254`, and — only if the machine is online — `https://example.com` through the production exit.
-Everything is stopped on exit.
+After the two-hop story it runs the combo story (SPEC-COMBO): one TD serving both the router and the exit, both
+verified (same compose hash, distinct keys), a chat and a tunnel through it, per-registry revocation (revoking the
+combo on the VPN registry stops only the exit role and vice versa), and the production combo's exit refusing
+`127.0.0.1` / `::1` / `localhost` on the router's own port. Everything is stopped on exit.
 
 A stack to play with:
 
 ```sh
 scripts/dev-up.sh                   # near-sandbox :3030 + honest router :18100 (PLR_LLM=mock, PLR_EXTRA=evil-logger,…)
+                                    # PLR_COMBO=1: ONE combo TD (router :18100 + VPN exit :18200), same env vars
 set -a; . .run/stack.env; set +a    # PLR_ROUTER_URL, PLR_NEAR_RPC, PLR_REGISTRY, PLR_TRUSTED_ROOT, …
 node client/dist/cli.js verify
 echo "hello" | node client/dist/cli.js chat     # prompt from stdin (recommended: argv shows up in `ps` and history)
@@ -156,7 +162,7 @@ Tests:
 npx tsc -b && npm run build -w @plr/enclave
 (cd contracts/near && cargo near build non-reproducible-wasm --no-abi)
 npm test                            # unit tests (shared, enclave, client)
-npm run e2e                         # SPEC §13 scenarios + registry conformance on a real near-sandbox
+npm run e2e                         # SPEC §13 scenarios, registry conformance, VPN, two-hop and combo on a real near-sandbox
 PLR_E2E_LLM=llama npx vitest run test/scenarios.test.ts   # (in e2e/) the same scenarios with real Qwen
 ```
 
@@ -353,16 +359,15 @@ Remaining limits:
 - **Owner trust for org approvals.** The registry owner decides which accounts belong to which organization. An
   owner that approves one real-world company under two `org_id`s defeats the separation (later: multisig /
   staking-backed org registration). Clients see the org ids that `plr vpn verify` prints.
-- **Who registers a key decides its org.** The contract records as `operator` whoever lands the *first*
-  `register_instance` for a key (re-registration keeps it), and the registration quote does not name the account.
-  So nobody else can obtain one early, an instance never quotes the registration nonce of the registries named in its
-  environment (`PLR_REGISTRY` / `PLR_VPN_REGISTRY`) on its public `/v1/attestation` (`400 E_BAD_REQUEST`); only its own
-  anchorer gets that quote, through the host's quote socket. After each registration the exit reads the record back.
-  If the operator is not its own account (for example, a front-run of its first transaction), it logs
-  `registration_failed code=E_OPERATOR_MISMATCH`, stops serving, and exits non-zero. A restart produces new keys.
-  Residual risk: an exit started with **no** registry configured cannot know which nonce to refuse, so anyone can
-  register it. Binding the operator account into the signed registration (an enclave signature over
-  `contract ‖ operator`) needs a SPEC §5/§7 revision.
+- **Who registers a key decides its org — and only the enclave's chosen operator can (SPEC §5/§7 rev 1.3).** The
+  contract records as `operator` whoever lands the first `register_instance` for a key. Every quote now states its
+  purpose: `/v1/attestation` only quotes `key_hash ‖ SHA256("PLR-v1/session-nonce" ‖ nonce)`, while a registration
+  quote binds `registration_nonce(contract, operator)` (length-prefixed, operator = the instance's `PLR_OPERATOR_ID`),
+  which the contract checks against `current_account_id` + `predecessor_account_id`. A session quote can never pass as
+  a registration (that needs a SHA-256 preimage), and a registration quote is useless to anyone but the bound
+  operator, so a front-run cannot claim the key. Defense in depth: after each registration the exit still reads the
+  record back and, if the operator is not its own account, logs `registration_failed code=E_OPERATOR_MISMATCH`, stops
+  serving and exits non-zero (a restart produces new keys).
 - **Frame sizes.** CONNECT payloads are always 512 bytes and CONNECT_ERR payloads 32 bytes (space-padded JSON). The
   entry, which sees the inner frames' lengths, therefore cannot learn the destination name's length or which
   error the exit returned. Later DATA frames still have their natural sizes (TLS records).
@@ -423,6 +428,43 @@ one `anchor_receipts` transaction per interval covers every receipt since the la
 cuts gas and storage proportionally at the price of a later anchoring proof. Swap the MOCK root for Intel exactly
 as described in *Swapping in real TDX* (`set_root("INTEL", …)` on the VPN registry as well).
 
+### Cheapest demo deployment: one VM
+
+For a demo, run **both services in one confidential VM**: the `plr-combo` build ([`SPEC-COMBO.md`](SPEC-COMBO.md)).
+The (mock or dstack) host measures one compose that pins the router bundle, the VPN exit bundle, the model and the
+runtime, then starts three isolated processes in the one TD — the LLM, the router (:18100) and the VPN exit
+(:18200). Each service generates its own keys, registers on its own registry (router → LLM registry, exit → VPN
+registry, both operator-bound, rev 1.3) and anchors its own receipts. Clients are unchanged: `plr verify` /
+`plr chat` against the router URL, `plr vpn` against the exit URL.
+
+| item | cost |
+|---|---|
+| Azure `Standard_DC2es_v5` (2 vCPU / 8 GiB, Intel TDX), **East US 2**, incl. OS disk + public IP | ≈ $2.50/day while running |
+| egress | first 100 GB/month free, then $0.087/GB |
+| NEAR | testnet (free); the same contract and code as mainnet |
+
+- **Region**: Azure's TDX sizes (DCesv5 / ECesv5) are not offered in East US; East US 2 is the closest
+  US-East region that has them.
+- **Switch it off when idle**: compute is billed per second, so a stopped (deallocated) VM costs only its disk and
+  IP (a few cents a day). A 2-hour demo is cents of compute; leaving it on all month ≈ $75.
+- **Qwen 0.5B fits** on 2 vCPU / 8 GiB next to the router and the exit; a bigger model needs a bigger size.
+- Local rehearsal of exactly that layout: `PLR_COMBO=1 scripts/dev-up.sh` (one production `combo` TD,
+  `PLR_COMBO=combo-test` for the loopback-allowing test build), or the combo steps of `scripts/demo.sh`.
+
+Trade-offs (SPEC-COMBO §3), why this is a demo layout and not the recommended production one:
+
+- **Approval is per registry.** The owner approves the combo compose hash (and the OS measurement) on the LLM
+  registry for the router role and on the VPN registry for the exit role; approving one does not approve the other,
+  and revoking one stops only that role (the demo shows both directions).
+- **One measurement covers both programs**: any change to either the router or the exit changes the combo compose
+  hash, so both roles need re-approval together.
+- **Isolation is process-level, not TD-level.** The three processes share the TD's memory-encryption domain, so a
+  defect in one service is not cryptographically contained from the other. Network isolation still holds: the
+  production exit cannot reach the router or the LLM (`allow_loopback: false`, private ranges denied — the demo
+  shows `127.0.0.1` / `::1` / `localhost` on the router's port refused), and the LLM requires a per-boot API key
+  that only the router process receives. For production, run separate TDs (and, for two-hop, separate
+  organizations).
+
 ### Next step: WireGuard with the attested key
 
 Proxy mode protects what you point at the SOCKS proxy. A full-tunnel VPN can reuse everything here: WireGuard's
@@ -433,6 +475,41 @@ peer holds the matching private key, which only the measured code has. Inside th
 (`wireguard-go` / `boringtun`) terminates the tunnel and applies the same egress policy to IP packets (UDP
 included); a new compose (`plr-vpn-wg`) is approved like any other build. The remaining work is packet-level
 egress filtering, DNS inside the tunnel and per-peer receipts.
+
+---
+
+## Every quote states its purpose (SPEC rev 1.3)
+
+A TDX quote signs 64 bytes of `report_data` chosen by the code inside the TD. Until rev 1.2 the router put
+`key_hash ‖ nonce` there for *every* purpose: the client's random nonce for a session quote, and
+`SHA256("PLR-v1/register" ‖ contract)` for the registration quote. The two were the same shape, so anyone could ask a
+router's public `/v1/attestation` for a "session" quote **using the registration nonce as the client nonce** and
+submit the result to `register_instance` first. Because the first registration decides the on-chain `operator` (and
+so, for VPN exits, the organization used by two-hop), that hijacked the instance's attribution. The interim fix
+(refusing that nonce value on `/v1/attestation`, plus the exit reading its operator back) closed the known path but
+not the shape of the problem.
+
+Rev 1.3 domain-separates the purposes so that no quote can serve another one:
+
+```
+session:       report_data = key_hash ‖ SHA256("PLR-v1/session-nonce" ‖ client_nonce)
+registration:  report_data = key_hash ‖ SHA256("PLR-v1/register/2" ‖ u8(len c) ‖ c ‖ u8(len o) ‖ o)
+               c = registry contract account, o = operator account (the instance's PLR_OPERATOR_ID)
+```
+
+- A session quote never contains the raw client nonce, so turning it into a registration quote would require a
+  SHA-256 preimage — whatever nonce the client picks. The `/v1/attestation` special case is gone.
+- The registration quote names the operator, and the contract recomputes the nonce from `current_account_id` and
+  `predecessor_account_id`: only the account the enclave chose can submit it. A replay can only re-register the
+  same keys under the same operator. The length prefixes keep `(contract, operator)` unambiguous.
+- Clients check `report_data[32:64] == SHA256("PLR-v1/session-nonce" ‖ nonce)` (`E_NONCE`). The VPN exit still reads
+  its on-chain operator back after registering (defense in depth; fail closed on a mismatch).
+- **Upgrading an existing registry: every old compose hash must go.** A pre-rev-1.3 router or exit still answers
+  `/v1/attestation?nonce=<registration_nonce(registry, attacker)>` with a quote the rev 1.3 contract accepts from the
+  attacker, and the contract cannot tell build versions apart. So the rev 1.3 contract does not load a rev 1.2 state
+  at all (every call fails) until the contract account runs `migrate()` (deploy + `migrate` in one batch), which
+  **empties the compose allowlist**; the owner then approves only rev 1.3 builds. See
+  [contracts/near/README.md](contracts/near/README.md). Never re-approve a pre-rev-1.3 compose hash.
 
 ---
 
@@ -456,7 +533,9 @@ in a prompt-logging llama-server (or node) under the approved compose hash. The 
   `mock` composes (the mock LLM is a node script).
 - At launch the host clones every closure file into its private 0700 directory, re-hashes the **copies**,
   refuses on any mismatch (`E_MEASUREMENT_MISMATCH`, or `E_RUNTIME_FORMAT` for a non-Mach-O such as a wrapper
-  script), and runs the copies (`DYLD_LIBRARY_PATH` points dyld at them). `--llama-server` / `PLR_LLAMA_SERVER`
+  script), and runs the copies (`DYLD_LIBRARY_PATH` points dyld at them). The GGUF model gets the same treatment
+  (0400 clone, re-hashed against `llm.model_sha256`, and llama-server is only given the copy), so swapping the
+  operator-writable original after the host measured it changes nothing. `--llama-server` / `PLR_LLAMA_SERVER`
   is accepted only if it reproduces the pinned digest.
 - `enclave/build.mjs` pins the node that runs the build and `PLR_LLAMA_SERVER` (default
   `/opt/homebrew/bin/llama-server`); `approveBuild` and `plr-tdx-host measure` measure exactly like the host.
@@ -516,6 +595,7 @@ and the proxy take any `RegistryReader` unchanged. The router side needs the mat
 | llama-server / mock LLM | `127.0.0.1:18080` / `:18081` by SPEC; the mock host picks a free port by default |
 | router | `127.0.0.1:18100` (dev-up), ephemeral in tests and the demo |
 | VPN exit | `127.0.0.1:18200` (dev-up), ephemeral in tests and the demo |
+| combo TD (router + exit) | `PLR_COMBO=1` dev-up: 18100 + 18200; ephemeral in tests and the demo (`PLR_COMBO_TEST_*` / `PLR_COMBO_*` in the demo env) |
 | client proxy | `127.0.0.1:18787` |
 | VPN exit #2 / two-hop entry | ephemeral (URLs in `.run/stack.env`: `PLR_VPN2_URL`, `PLR_VPN_ENTRY_URL`) |
 | DoH resolver of the test builds | `127.0.0.1:18253` (`POST /dns-query`; measured in the test compose, so fixed; one stack per machine) |

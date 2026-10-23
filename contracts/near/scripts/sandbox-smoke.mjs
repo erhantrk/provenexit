@@ -6,17 +6,22 @@
 //   node contracts/near/scripts/sandbox-smoke.mjs [rpcPort]            # starts its own near-sandbox
 //   PLR_SMOKE_RPC=http://127.0.0.1:3030 PLR_SMOKE_HOME=<neard home> node contracts/near/scripts/sandbox-smoke.mjs
 //     # reuses a running `near-sandbox --home <home> run` (root account test.near, key from validator_key.json)
+//   PLR_SMOKE_OLD_WASM=<rev 1.2 plr_registry.wasm> node contracts/near/scripts/sandbox-smoke.mjs
+//     # also checks the in-place rev 1.2 → rev 1.3 upgrade (old state refused until `migrate`, allowlist emptied).
+//     # Build the old wasm from the last rev 1.2 commit, e.g.
+//     #   git archive <rev> contracts/near | tar -x -C /tmp/old && (cd /tmp/old/contracts/near && cargo near build non-reproducible-wasm --no-abi)
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { Sandbox, DEFAULT_ACCOUNT_ID, DEFAULT_PRIVATE_KEY, DEFAULT_PUBLIC_KEY } from "near-sandbox";
-import { Account, JsonRpcProvider } from "near-api-js";
+import { Account, JsonRpcProvider, actions } from "near-api-js";
+import { sha256 } from "@noble/hashes/sha2.js";
 import { p256 } from "@noble/curves/nist.js";
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 import { randomBytes } from "@noble/hashes/utils.js";
 import {
   MockRoot, MockTdxAttester, anchorMessage, keyHash, merkleRoot, mockOsReport, osMeasurement, registrationNonce,
-  reportData, toHex, fromHex, utf8,
+  registrationReportData, reportData, toHex, fromHex, utf8,
 } from "../../../packages/shared/dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -45,7 +50,7 @@ const expectFail = async (p, code, what) => {
 
 try {
   const run = Date.now().toString(36); // unique account names, so the script can rerun on the same node
-  for (const name of ["registry", "owner", "operator", "stranger"]) {
+  for (const name of ["registry", "owner", "operator", "stranger", ...(process.env.PLR_SMOKE_OLD_WASM ? ["upgrade"] : [])]) {
     await root.createSubAccount({ accountOrPrefix: `${name}-${run}`, publicKey: rootPub, nearToTransfer: 20n * NEAR });
   }
   const acct = (n) => new Account(`${n}-${run}.${rootId}`, provider, rootKey);
@@ -70,7 +75,8 @@ try {
 
   const xs = x25519.utils.randomSecretKey(), es = ed25519.utils.randomSecretKey();
   const xp = x25519.getPublicKey(xs), ep = ed25519.getPublicKey(es);
-  const { quote, eventLog } = await attester.getQuote(reportData(xp, ep, registrationNonce(contractId)));
+  // Operator-bound registration quote (SPEC §5 rev 1.3).
+  const { quote, eventLog } = await attester.getQuote(registrationReportData(xp, ep, contractId, operator.accountId));
   const args = { quote: toHex(quote), event_log: eventLog, app_compose: new TextDecoder().decode(compose), x25519: toHex(xp), ed25519: toHex(ep) };
 
   // High-S variant of the (valid) quote signature: the real host accepts it, the contract must not.
@@ -94,11 +100,17 @@ try {
   await expectFail(call(operator, "register_instance", { ...args, quote: toHex(hs) }, DEPOSIT), "E_QUOTE_SIG", "high-S quote_sig on the real host");
   {
     const xp2 = x25519.getPublicKey(x25519.utils.randomSecretKey()), ep2 = ed25519.getPublicKey(ed25519.utils.randomSecretKey());
-    const q2 = await attester.getQuote(reportData(xp2, ep2, registrationNonce(contractId)));
+    const q2 = await attester.getQuote(registrationReportData(xp2, ep2, contractId, operator.accountId));
     await expectFail(call(operator, "register_instance", { ...args, quote: toHex(q2.quote), x25519: toHex(xp2), ed25519: toHex(ep2) }), "E_DEPOSIT", "new instance without storage deposit");
   }
-  await call(stranger, "register_instance", args); // replay/refresh: no new storage, so no deposit needed
-  check((await view("get_instance", { key_hash: kh })).operator === operator.accountId, "refresh by a stranger keeps the operator");
+  // The quote is bound to `operator`: a stranger can neither replay it nor turn a session quote into a registration.
+  await expectFail(call(stranger, "register_instance", args, DEPOSIT), "E_REPORT_DATA", "operator-bound quote submitted by a stranger");
+  {
+    const s = await attester.getQuote(reportData(xp, ep, registrationNonce(contractId, stranger.accountId)));
+    await expectFail(call(stranger, "register_instance", { ...args, quote: toHex(s.quote), event_log: s.eventLog }, DEPOSIT), "E_REPORT_DATA", "session quote of the registration nonce");
+  }
+  await call(operator, "register_instance", args); // refresh: no new storage, so no deposit needed
+  check((await view("get_instance", { key_hash: kh })).operator === operator.accountId, "refresh by the bound operator keeps the operator");
 
   const rootHash = merkleRoot([randomBytes(32), randomBytes(32)]);
   const sig = ed25519.sign(anchorMessage({ contractId, keyHash: fromHex(kh), root: rootHash, firstSeq: 0n, count: 2n }), es);
@@ -125,6 +137,49 @@ try {
   check(appr.receipts_outcome.flatMap((o) => o.outcome.logs).some((l) => l.includes('"event":"operator_approved"')), "NEP-297 operator_approved event");
   await call(owner, "revoke_operator", { account_id: operator.accountId });
   check((await view("get_operator", { account_id: operator.accountId })) === null && (await view("get_instance", { key_hash: kh })).org_id === null, "revoke_operator");
+
+  // rev 1.2 → rev 1.3 in-place upgrade: fail closed until `migrate`, which empties the compose allowlist.
+  if (process.env.PLR_SMOKE_OLD_WASM) {
+    const up = acct("upgrade");
+    const upId = up.accountId;
+    const callUp = (who, methodName, a, deposit = 0n) => who.callFunctionRaw({ contractId: upId, methodName, args: a, gas: GAS, deposit });
+    const viewUp = (method, a = {}) => provider.callFunction({ contractId: upId, method, args: a });
+    await up.deployContract(readFileSync(process.env.PLR_SMOKE_OLD_WASM));
+    await callUp(up, "new", { owner_id: owner.accountId, root_kind: "MOCK", root_p256: toHex(mockRoot.publicKey) });
+    await callUp(owner, "allow_compose", { hash: composeHash });
+    await callUp(owner, "allow_os", { hash: os });
+    await callUp(owner, "approve_operator", { account_id: operator.accountId, org_id: "org-old" });
+    // An instance registered under rev 1.2 rules: report_data = key_hash ‖ SHA256("PLR-v1/register" ‖ contract).
+    const oldRd = new Uint8Array(64);
+    oldRd.set(keyHash(xp, ep), 0);
+    oldRd.set(sha256(utf8("PLR-v1/register" + upId)), 32);
+    const oq = await attester.getQuote(oldRd);
+    await callUp(operator, "register_instance", { ...args, quote: toHex(oq.quote), event_log: oq.eventLog }, DEPOSIT);
+    check((await viewUp("get_instance", { key_hash: kh })).operator === operator.accountId, "rev 1.2 registry: old instance registered");
+
+    await up.deployContract(wasm); // code only, no migration yet
+    await expectFail(viewUp("is_compose_allowed", { hash: composeHash }), "Cannot deserialize", "rev 1.3 code over rev 1.2 state: views fail closed");
+    const q13 = await attester.getQuote(registrationReportData(xp, ep, upId, stranger.accountId));
+    await expectFail(callUp(stranger, "register_instance", { ...args, quote: toHex(q13.quote), event_log: q13.eventLog }, DEPOSIT), "Cannot deserialize", "rev 1.3 code over rev 1.2 state: register_instance fails closed");
+    await expectFail(callUp(stranger, "migrate", {}), "private", "migrate by a stranger");
+    // The recommended way: redeploy + migrate in one batch, so there is no window at all.
+    const mig = await up.signAndSendTransaction({ receiverId: upId, actions: [actions.deployContract(wasm), actions.functionCall("migrate", {}, GAS, 0n)] });
+    check(mig.receipts_outcome.flatMap((o) => o.outcome.logs).some((l) => l.includes('"event":"compose_allowlist_reset"')), "deploy + migrate batch; compose_allowlist_reset event");
+    check((await viewUp("get_state_rev")) === 3, "get_state_rev after migrate");
+    check((await viewUp("is_compose_allowed", { hash: composeHash })) === false, "migrate empties the compose allowlist");
+    check((await viewUp("is_os_allowed", { hash: os })) === true, "migrate keeps the OS allowlist");
+    check((await viewUp("get_operator", { account_id: operator.accountId })) === "org-old", "migrate keeps operator organizations");
+    check((await viewUp("get_instance", { key_hash: kh }))?.operator === operator.accountId, "migrate keeps instances");
+    await expectFail(callUp(up, "migrate", {}), "E_BAD_INPUT", "migrate twice");
+    // The hijack the migration closes: a quote bound to the stranger cannot register while no build is approved.
+    await expectFail(callUp(stranger, "register_instance", { ...args, quote: toHex(q13.quote), event_log: q13.eventLog }, DEPOSIT), "E_COMPOSE_NOT_ALLOWED", "no old build stays approved");
+    await callUp(owner, "allow_compose", { hash: composeHash }); // owner re-approves a rev 1.3 build
+    const q13op = await attester.getQuote(registrationReportData(xp, ep, upId, operator.accountId));
+    await callUp(operator, "register_instance", { ...args, quote: toHex(q13op.quote), event_log: q13op.eventLog });
+    check((await viewUp("get_instance", { key_hash: kh })).operator === operator.accountId, "rev 1.3 registration after migration");
+  } else {
+    console.log("  (PLR_SMOKE_OLD_WASM not set: rev 1.2 → rev 1.3 upgrade check skipped)");
+  }
 } finally {
   await sandbox?.tearDown(true);
 }

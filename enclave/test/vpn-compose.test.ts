@@ -153,11 +153,8 @@ describe("exit config (env from the host)", () => {
     const partial = loadExitConfig({ ...env, PLR_NEAR_RPC: "http://127.0.0.1:3030", PLR_VPN_REGISTRY: "vpnregistry.test.near" });
     expect([partial.near, partial.nearConfigError]).toEqual([null, true]);
   });
-  it("registryIds: every well-formed registry id, even with registration disabled (their nonces are never session-quoted)", () => {
-    expect(loadExitConfig(env).registryIds).toEqual([]);
-    expect(loadExitConfig({ ...env, PLR_VPN_REGISTRY: "vpnregistry.test.near" }).registryIds).toEqual(["vpnregistry.test.near"]);
-    expect(loadExitConfig({ ...env, PLR_REGISTRY: "registry.test.near", PLR_VPN_REGISTRY: "vpnregistry.test.near" }).registryIds)
-      .toEqual(["registry.test.near", "vpnregistry.test.near"]);
-    expect(loadExitConfig({ ...env, PLR_VPN_REGISTRY: "Not A Valid Id!" }).registryIds).toEqual([]);
+  it("rev 1.3: no reserved-nonce configuration is left (session quotes are domain-separated instead)", () => {
+    const c = loadExitConfig({ ...env, PLR_REGISTRY: "registry.test.near", PLR_VPN_REGISTRY: "vpnregistry.test.near" });
+    expect(Object.keys(c).sort()).toEqual(["anchorIntervalMs", "composePath", "host", "near", "nearConfigError", "port", "tdxSocket"]);
   });
 });

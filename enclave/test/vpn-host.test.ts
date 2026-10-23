@@ -3,11 +3,11 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import net from "node:net";
 import { join, resolve } from "node:path";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { FRAME, MockRoot, MockVerifier, isDebug, registrationNonce, toHex, verifyEventLog } from "@plr/shared";
+import { FRAME, MockRoot, MockVerifier, isDebug, registrationNonce, registrationReportData, toHex, verifyEventLog } from "@plr/shared";
 import { EXIT_ENV_ALLOWLIST, HostError, composeServiceOf, exitNodeFlags, launchVpn, measureBoot, measureVpnBoot, routerNodeFlags } from "../src/mock-tdx/host.js";
 import { composeBytes, makeVpnCompose, parseCompose, parseVpnCompose } from "../src/compose.js";
 import { startFakeDoh } from "./doh-server.js";
-import { TestTunnel, attestExit, startEchoUpstream } from "./vpn-helpers.js";
+import { TestTunnel, attestExit, mentionsNumber, startEchoUpstream } from "./vpn-helpers.js";
 
 const DIST = resolve(import.meta.dirname, "..", "dist");
 const INFO = JSON.parse(readFileSync(join(DIST, "build-info.json"), "utf8"));
@@ -130,7 +130,7 @@ describe.skipIf(!canSock)("launchVpn via the mock TDX host", () => {
     mkdirSync(runDir, { recursive: true });
     let out = "";
     const MARK = "vpn-live-" + Date.now();
-    // A registry id alone (incomplete NEAR config ⇒ registration disabled) still reserves its registration nonce.
+    // A registry id alone: incomplete NEAR config ⇒ registration disabled.
     const h = await launchVpn({ composePath: vpnCompose("vpn-honest-test"), root, runDir, exitPort: 0, exitEnv: { PLR_VPN_REGISTRY: "vpnregistry.test.near" }, output: (s) => { out += s; } });
     try {
       const m = await waitFor(/plr-vpn: listening url=(\S+) key_hash=([0-9a-f]{64}) compose_hash=([0-9a-f]{64})/, () => out);
@@ -139,11 +139,12 @@ describe.skipIf(!canSock)("launchVpn via the mock TDX host", () => {
       await waitFor(/plr-vpn: registration_disabled/, () => out);
       expect(out).not.toContain("llm_ready");
       const url = m[1]!;
-      // Review finding: the public attestation endpoint must never hand out a registration quote (anyone could
-      // register this instance first under their own account and so choose its org_id).
-      const reg = await fetch(`${url}/v1/attestation?nonce=${toHex(registrationNonce("vpnregistry.test.near"))}`);
-      expect([reg.status, await reg.json()]).toEqual([400, { error: "E_BAD_REQUEST" }]);
       const v = await attestExit(url, root.publicKey);
+      // SPEC §5 rev 1.3: even asked with a registration nonce, the public endpoint hands out a SESSION quote only.
+      const reg = await fetch(`${url}/v1/attestation?nonce=${toHex(registrationNonce("vpnregistry.test.near", "attacker.test.near"))}`);
+      expect(reg.status).toBe(200);
+      const regRd = new MockVerifier(root.publicKey).verify(Buffer.from(((await reg.json()) as { quote: string }).quote, "hex")).report.reportData;
+      expect(toHex(regRd)).not.toBe(toHex(registrationReportData(v.x25519, v.ed25519, "vpnregistry.test.near", "attacker.test.near")));
       expect(toHex(v.keyHash)).toBe(m[2]);
       const t = await TestTunnel.open(Number(new URL(url).port), v, v.nonce);
       t.connect("127.0.0.1", up.port);
@@ -154,7 +155,7 @@ describe.skipIf(!canSock)("launchVpn via the mock TDX host", () => {
       expect(t.data().toString()).toBe(MARK);
       await new Promise((r) => setTimeout(r, 100));
       expect(out).not.toContain(MARK);
-      expect(out).not.toContain(String(up.port));
+      expect(mentionsNumber(out, up.port)).toBe(false);
       expect(statSync(h.socketPath).mode & 0o777).toBe(0o600);
     } finally {
       const dir = resolve(h.socketPath, "..");

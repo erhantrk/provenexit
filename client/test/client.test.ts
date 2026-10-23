@@ -147,6 +147,18 @@ describe("PrivateClient — verification failures send nothing", () => {
     expect(await codeOf(c.attest())).toBe("E_NONCE");
   });
 
+  it("rev 1.3: a quote over the raw client nonce (pre-1.3 report_data) → E_NONCE, no chat request", async () => {
+    const { r, c } = setup({ quotePurpose: "raw-nonce" });
+    expect(await codeOf(c.chat(msg()))).toBe("E_NONCE");
+    expect(r.stats.chats).toBe(0);
+  });
+
+  it("rev 1.3: a registration quote (operator-bound report_data) is never accepted as a session quote → E_NONCE", async () => {
+    const { r, c } = setup({ quotePurpose: "registration" });
+    expect(await codeOf(c.chat(msg()))).toBe("E_NONCE");
+    expect(r.stats.chats).toBe(0);
+  });
+
   it("debug TD → E_DEBUG_TD", async () => {
     const r = makeFakeRouter({ debug: true });
     const c = new PrivateClient({ routerUrl: "http://x.test", registry: r.registry, trustedRoot: r.root.publicKey, fetch: r.fetch });

@@ -24,8 +24,6 @@ export interface RouterOptions {
   llm: LlmClient;
   receipts: ReceiptLog;
   log?: Logger;
-  /** Registration nonces of this instance's registries: refused on `/v1/attestation` (see `commonRoutes`). */
-  reservedNonces?: readonly Uint8Array[];
   /** Concurrent /v1/private/chat requests (default 64). */
   maxInflight?: number;
   /**
@@ -175,7 +173,7 @@ export function createRouter(o: RouterOptions): http.Server {
     res.end(frameLine(seq, fin));
   }
 
-  const common = commonRoutes({ attester: o.attester, keys: o.keys, composeBytes, receipts: o.receipts, reservedNonces: o.reservedNonces ?? [] });
+  const common = commonRoutes({ attester: o.attester, keys: o.keys, composeBytes, receipts: o.receipts });
   const routes: Record<string, RouteHandler> = {
     "/v1/attestation": common.attestation,
     "/v1/private/chat": chat,

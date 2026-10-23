@@ -211,18 +211,18 @@ async function cmdChat(prompt: string, client: PrivateClient, io: CliIo, writeDe
   }
 }
 
-/** Build name, egress and DNS policy from the verified compose (its bytes were checked against the quote). */
+/** Build name, egress and DNS policy from the verified compose (its bytes were checked against the quote; plr-vpn or plr-combo). */
 function composeSummary(appCompose: string): { name: string; egress: string; testBuild: boolean } {
   try {
-    const j = JSON.parse(appCompose) as {
-      name?: unknown;
-      policy?: { egress?: { allow_loopback?: unknown; deny_private?: unknown }; dns?: { doh?: unknown } };
-    };
-    const eg = j.policy?.egress;
+    type Policy = { egress?: { allow_loopback?: unknown; deny_private?: unknown }; dns?: { doh?: unknown } };
+    const j = JSON.parse(appCompose) as { name?: unknown; policy?: Policy; vpn?: { policy?: Policy } };
     const name = typeof j.name === "string" ? j.name : "?";
+    // A `plr-combo` (SPEC-COMBO §1) carries the exit's policy under `vpn.policy`.
+    const policy = name === "plr-combo" ? j.vpn?.policy : j.policy;
+    const eg = policy?.egress;
     if (typeof eg !== "object" || eg === null) return { name, egress: "(no VPN egress policy)", testBuild: false };
     const testBuild = eg.allow_loopback === true;
-    const doh = j.policy?.dns?.doh;
+    const doh = policy?.dns?.doh;
     const dns = Array.isArray(doh) && doh.every((u) => typeof u === "string") ? ` · DNS over HTTPS via ${doh.join(", ")}` : "";
     return { name, egress: `deny_private=${String(eg.deny_private)} allow_loopback=${String(eg.allow_loopback)}${dns}`, testBuild };
   } catch {

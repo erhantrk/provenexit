@@ -8,6 +8,9 @@
 // hand-written expectations.
 //
 // Usage (from the repo root):  npx tsc -b packages/shared && node contracts/near/fixtures/gen.mjs
+//
+// SPEC rev 1.3: registration quotes are operator-bound. A case's optional `predecessor` field is the account that
+// submits it (default OPERATOR_ID); step 7 expects `registrationReportData(keys, CONTRACT_ID, predecessor)`.
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -17,11 +20,16 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import {
   MockRoot, MockTdxAttester, MockVerifier, PlrError, MOCK_QE_VENDOR_ID, MOCK_AK_CERT_PREFIX, QUOTE,
   anchorMessage, bootEvents, concatBytes, encodeQuote, fromHex, isDebug, keyHash, makeEvent, mockOsReport,
-  osMeasurement, parseJsonIntegers, parseQuote, registrationNonce, replayRtmr3, reportData, toHex, utf8, verifyEventLog,
+  osMeasurement, parseJsonIntegers, parseQuote, registrationNonce, registrationReportData, replayRtmr3, reportData, toHex, utf8,
+  verifyEventLog,
 } from "../../../packages/shared/dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const CONTRACT_ID = "registry.test.near";
+// Submitters (predecessor_account_id). Must equal OPERATOR / STRANGER in src/tests.rs. A case without a
+// `predecessor` field is submitted by OPERATOR_ID.
+const OPERATOR_ID = "operator.test.near";
+const STRANGER_ID = "stranger.test.near";
 const seed = (label) => sha256(utf8(`plr-registry-fixture:${label}`));
 
 // ---------- deterministic actors ----------
@@ -53,7 +61,11 @@ const composeBytes = utf8(COMPOSE);
 const COMPOSE_HASH = sha256(composeBytes);
 const OS = osMeasurement(mockOsReport());
 const INSTANCE_ID = seed("instance").slice(0, 20);
-const regNonce = registrationNonce(CONTRACT_ID);
+// Operator-bound registration (SPEC §5 rev 1.3): the enclave binds the registry and the operator account.
+const regNonce = registrationNonce(CONTRACT_ID, OPERATOR_ID);
+/** The rev 1.2 registration nonce `SHA256("PLR-v1/register" ‖ contract_id)` — no longer accepted. */
+const rev12RegNonce = sha256(concatBytes(utf8("PLR-v1/register"), utf8(CONTRACT_ID)));
+const lp = (id) => { const b = utf8(id); return concatBytes(Uint8Array.of(b.length), b); };
 
 // ---------- TS transcription of SPEC §7 register_instance ----------
 const policy = { compose: new Set([toHex(COMPOSE_HASH)]), os: new Set([toHex(OS)]) };
@@ -73,7 +85,7 @@ function tsRegistryVerify(a) {
   if (toHex(sha256(utf8(a.app_compose))) !== toHex(boot.composeHash)) return "E_COMPOSE_MISMATCH"; // 5
   if (!policy.compose.has(toHex(boot.composeHash))) return "E_COMPOSE_NOT_ALLOWED"; // 6
   if (!policy.os.has(toHex(osMeasurement(parsed.report)))) return "E_OS_NOT_ALLOWED";
-  const want = reportData(fromHex(a.x25519, 32), fromHex(a.ed25519, 32), regNonce); // 7
+  const want = registrationReportData(fromHex(a.x25519, 32), fromHex(a.ed25519, 32), CONTRACT_ID, a.predecessor ?? OPERATOR_ID); // 7
   if (toHex(parsed.report.reportData) !== toHex(want)) return "E_REPORT_DATA";
   return "ok";
 }
@@ -99,7 +111,7 @@ function craft({ events, rd, debug = false, rtmr3, report: patch, sigData }) {
 }
 
 const boot = bootEvents(composeBytes, INSTANCE_ID);
-const rdOk = reportData(K.xp, K.ep, regNonce);
+const rdOk = registrationReportData(K.xp, K.ep, CONTRACT_ID, OPERATOR_ID);
 const base = (quote, events = boot, extra = {}) => ({
   quote: toHex(quote), event_log: events, app_compose: COMPOSE, x25519: toHex(K.xp), ed25519: toHex(K.ep), ...extra,
 });
@@ -121,8 +133,12 @@ add("ok_extra_events_after_boot", "ok", withEvents([...boot, ev("app-ready", Uin
 add("ok_64_events", "ok", withEvents([...boot, ...Array.from({ length: 59 }, (_, i) => ev(`e${i}`, new Uint8Array(0)))]));
 {
   const a2 = new MockTdxAttester({ root, composeBytes });
-  const q2 = await a2.getQuote(reportData(K2.xp, K2.ep, regNonce));
+  const q2 = await a2.getQuote(registrationReportData(K2.xp, K2.ep, CONTRACT_ID, OPERATOR_ID));
   add("ok_second_instance", "ok", base(q2.quote, q2.eventLog, { x25519: toHex(K2.xp), ed25519: toHex(K2.ep) }));
+  // Any account may operate an instance, as long as the enclave bound its quote to that account.
+  const q3 = await a2.getQuote(registrationReportData(K2.xp, K2.ep, CONTRACT_ID, STRANGER_ID));
+  add("ok_bound_to_and_submitted_by_stranger", "ok",
+    base(q3.quote, q3.eventLog, { x25519: toHex(K2.xp), ed25519: toHex(K2.ep), predecessor: STRANGER_ID }));
 }
 
 // --- step 1: E_QUOTE_FORMAT ---
@@ -242,13 +258,32 @@ add("compose_trailing_newline_dropped", "E_COMPOSE_MISMATCH", { ...okArgs, app_c
   add("os_not_allowed_rtmr2", "E_OS_NOT_ALLOWED", base(q2));
 }
 
-// --- step 7: E_REPORT_DATA ---
-add("report_data_session_nonce", "E_REPORT_DATA", base(craft({ events: boot, rd: reportData(K.xp, K.ep, seed("session-nonce")) })));
-add("report_data_other_registry", "E_REPORT_DATA", base(craft({ events: boot, rd: reportData(K.xp, K.ep, registrationNonce("other.test.near")) })));
+// --- step 7: E_REPORT_DATA (SPEC §5/§7 rev 1.3: purpose-separated, operator-bound) ---
+const kh = keyHash(K.xp, K.ep);
+const rdWith = (nonce) => concatBytes(kh, nonce);
+const step7 = (name, rd, extra) => add(name, "E_REPORT_DATA", base(craft({ events: boot, rd }), boot, extra));
+// Session-domain quotes (what /v1/attestation produces) never register, whatever the client nonce.
+step7("report_data_session_nonce", reportData(K.xp, K.ep, seed("session-nonce")));
+step7("report_data_session_quote_of_registration_nonce", reportData(K.xp, K.ep, regNonce));
+step7("report_data_session_quote_of_registration_nonce_by_stranger", reportData(K.xp, K.ep, registrationNonce(CONTRACT_ID, STRANGER_ID)),
+  { predecessor: STRANGER_ID });
+// Wrong operator: the quote is bound to one account, submitted by another (both directions).
+add("report_data_operator_quote_submitted_by_stranger", "E_REPORT_DATA", { ...okArgs, predecessor: STRANGER_ID });
+step7("report_data_stranger_quote_submitted_by_operator", registrationReportData(K.xp, K.ep, CONTRACT_ID, STRANGER_ID));
+step7("report_data_operator_is_the_contract", registrationReportData(K.xp, K.ep, CONTRACT_ID, CONTRACT_ID));
+// Wrong registry.
+step7("report_data_other_registry", registrationReportData(K.xp, K.ep, "other.test.near", OPERATOR_ID));
+step7("report_data_contract_and_operator_swapped", registrationReportData(K.xp, K.ep, OPERATOR_ID, CONTRACT_ID));
+// Old / malformed registration nonces.
+step7("report_data_rev12_registration_nonce", rdWith(rev12RegNonce));
+step7("report_data_no_length_prefixes", rdWith(sha256(concatBytes(utf8("PLR-v1/register/2"), utf8(CONTRACT_ID), utf8(OPERATOR_ID)))));
+step7("report_data_rev12_label_with_prefixes", rdWith(sha256(concatBytes(utf8("PLR-v1/register"), lp(CONTRACT_ID), lp(OPERATOR_ID)))));
+step7("report_data_raw_registration_nonce_unhashed_prefix", rdWith(concatBytes(lp(CONTRACT_ID), lp(OPERATOR_ID)).slice(0, 32)));
+// Key / layout mismatches.
 add("report_data_claimed_x25519_differs", "E_REPORT_DATA", { ...okArgs, x25519: toHex(K2.xp) });
 add("report_data_claimed_ed25519_differs", "E_REPORT_DATA", { ...okArgs, ed25519: toHex(K2.ep) });
 add("report_data_keys_swapped", "E_REPORT_DATA", { ...okArgs, x25519: toHex(K.ep), ed25519: toHex(K.xp) });
-add("report_data_halves_swapped", "E_REPORT_DATA", base(craft({ events: boot, rd: concatBytes(regNonce, keyHash(K.xp, K.ep)) })));
+step7("report_data_halves_swapped", concatBytes(regNonce, kh));
 
 // The TS transcription must agree with every designed expectation.
 for (const c of cases) {
@@ -308,7 +343,16 @@ const numberLiterals = [
 // ---------- primitive vectors ----------
 const vectors = {
   key_hash: [{ x25519: toHex(K.xp), ed25519: toHex(K.ep), key_hash: toHex(KH) }, { x25519: toHex(K2.xp), ed25519: toHex(K2.ep), key_hash: toHex(keyHash(K2.xp, K2.ep)) }],
-  registration_nonce: ["registry.test.near", "plr.test.near", "a"].map((id) => ({ contract_id: id, nonce: toHex(registrationNonce(id)) })),
+  registration_nonce: [
+    [CONTRACT_ID, OPERATOR_ID], [CONTRACT_ID, STRANGER_ID], ["plr.test.near", "op.test.near"], ["a", "b"], ["ab", "c"], ["a", "bc"],
+    ["c".repeat(64), "o".repeat(64)], ["0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "operator.near"],
+  ].map(([c, o]) => ({ contract_id: c, operator_id: o, nonce: toHex(registrationNonce(c, o)) })),
+  registration_report_data: [[K, OPERATOR_ID], [K2, STRANGER_ID]].map(([k, o]) => ({
+    x25519: toHex(k.xp), ed25519: toHex(k.ep), contract_id: CONTRACT_ID, operator_id: o,
+    report_data: toHex(registrationReportData(k.xp, k.ep, CONTRACT_ID, o)),
+  })),
+  // Session report_data (SPEC §5 rev 1.3) for a client nonce equal to the registration nonce: never a registration.
+  session_report_data_of_registration_nonce: toHex(reportData(K.xp, K.ep, regNonce)),
   event_digests: [...boot, ev("app-ready", Uint8Array.of(1, 2, 3))].map((e) => ({ event: e.event, event_payload: e.event_payload, digest: e.digest })),
   rtmr3: { events: boot, rtmr3: toHex(replayRtmr3(boot)) },
   ak_pub: toHex(akPub),
@@ -318,6 +362,8 @@ const vectors = {
 const out = {
   generated_by: "contracts/near/fixtures/gen.mjs (@plr/shared dist)",
   contract_id: CONTRACT_ID,
+  operator_id: OPERATOR_ID,
+  stranger_id: STRANGER_ID,
   root_p256: toHex(root.publicKey),
   other_root_p256: toHex(otherRoot.publicKey),
   compose_hash: toHex(COMPOSE_HASH),

@@ -41,6 +41,32 @@ describe("plr vpn verify", () => {
     expect(text).toContain("vpn-operator.test.near");
   });
 
+  it("shows the exit policy of a plr-combo compose (SPEC-COMBO: router + exit in one TD)", async () => {
+    const h = (b: string) => b.repeat(32);
+    const combo = JSON.stringify({
+      manifest_version: 1,
+      name: "plr-combo",
+      router: {
+        bundle_sha256: h("11"), entry: "router.bundle.mjs", node_sha256: h("44"),
+        llm: { kind: "mock", model_sha256: h("22"), runtime: "node", runtime_sha256: h("44") },
+        policy: { disk: "none", egress: [], logs: "none" },
+      },
+      vpn: {
+        bundle_sha256: h("33"), entry: "vpn.bundle.mjs", node_sha256: h("44"),
+        policy: { disk: "none", dns: { doh: ["https://1.1.1.1/dns-query"] }, egress: { allow_loopback: false, deny_private: true }, logs: "none" },
+      },
+    }) + "\n";
+    const X = await startFakeExit({ composeText: combo });
+    const rpc = await startFakeRpc(registryHandler(X.registry));
+    closers.push(X.close, rpc.close);
+    const t = io();
+    const env = { PLR_VPN_URL: X.url, PLR_NEAR_RPC: rpc.url, PLR_VPN_REGISTRY: "vpnregistry.test.near", PLR_TRUSTED_ROOT: toHex(X.root.publicKey) };
+    expect(await runCli(["vpn", "verify"], env, t.io)).toBe(0);
+    const text = t.out.join("\n");
+    expect(text).toContain("plr-combo · egress deny_private=true allow_loopback=false · DNS over HTTPS via https://1.1.1.1/dns-query");
+    expect(text).not.toContain("TEST BUILD");
+  });
+
   it("marks the failing check with ✘ and exits 1", async () => {
     const { X, env } = await stack();
     X.registry.revokeOs(X.osHash);

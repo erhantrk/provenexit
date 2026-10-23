@@ -5,6 +5,7 @@ import { randomBytes } from "@noble/hashes/utils.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import {
   fromHex, toHex, PlrError, verifyAttestation, MockVerifier, MockRoot, MockTdxAttester, MemoryRegistry, keyHash,
+  reportData, registrationNonce, registrationReportData,
   osMeasurement, mockOsReport, verifyEventLog, bootEvents, replayRtmr3, makeEvent, merkleRoot, merkleProof,
   verifyMerkleProof, DcapQvlVerifier, DstackAttester, parseQuote, encodeQuote, INTEL_QE_VENDOR_ID, FrameReader,
   sealFrame, receiptLeaf, isReceipt, CHECKS, type RegistryReader, type InstanceRecord, type AttestationBundle,
@@ -45,7 +46,12 @@ function setup() {
     instances: { [toHex(kh)]: rec },
   });
   const bundle = async (nonce: Uint8Array): Promise<AttestationBundle> => {
-    const { quote, eventLog } = await att.getQuote(new Uint8Array([...kh, ...nonce]));
+    const { quote, eventLog } = await att.getQuote(reportData(xp, ep, nonce));
+    return { v: "PLR-v1", root_kind: "MOCK", quote: toHex(quote), event_log: eventLog, app_compose: composeStr, x25519: toHex(xp), ed25519: toHex(ep) };
+  };
+  /** Bundle over arbitrary 64-byte report_data (pre-rev-1.3 raw nonce, registration quote, …). */
+  const bundleRd = async (rd: Uint8Array): Promise<AttestationBundle> => {
+    const { quote, eventLog } = await att.getQuote(rd);
     return { v: "PLR-v1", root_kind: "MOCK", quote: toHex(quote), event_log: eventLog, app_compose: composeStr, x25519: toHex(xp), ed25519: toHex(ep) };
   };
   const run = (b: AttestationBundle, nonce: Uint8Array, reg: RegistryReader = registry, now?: number) =>
@@ -53,8 +59,29 @@ function setup() {
       bundle: b, nonce, verifier: new MockVerifier(root.publicKey), registry: reg, trustedRoot: root.publicKey,
       ...(now === undefined ? {} : { now }),
     });
-  return { root, registry, rec, kh, bundle, run };
+  return { root, registry, rec, kh, xp, ep, bundle, bundleRd, run };
 }
+
+describe("rev 1.3 quote-purpose separation", () => {
+  it("E_NONCE for a quote carrying the raw client nonce (pre-rev-1.3) or a registration nonce", async () => {
+    const s = setup();
+    const n = randomBytes(32);
+    expect(await code(async () => s.run(await s.bundleRd(new Uint8Array([...s.kh, ...n])), n))).toBe("E_NONCE");
+    const regN = registrationNonce("registry.test.near", "op.test.near");
+    const regB = await s.bundleRd(registrationReportData(s.xp, s.ep, "registry.test.near", "op.test.near"));
+    expect(await code(() => s.run(regB, regN))).toBe("E_NONCE");
+    expect((await s.run(await s.bundle(n), n)).keyHash).toEqual(s.kh);
+  });
+  it("registrationNonce validates ids (1..64 printable ASCII bytes), reportData validates the nonce", async () => {
+    expect(registrationNonce("a".repeat(64), "b".repeat(64))).toHaveLength(32);
+    for (const [c, o] of [["", "o"], ["c", ""], ["a b", "o"], ["c", "\u00e9"], ["c", 5 as unknown as string], ["\ud800", "o"]] as const) {
+      expect(await code(() => registrationNonce(c, o))).toBe("E_BAD_INPUT");
+    }
+    const s = setup();
+    expect(await code(() => reportData(s.xp, s.ep, new Uint8Array(33)))).toBe("E_BAD_INPUT");
+    expect(await code(() => registrationReportData(s.xp, s.ep, "c".repeat(65), "o"))).toBe("E_BAD_INPUT");
+  });
+});
 
 describe("verifyAttestation extra", () => {
   it("reports every check in order", async () => {

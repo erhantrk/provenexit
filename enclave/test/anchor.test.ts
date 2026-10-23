@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { randomBytes } from "@noble/hashes/utils.js";
 import {
-  MockRoot, MockTdxAttester, anchorMessage, fromHex, keyHash, parseQuote, receiptLeaf, registrationNonce,
+  MockRoot, MockTdxAttester, anchorMessage, fromHex, keyHash, parseQuote, receiptLeaf, registrationNonce, registrationReportData,
   reportData, toHex, verifyEventLog, verifyMerkleProof, type Receipt,
 } from "@plr/shared";
 import { Anchorer } from "../src/anchor.js";
@@ -22,7 +22,10 @@ import { eventually } from "./wait.js";
 const CONTRACT = "registry.test.near";
 const COMPOSE = composeBytes(makeCompose({ kind: "mock", modelSha256: "11".repeat(32), runtime: "node", bundleSha256: "22".repeat(32), entry: "router.bundle.mjs", runtimeSha256: "33".repeat(32), nodeSha256: "33".repeat(32) }));
 
-/** Enforces the §7 rules the router depends on (registration nonce/report_data, anchor sig, seq). */
+/**
+ * Enforces the §7 rules the router depends on (rev 1.3 operator-bound registration report_data, anchor sig, seq).
+ * `operatorId` is the account that submits (the contract's `predecessor_account_id`).
+ */
 class FakeChain implements RegistryWriter {
   readonly contractId = CONTRACT;
   constructor(readonly operatorId = "operator.test.near") {}
@@ -33,6 +36,8 @@ class FakeChain implements RegistryWriter {
   anchors: AnchorView[] = [];
   failNext: string | null = null;
   dropResult = false;
+  /** Every register_instance call that reached the report_data check. */
+  submitted: RegisterArgs[] = [];
   calls = 0;
 
   async registerInstance(a: RegisterArgs): Promise<void> {
@@ -41,7 +46,8 @@ class FakeChain implements RegistryWriter {
     const q = parseQuote(fromHex(a.quote));
     verifyEventLog(a.event_log, q.report.rtmr[3]);
     const xp = fromHex(a.x25519, 32), ep = fromHex(a.ed25519, 32);
-    const want = reportData(xp, ep, registrationNonce(CONTRACT));
+    const want = registrationReportData(xp, ep, CONTRACT, this.operatorId);
+    this.submitted.push(a);
     if (toHex(q.report.reportData) !== toHex(want)) throw new Error("Smart contract panicked: E_REPORT_DATA");
     const kh = toHex(keyHash(xp, ep));
     const prev = this.instances.get(kh) ?? (this.frontRunner ? { ed: ep, next: 0, operator: this.frontRunner } : undefined);
@@ -94,6 +100,34 @@ describe("registration (SPEC §5, §7)", () => {
     expect(t.anchorer.state).toBe("registered");
     expect(t.chain.instances.has(toHex(t.keys.keyHash))).toBe(true);
     expect(t.lines.some((l) => l.startsWith("plr-router: registered key_hash="))).toBe(true);
+  });
+
+  it("rev 1.3: the registration quote is bound to this registry AND this operator, and is never a session quote", async () => {
+    const t = setup();
+    expect(await t.anchorer.register()).toBe(true);
+    const sub = t.chain.submitted[0]!;
+    const rd = parseQuote(fromHex(sub.quote)).report.reportData;
+    expect(toHex(rd)).toBe(toHex(registrationReportData(t.keys.x25519, t.keys.ed25519, CONTRACT, "operator.test.near")));
+    expect(toHex(rd)).toBe(toHex(t.keys.registrationReportData(CONTRACT, "operator.test.near")));
+    // Somebody else submitting the very same quote (front-running / replay) is refused by the contract rule.
+    const thief = new FakeChain("attacker.test.near");
+    await expect(thief.registerInstance(sub)).rejects.toThrow(/E_REPORT_DATA/);
+    expect(thief.instances.size).toBe(0);
+    // A session quote — even one asked for with the registration nonce as client nonce — never matches it.
+    const nonce = registrationNonce(CONTRACT, "operator.test.near");
+    expect(toHex(t.keys.reportData(nonce))).not.toBe(toHex(rd));
+    expect(toHex(t.keys.reportData(nonce))).toBe(toHex(reportData(t.keys.x25519, t.keys.ed25519, nonce)));
+    const asSession = await t.attester.getQuote(t.keys.reportData(nonce));
+    await expect(new FakeChain().registerInstance({ ...sub, quote: toHex(asSession.quote), event_log: asSession.eventLog })).rejects.toThrow(/E_REPORT_DATA/);
+  });
+
+  it("an operator id that cannot be bound (over 64 bytes) → registration fails closed, no quote submitted", async () => {
+    const t = setup();
+    const chain = new FakeChain("o".repeat(65));
+    const a = new Anchorer({ chain, attester: t.attester, keys: t.keys, receipts: t.receipts, composeBytes: COMPOSE, log: new Logger("plr-router", (l) => t.lines.push(l)) });
+    expect(await a.register()).toBe(false);
+    expect(chain.calls).toBe(0);
+    expect(a.lastError).toBe("E_BAD_INPUT");
   });
 
   it("failure → keeps state 'failed' and logs only the code", async () => {
@@ -272,8 +306,10 @@ describe("VPN exit registration + anchoring (SPEC-VPN §5: same Anchorer, VPN re
 });
 
 // Review finding (high): whoever calls register_instance first for a key decides its on-chain operator, hence its
-// org_id (SPEC §7 rev 1.2, SPEC-VPN §10). The exit reads the operator back and stops for good on a mismatch.
-describe("operator read-back (registration hijack)", () => {
+// org_id (SPEC §7 rev 1.2, SPEC-VPN §10). Rev 1.3 closes this on-chain (operator-bound registration quote); the exit
+// still reads the operator back and stops for good on a mismatch (defense in depth: e.g. a faulty registry, simulated
+// here by a chain that records someone else).
+describe("operator read-back (defense in depth against registration hijack)", () => {
   function vpnSetup(chain: FakeChain) {
     const compose = vpnComposeBytesOf(makeVpnCompose({ bundleSha256: "44".repeat(32), nodeSha256: "55".repeat(32), allowLoopback: false }));
     const attester = new MockTdxAttester({ root: MockRoot.generate(), composeBytes: compose });

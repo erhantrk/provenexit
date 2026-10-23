@@ -7,7 +7,7 @@ use std::sync::{Once, OnceLock};
 use near_sdk::serde_json::{self, json, Value};
 use near_sdk::NearToken;
 
-use crate::binding::{ak_cert_message, anchor_message, key_hash, registration_nonce};
+use crate::binding::{ak_cert_message, anchor_message, key_hash, registration_nonce, registration_report_data, MAX_ACCOUNT_ID_BYTES};
 use crate::bytes::{decode_hex, decode_hex_array, encode_hex};
 use crate::ecdsa::{self, compress, verify_low_s};
 use crate::errors::*;
@@ -58,6 +58,11 @@ fn args_of(c: &Value) -> RegArgs {
 
 fn ok_args() -> RegArgs {
     args_of(reg_case("ok_mock_tdx_attester"))
+}
+
+/// The account a fixture case is submitted by (`predecessor_account_id`); OPERATOR unless the case says otherwise.
+fn predecessor_of(c: &Value) -> &str {
+    c.get("predecessor").map(|p| p.as_str().expect("predecessor is a string")).unwrap_or(OPERATOR)
 }
 
 // ---------------- harness ----------------
@@ -336,12 +341,14 @@ fn re_proposing_replaces_the_pending_owner() {
 #[test]
 fn every_registration_vector_matches_the_ts_reference() {
     let cases = fx()["registrations"].as_array().unwrap();
-    assert!(cases.len() >= 60, "fixture set unexpectedly small");
+    assert!(cases.len() >= 70, "fixture set unexpectedly small");
+    assert_eq!((fs("operator_id").as_str(), fs("stranger_id").as_str()), (OPERATOR, STRANGER), "fixture accounts");
     for case in cases {
         let name = case["name"].as_str().unwrap();
         let expect = case["expect"].as_str().unwrap();
         let mut c = fresh();
-        caller(OPERATOR, DEPOSIT);
+        let submitter = predecessor_of(case);
+        caller(submitter, DEPOSIT);
         let a = args_of(case);
         quiet_contract_panics();
         let res = catch_unwind(AssertUnwindSafe(|| register(&mut c, &a)));
@@ -353,6 +360,7 @@ fn every_registration_vector_matches_the_ts_reference() {
                 assert_eq!(rec.compose_hash, fs("compose_hash"), "{name}");
                 assert_eq!(rec.os_measurement, fs("os_measurement"), "{name}");
                 assert_eq!((rec.x25519.as_str(), rec.ed25519.as_str()), (a.x25519.as_str(), a.ed25519.as_str()), "{name}");
+                assert_eq!(rec.operator.as_str(), submitter, "{name}: operator is the bound submitter");
             }
             ("ok", Err(p)) => panic!("{name}: expected success, got {:?}", panic_message(&*p)),
             (code, Ok(_)) => panic!("{name}: expected {code}, but registration succeeded"),
@@ -360,6 +368,8 @@ fn every_registration_vector_matches_the_ts_reference() {
                 let msg = panic_message(&*p);
                 assert_eq!(msg.split(':').next().unwrap(), code, "{name}: message {msg:?}");
                 assert_eq!(c.get_instance(fs("key_hash")), None, "{name}: nothing registered");
+                let kh = key_hash(&decode_hex_array(&a.x25519).unwrap_or([1; 32]), &decode_hex_array(&a.ed25519).unwrap_or([1; 32]));
+                assert_eq!(c.get_instance(encode_hex(&kh)), None, "{name}: claimed keys not registered");
             }
         }
     }
@@ -451,7 +461,11 @@ fn re_registration_refreshes_expiry_and_keeps_seq_and_operator() {
     advance_ms(1_000);
     take_logs();
     take_transfers();
-    caller(STRANGER, 0); // replaying the registration quote needs no deposit (no new storage) and is harmless
+    // The quote is bound to OPERATOR (SPEC §5 rev 1.3): nobody else can even replay it.
+    caller(STRANGER, DEPOSIT);
+    fails_with(E_REPORT_DATA, || register(&mut c, &ok_args()));
+    assert!(take_logs().is_empty() && take_transfers().is_empty());
+    caller(OPERATOR, 0); // refreshing needs no deposit (no new storage)
     register(&mut c, &ok_args());
     let rec = c.get_instance(kh.clone()).unwrap();
     assert_eq!(rec.next_seq, 3);
@@ -813,7 +827,14 @@ fn primitive_vectors_match_ts() {
         assert_eq!(encode_hex(&key_hash(&x, &e)), kv["key_hash"].as_str().unwrap());
     }
     for n in v["registration_nonce"].as_array().unwrap() {
-        assert_eq!(encode_hex(&registration_nonce(n["contract_id"].as_str().unwrap())), n["nonce"].as_str().unwrap());
+        let (cid, oid) = (n["contract_id"].as_str().unwrap(), n["operator_id"].as_str().unwrap());
+        assert_eq!(encode_hex(&registration_nonce(cid, oid).unwrap()), n["nonce"].as_str().unwrap(), "{cid} / {oid}");
+    }
+    for r in v["registration_report_data"].as_array().unwrap() {
+        let x = decode_hex_array(r["x25519"].as_str().unwrap()).unwrap();
+        let e = decode_hex_array(r["ed25519"].as_str().unwrap()).unwrap();
+        let rd = registration_report_data(&x, &e, r["contract_id"].as_str().unwrap(), r["operator_id"].as_str().unwrap()).unwrap();
+        assert_eq!(encode_hex(&rd), r["report_data"].as_str().unwrap());
     }
     for d in v["event_digests"].as_array().unwrap() {
         let payload = decode_hex(d["event_payload"].as_str().unwrap()).unwrap();
@@ -979,9 +1000,11 @@ fn get_instance_carries_the_operators_live_org_id() {
     c.approve_operator(OPERATOR.parse().unwrap(), "acme-2".into());
     assert_eq!(c.get_instance(kh.clone()).unwrap().org_id.as_deref(), Some("acme-2"), "re-approve = change, live");
 
-    // A refresh by someone else keeps the original operator, hence its org.
+    // Only the bound operator can refresh (rev 1.3); a refresh keeps its org.
     advance_ms(1_000);
     caller(STRANGER, 0);
+    fails_with(E_REPORT_DATA, || register(&mut c, &ok_args()));
+    caller(OPERATOR, 0);
     register(&mut c, &ok_args());
     assert_eq!(c.get_instance(kh.clone()).unwrap().org_id.as_deref(), Some("acme-2"));
 
@@ -1001,10 +1024,214 @@ fn approving_an_operator_does_not_affect_registration_or_anchoring_policy() {
     caller(OWNER, 0);
     c.approve_operator(OPERATOR.parse().unwrap(), "org-a".into());
     take_logs();
-    // Org approval is metadata for clients, not an authorization: unapproved accounts still register.
+    // Org approval is metadata for clients, not an authorization: unapproved accounts still register
+    // (with a quote their enclave bound to them, rev 1.3).
     caller(STRANGER, DEPOSIT);
-    let kh = register(&mut c, &ok_args());
+    let kh = register(&mut c, &args_of(reg_case("ok_bound_to_and_submitted_by_stranger")));
     assert_eq!(c.get_instance(kh.clone()).unwrap().operator.as_str(), STRANGER);
     assert_eq!(c.get_instance(kh).unwrap().org_id, None);
+    caller(OPERATOR, DEPOSIT);
+    let kh = register(&mut c, &ok_args());
+    assert_eq!(c.get_instance(kh).unwrap().org_id.as_deref(), Some("org-a"));
     anchor(&mut c, &anchor_step("first_batch"));
+}
+
+// ---------------- operator-bound registration (SPEC §5/§7 rev 1.3) ----------------
+
+#[test]
+fn registration_nonce_is_length_prefixed_and_bounded() {
+    let n = |c: &str, o: &str| registration_nonce(c, o);
+    // u8(len) prefixes make the (contract, operator) split unambiguous.
+    assert_ne!(n("ab", "c"), n("a", "bc"));
+    assert_ne!(n(OPERATOR, "registry.test.near"), n("registry.test.near", OPERATOR), "order matters");
+    let parts: [&[u8]; 5] = [b"PLR-v1/register/2", &[2], b"ab", &[1], b"c"];
+    let manual = sha256(&parts.concat());
+    assert_eq!(n("ab", "c"), Some(manual));
+    // Both ids must be 1..=64 bytes (the NEAR account id limit); fail closed otherwise.
+    let max = "x".repeat(MAX_ACCOUNT_ID_BYTES);
+    let over = "x".repeat(MAX_ACCOUNT_ID_BYTES + 1);
+    assert!(n(&max, &max).is_some());
+    for (c, o) in [("", OPERATOR), ("registry.test.near", ""), (over.as_str(), OPERATOR), ("registry.test.near", over.as_str())] {
+        assert_eq!(n(c, o), None, "{c:?} / {o:?}");
+        assert_eq!(registration_report_data(&[1; 32], &[2; 32], c, o), None);
+    }
+    // 256-byte ids would wrap a u8 length: still rejected, never truncated.
+    assert_eq!(n(&"x".repeat(256 + 2), "ab"), None);
+}
+
+/// The quote's report_data (bytes 568..632) of a fixture case.
+fn report_data_of(case: &str) -> [u8; 64] {
+    parse_mock(&decode_hex(reg_case(case)["quote"].as_str().unwrap()).unwrap()).unwrap().report_data()
+}
+
+#[test]
+fn a_registration_quote_only_registers_for_the_operator_it_is_bound_to() {
+    let kh = fs("key_hash");
+    // Bound to OPERATOR, submitted by STRANGER: E_REPORT_DATA, no trace, no transfer.
+    let mut c = fresh();
+    caller(STRANGER, DEPOSIT);
+    let before = test_host::storage_usage_now();
+    take_transfers();
+    fails_with(E_REPORT_DATA, || register(&mut c, &ok_args()));
+    assert_eq!(c.get_instance(kh.clone()), None);
+    assert_eq!(test_host::storage_usage_now(), before);
+    assert!(take_logs().is_empty() && take_transfers().is_empty());
+    // Nor by the registry contract itself or the owner.
+    for who in ["registry.test.near", OWNER] {
+        caller(who, DEPOSIT);
+        fails_with(E_REPORT_DATA, || register(&mut c, &ok_args()));
+    }
+    // Bound to STRANGER, submitted by OPERATOR (the wrong-operator quote): E_REPORT_DATA.
+    caller(OPERATOR, DEPOSIT);
+    fails_with(E_REPORT_DATA, || register(&mut c, &args_of(reg_case("report_data_stranger_quote_submitted_by_operator"))));
+    // The bound operator succeeds and becomes the instance's operator.
+    register(&mut c, &ok_args());
+    assert_eq!(c.get_instance(kh.clone()).unwrap().operator.as_str(), OPERATOR);
+    // The quote binds exactly what registration_report_data(keys, contract, OPERATOR) says.
+    let a = ok_args();
+    let expected = registration_report_data(
+        &decode_hex_array(&a.x25519).unwrap(),
+        &decode_hex_array(&a.ed25519).unwrap(),
+        "registry.test.near",
+        OPERATOR,
+    )
+    .unwrap();
+    assert_eq!(report_data_of("ok_mock_tdx_attester"), expected);
+}
+
+#[test]
+fn the_same_quote_is_rejected_by_another_registry_account() {
+    // Deploying the same code under another account id changes current_account_id, hence the nonce.
+    let mut c = fresh();
+    set_ctx(|x| x.current_account_id = "other.test.near".into());
+    caller(OPERATOR, DEPOSIT);
+    fails_with(E_REPORT_DATA, || register(&mut c, &ok_args()));
+    // ... while a quote bound to that account (and OPERATOR) registers there.
+    let kh = register(&mut c, &args_of(reg_case("report_data_other_registry")));
+    assert_eq!(kh, fs("key_hash"));
+}
+
+#[test]
+fn session_domain_quotes_never_register() {
+    // What /v1/attestation produces: key_hash ‖ SHA256("PLR-v1/session-nonce" ‖ nonce) — even when the client picks
+    // the registration nonce itself as its nonce (the hijack the rev 1.3 change closes), for either submitter.
+    let session = fx()["vectors"]["session_report_data_of_registration_nonce"].as_str().unwrap();
+    assert_eq!(encode_hex(&report_data_of("report_data_session_quote_of_registration_nonce")), session);
+    let reg = encode_hex(&report_data_of("ok_mock_tdx_attester"));
+    assert_eq!(session[..64], reg[..64], "same keys");
+    assert_ne!(session[64..], reg[64..], "different purpose");
+    for (case, who) in [
+        ("report_data_session_nonce", OPERATOR),
+        ("report_data_session_quote_of_registration_nonce", OPERATOR),
+        ("report_data_session_quote_of_registration_nonce_by_stranger", STRANGER),
+    ] {
+        let mut c = fresh();
+        caller(who, DEPOSIT);
+        fails_with(E_REPORT_DATA, || register(&mut c, &args_of(reg_case(case))));
+        assert_eq!(c.get_instance(fs("key_hash")), None, "{case}");
+    }
+}
+
+#[test]
+fn rev_1_2_registration_nonces_are_no_longer_accepted() {
+    // rev 1.2: report_data[32..] = SHA256("PLR-v1/register" ‖ contract_id), no operator binding.
+    let parts: [&[u8]; 2] = [b"PLR-v1/register", b"registry.test.near"];
+    let old = sha256(&parts.concat());
+    assert_eq!(report_data_of("report_data_rev12_registration_nonce")[32..], old);
+    for case in ["report_data_rev12_registration_nonce", "report_data_rev12_label_with_prefixes", "report_data_no_length_prefixes"] {
+        let mut c = fresh();
+        caller(OPERATOR, DEPOSIT);
+        fails_with(E_REPORT_DATA, || register(&mut c, &args_of(reg_case(case))));
+    }
+}
+
+// ---------------- rev 1.3 upgrade: fail closed, then drop every old compose approval ----------------
+
+/// A rev 1.2 state as it would sit on chain: `registered()`'s instance/anchors/credit/operators plus a compose
+/// approval under the rev 1.2 `AllowedCompose` prefix. Returns its borsh bytes (also written as the contract state).
+fn rev12_state() -> Vec<u8> {
+    let mut c = registered();
+    caller(OWNER, 0);
+    c.approve_operator(OPERATOR.parse().unwrap(), "org-a".into());
+    assert_eq!(anchor(&mut c, &anchor_step("first_batch")), 0);
+    // `fresh()` approved the build under the rev 1.3 prefix; a real rev 1.2 state has nothing there.
+    caller(OWNER, 0);
+    c.revoke_compose(fs("compose_hash"));
+    let mut old_compose = LookupSet::new(StorageKey::AllowedCompose);
+    old_compose.insert(decode_hex_array::<32>(&fs("compose_hash")).unwrap());
+    let old = RegistryRev12 {
+        owner: c.owner,
+        pending_owner: c.pending_owner,
+        root_kind: c.root_kind,
+        root_p256: c.root_p256,
+        allowed_compose: old_compose,
+        allowed_os: c.allowed_os,
+        instances: c.instances,
+        anchors: c.anchors,
+        instance_ttl_ms: c.instance_ttl_ms,
+        anchor_credit: c.anchor_credit,
+        operators: c.operators,
+    };
+    near_sdk::env::state_write(&old);
+    take_logs();
+    near_sdk::borsh::to_vec(&old).unwrap()
+}
+
+#[test]
+fn rev_1_2_state_does_not_load_until_migrated() {
+    // Redeploying rev 1.3 code over a rev 1.2 registry must not keep old builds approved: the state no longer
+    // deserializes, so every method (incl. register_instance) fails until the contract account runs `migrate`.
+    let raw = rev12_state();
+    assert!(near_sdk::borsh::from_slice::<Registry>(&raw).is_err(), "rev 1.2 state must not load as rev 1.3");
+    let c = fresh();
+    let new_raw = near_sdk::borsh::to_vec(&c).unwrap();
+    assert!(near_sdk::borsh::from_slice::<RegistryRev12>(&new_raw).is_err());
+    assert_eq!(near_sdk::borsh::from_slice::<Registry>(&new_raw).unwrap().get_state_rev(), STATE_REV);
+    assert_eq!(c.get_state_rev(), 3);
+}
+
+#[test]
+fn migrate_empties_the_compose_allowlist_and_keeps_everything_else() {
+    rev12_state();
+    caller("registry.test.near", 0);
+    let mut m = Registry::migrate();
+    assert_single_event(&take_logs(), "compose_allowlist_reset");
+    assert_eq!(m.get_state_rev(), STATE_REV);
+    // No pre-rev-1.3 build stays approved ...
+    assert!(!m.is_compose_allowed(fs("compose_hash")));
+    assert!(!m.is_allowed(fs("compose_hash"), fs("os_measurement")));
+    // ... everything else survives.
+    assert_eq!(m.get_owner().as_str(), OWNER);
+    assert_eq!(m.get_root().p256, fs("root_p256"));
+    assert!(m.is_os_allowed(fs("os_measurement")));
+    assert_eq!(m.get_instance_ttl_ms(), DEFAULT_INSTANCE_TTL_MS);
+    assert_eq!(m.anchor_count(), 1);
+    assert_eq!(m.get_operator(OPERATOR.into()).as_deref(), Some("org-a"));
+    let inst = m.get_instance(fs("key_hash")).expect("instance kept");
+    assert_eq!(inst.operator.as_str(), OPERATOR);
+    assert_eq!(inst.next_seq, anchor_step("first_batch")["count"].as_u64().unwrap());
+    assert!(credit(&m) > 0);
+    // Old instances can neither anchor nor (re-)register until the owner approves a rev 1.3 build.
+    fails_with(E_COMPOSE_NOT_ALLOWED, || anchor(&mut m, &anchor_step("second_batch")));
+    caller(OPERATOR, DEPOSIT);
+    fails_with(E_COMPOSE_NOT_ALLOWED, || register(&mut m, &ok_args()));
+    caller(OWNER, 0);
+    m.allow_compose(fs("compose_hash"));
+    caller(OPERATOR, DEPOSIT);
+    assert_eq!(register(&mut m, &ok_args()), fs("key_hash"));
+    assert_eq!(m.get_instance(fs("key_hash")).unwrap().operator.as_str(), OPERATOR);
+}
+
+#[test]
+fn migrate_runs_once_and_only_on_a_rev_1_2_state() {
+    rev12_state();
+    caller("registry.test.near", 0);
+    let m = Registry::migrate();
+    near_sdk::env::state_write(&m);
+    fails_with(E_BAD_INPUT, Registry::migrate); // already rev 1.3
+    test_host::reset();
+    caller("registry.test.near", 0);
+    fails_with(E_BAD_INPUT, Registry::migrate); // no state at all
+    near_sdk::env::storage_write(b"STATE", b"garbage");
+    fails_with(E_BAD_INPUT, Registry::migrate);
 }

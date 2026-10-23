@@ -263,6 +263,15 @@ describe("VpnClient — verification before every connection (§7)", () => {
     expect(X.stats.tunnels).toBe(0);
   });
 
+  it("rev 1.3: raw-nonce (pre-1.3) or registration-purpose quotes → E_NONCE; no tunnel", async () => {
+    for (const purpose of ["raw-nonce", "registration"] as const) {
+      X.behaviour.quotePurpose = purpose;
+      expect(await codeOf(vpn().connect("127.0.0.1", D.port)), purpose).toBe("E_NONCE");
+    }
+    expect(X.stats.tunnels).toBe(0);
+    expect(D.hits()).toBe(0);
+  });
+
   it("invalid destinations are refused locally before any network traffic (E_BAD_INPUT)", async () => {
     const c = vpn();
     for (const [h, p] of [["bad host!", 80], ["01.2.3.4", 80], ["2130706433", 80], ["a..b", 80], ["x".repeat(254), 80], ["ok.test", 0], ["ok.test", 65536], ["ok.test", 1.5]] as const)

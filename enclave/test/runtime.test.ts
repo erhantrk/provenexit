@@ -3,14 +3,14 @@
 // on a mismatch, runs verified private copies, and launches llama-server with prompt caching disabled.
 import { afterAll, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join, resolve } from "node:path";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { MockRoot, toHex } from "@plr/shared";
-import { composeBytes, makeCompose, parseCompose } from "../src/compose.js";
-import { HostError, DEFAULT_LLAMA_SERVER, llamaServerArgs, measureBoot } from "../src/mock-tdx/host.js";
+import { VPN_ENTRY, composeBytes, makeComboCompose, makeCompose, parseCompose } from "../src/compose.js";
+import { HostError, DEFAULT_LLAMA_SERVER, installModel, launch, launchCombo, llamaServerArgs, measureBoot } from "../src/mock-tdx/host.js";
 import { installRuntime, measureRuntime, readMacho, runtimeDigest } from "../src/mock-tdx/runtime.js";
 import { HttpLlmClient, upstreamBody } from "../src/llm.js";
 
@@ -177,6 +177,74 @@ describe("the host refuses unmeasured runtimes", () => {
     expect(await hostErr(measureBoot({ composePath, llmFile, root, llamaServer: steal }))).toBe("E_RUNTIME_FORMAT");
     expect(await hostErr(measureBoot({ composePath, llmFile, root, llamaServer: process.execPath }))).toBe("E_MEASUREMENT_MISMATCH");
   });
+});
+
+// Regression for review finding "llama.cpp model file is hashed at measure time but loaded later from the original
+// path (TOCTOU)": the host runs llama-server on a private, re-hashed copy of the model, never on the original.
+describe("the model llama-server runs is the measured one", () => {
+  const root = MockRoot.generate();
+  const sha = (b: Uint8Array | string) => toHex(sha256(typeof b === "string" ? new TextEncoder().encode(b) : b));
+
+  it("installModel: 0400 private copy, re-hashed; later writes to the source never reach it", async () => {
+    const src = join(tmp, "m-src.gguf");
+    writeFileSync(src, "GGUF the measured model");
+    const dir = mkdtempSync(join(tmp, "mi-"));
+    const copy = await installModel(src, dir, sha("GGUF the measured model"));
+    expect(copy).toBe(join(dir, "model.gguf"));
+    expect(statSync(copy).mode & 0o777).toBe(0o400);
+    writeFileSync(src, "GGUF a different model!!");
+    expect(readFileSync(copy, "utf8")).toBe("GGUF the measured model");
+    // The copy itself must reproduce the pin.
+    expect(await hostErr(installModel(src, mkdtempSync(join(tmp, "mi-")), sha("GGUF the measured model")))).toBe("E_MEASUREMENT_MISMATCH");
+    expect(await hostErr(installModel(join(tmp, "missing.gguf"), mkdtempSync(join(tmp, "mi-")), sha("x")))).toBe("E_LLM_FILE");
+    expect(await hostErr(installModel(src, dir, sha("GGUF a different model!!")))).toBe("E_LLM_FILE"); // never overwrites
+  });
+
+  /** A llama.cpp build whose "llama-server" is this node (its closure digest is pinned), with a tiny model file. */
+  async function llamaBuild(combo: boolean) {
+    const node = (await measureRuntime(process.execPath)).digest;
+    const dir = mkdtempSync(join(tmp, "tt-"));
+    const model = join(dir, "model.gguf");
+    writeFileSync(model, "GGUF measured");
+    const routerBundle = readFileSync(join(DIST, "router.bundle.mjs"));
+    writeFileSync(join(dir, "router.bundle.mjs"), routerBundle);
+    const router = {
+      kind: "llama.cpp" as const, modelSha256: sha("GGUF measured"), runtime: "llama.cpp/llama-server", runtimeSha256: node,
+      bundleSha256: sha(routerBundle), entry: "router.bundle.mjs", nodeSha256: node,
+    };
+    let c;
+    if (combo) {
+      const info = JSON.parse(readFileSync(join(DIST, "build-info.json"), "utf8"));
+      const vpnBundle = readFileSync(join(DIST, info.vpn["vpn-honest"].bundle));
+      writeFileSync(join(dir, VPN_ENTRY), vpnBundle);
+      c = makeComboCompose({ router, vpn: { bundleSha256: sha(vpnBundle), nodeSha256: node, allowLoopback: true } });
+    } else {
+      c = makeCompose(router);
+    }
+    const composePath = join(dir, "app-compose.json");
+    writeFileSync(composePath, composeBytes(c));
+    const runDir = mkdtempSync(join(tmp, "run-"));
+    return { composePath, model, runDir };
+  }
+
+  for (const combo of [false, true]) {
+    it.runIf(process.platform === "darwin")(`${combo ? "launchCombo" : "launch"} refuses a model swapped between measurement and spawn`, async () => {
+      const { composePath, model, runDir } = await llamaBuild(combo);
+      let out = "";
+      const output = (s: string) => {
+        out += s;
+        // The window the reviewer used: right after the host printed `measured`, flip the operator-writable original.
+        if (s.startsWith("plr-host: measured ")) appendFileSync(model, "!");
+      };
+      const o = { composePath, root, runDir, llmFile: model, llamaServer: process.execPath, routerPort: 0, output };
+      expect(await hostErr(combo ? launchCombo({ ...o, exitPort: 0 }) : launch(o))).toBe("E_MEASUREMENT_MISMATCH");
+      expect(out).toContain("plr-host: measured ");
+      expect(out).toContain("plr-host: launch_failed code=E_MEASUREMENT_MISMATCH");
+      expect(out).not.toContain("runtimes_verified");
+      expect(out).not.toContain("llm_ready");
+      expect(readdirSync(runDir)).toEqual([]); // private dir removed, nothing started
+    }, 60_000);
+  }
 });
 
 describe("llama-server prompt-cache side channel", () => {

@@ -8,7 +8,7 @@ registration quotes**, and Ed25519-authorised Merkle anchoring of receipts.
 ```sh
 cd contracts/near
 cargo near build non-reproducible-wasm --no-abi   # → target/near/plr_registry.wasm (~230 KB)
-cargo test --release                              # 41 tests, incl. 64 TS-generated registration vectors
+cargo test --release                              # 49 tests, incl. the TS-generated registration vectors
 ```
 
 Without network, add `CARGO_NET_OFFLINE=true`.
@@ -33,17 +33,46 @@ Without network, add `CARGO_NET_OFFLINE=true`.
 | `get_operator(account_id) → org_id \| null` | view | `null` if not approved or `account_id` is malformed |
 | `register_instance(quote, event_log, app_compose, x25519, ed25519) → key_hash` | anyone, `#[payable]` | SPEC §7 steps 1-7; storage deposit required (≈0.0035 NEAR used; ≈6.5 Tgas); excess becomes anchor credit (≤ 0.05 NEAR), the rest is refunded |
 | `anchor_receipts(key_hash, root, first_seq, count, sig) → anchor_id` | anyone, `#[payable]` | storage paid by the attached deposit (excess refunded) or the instance's prepaid anchor credit, else `E_DEPOSIT`; event `receipts_anchored` |
+| `migrate()` | contract account (`#[private]`) | rev 1.3 one-time upgrade of a rev 1.2 state; **empties the compose allowlist** (see below); event `compose_allowlist_reset` `{state_rev}` |
+| `get_state_rev() → u8` | view | `3` for the rev 1.3 layout |
 | `get_anchor_credit(key_hash) → string` | view | remaining prepaid anchor storage (yoctoNEAR); `register_instance` keeps up to 0.05 NEAR of its excess deposit as credit, refunds the rest |
 | views | | `is_allowed(compose_hash, os_measurement)`, `is_compose_allowed(hash)`, `is_os_allowed(hash)`, `get_instance(key_hash)` (null if unknown/expired; includes `org_id`, the registering operator's org looked up live at read time, or null), `get_root()`, `get_anchor(id)`, `anchor_count()`, `get_owner()`, `get_pending_owner()`, `get_instance_ttl_ms()` |
 
 Views never panic on malformed input: a malformed or all-zero hash is simply "not allowed" / `null`.
 
+**Operator-bound registration (SPEC §5/§7 rev 1.3).** Check 7 requires
+`report_data == key_hash(x25519, ed25519) ‖ SHA256("PLR-v1/register/2" ‖ u8(len c) ‖ c ‖ u8(len o) ‖ o)` with
+`c = current_account_id` and `o = predecessor_account_id`. A registration quote therefore registers only on this
+registry and only when submitted by the operator account the enclave bound it to (its `PLR_OPERATOR_ID`); anyone else
+gets `E_REPORT_DATA`. Session quotes (`key_hash ‖ SHA256("PLR-v1/session-nonce" ‖ nonce)`) and rev 1.2 registration
+nonces (`SHA256("PLR-v1/register" ‖ c)`) never match. Account ids outside 1..=64 bytes fail closed (`E_REPORT_DATA`).
+
 Re-registering the same keys refreshes `expires_at_ms` (and compose/OS) but keeps `operator`, `registered_at_ms` and
-`next_seq`. It adds no storage, so it needs no deposit; a deposit attached to a refresh tops up the anchor credit.
+`next_seq`; since the quote is operator-bound, only that operator can refresh. It adds no storage, so it needs no
+deposit; a deposit attached to a refresh tops up the anchor credit.
 
 Organizations are metadata for clients (two-hop routing requires `entry.org_id != exit.org_id`, SPEC-VPN). They do
 not gate `register_instance` or `anchor_receipts`: an unapproved account can still register, and its instances report
 `org_id: null`.
+
+**Upgrading a rev 1.2 registry to rev 1.3 (fail closed).** A pre-rev-1.3 router or exit puts the *raw* client
+nonce into its `/v1/attestation` quotes. Anyone can therefore ask an old instance for a "session" quote over
+`registration_nonce(registry, attacker)` and register that instance's keys under their own account (so the attacker
+becomes its `operator`, and for exits its organization, permanently). The rev 1.3 check cannot tell which build
+produced a quote, so **no pre-rev-1.3 compose hash may stay on the allowlist of a rev 1.3 registry**. The contract
+enforces this:
+
+* The rev 1.3 state has a trailing `state_rev` field and the compose allowlist lives under a new storage prefix.
+  Deploying rev 1.3 code over a rev 1.2 state therefore makes *every* method (including `register_instance` and the
+  views) fail with `Cannot deserialize the contract state` until the migration runs.
+* `migrate()` must be called by the contract account itself, in the same batch as the code deploy (deploy +
+  `migrate` as one transaction, so there is no window). It keeps owner, root, OS allowlist, instances, anchors,
+  credits, TTL and operator organizations, and **starts with an empty compose allowlist**. It fails with
+  `E_BAD_INPUT` on anything but a rev 1.2 state (so it cannot run twice). The old allowlist entries stay in storage
+  under the old prefix and are never read again.
+* The owner then re-approves **only rev 1.3 builds** (`allow_compose`). Instances of old builds stay readable but
+  their compose is no longer allowed: clients reject them and they cannot anchor. Never re-approve a pre-rev-1.3
+  compose hash on a rev 1.3 registry. Deploying a fresh registry account works too.
 
 **State layout (rev 1.2):** the `operators` map was added as the last field of the contract state and the last
 `StorageKey` variant. A contract deployed before rev 1.2 cannot be upgraded in place by code redeploy alone, because
@@ -66,7 +95,7 @@ problem incl. TEE type, bad hex, > 4096 hex chars), `E_QUOTE_SIG`, `E_DEBUG_TD`,
 | `src/quote.rs` | MOCK quote parsing (SPEC §2) |
 | `src/ecdsa.rs` | P-256: low-S + range checks, on-curve check, compression, host `p256_verify` |
 | `src/eventlog.rs` | event-log verification and RTMR3 replay (SPEC §3), same rules as `@plr/shared` |
-| `src/binding.rs` | key hash, registration nonce, AK-cert and anchor message layouts |
+| `src/binding.rs` | key hash, operator-bound registration nonce (rev 1.3), AK-cert and anchor message layouts |
 | `src/bytes.rs`, `src/hash.rs`, `src/errors.rs`, `src/events.rs`, `src/ctx.rs` | strict hex + constant-time helpers, hashes, codes, NEP-297, context seam |
 | `src/test_host.rs`, `src/tests.rs` | native NEAR host for unit tests, contract tests |
 | `fixtures/gen.mjs` → `fixtures/vectors.json` | cross-implementation vectors produced with `@plr/shared` |

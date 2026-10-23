@@ -28,8 +28,6 @@ export interface RouterConfig {
   near: NearConfig | null;
   /** True if NEAR variables were present but incomplete/invalid: registration is disabled (clients refuse). */
   nearConfigError: boolean;
-  /** Registries named in the environment (see {@link registryIdsOf}); their registration nonces are never session-quoted. */
-  registryIds: string[];
 }
 
 export type Env = Readonly<Record<string, string | undefined>>;
@@ -74,22 +72,7 @@ export function loadConfig(env: Env = process.env): RouterConfig {
   } catch {
     nearConfigError = true;
   }
-  return { tdxSocket, composePath, host, port, llmPort, llmApiKey, anchorIntervalMs, near, nearConfigError, registryIds: registryIdsOf(env) };
-}
-
-/**
- * Every well-formed registry contract id in PLR_REGISTRY / PLR_VPN_REGISTRY, even when the rest of the NEAR
- * configuration is missing or invalid. The service refuses to quote the registration nonce of any of them on its
- * public `/v1/attestation` (SPEC §5: session quotes use a client's random nonce), so nobody but the instance's own
- * anchorer can obtain a registration quote for it before it is registered.
- */
-export function registryIdsOf(env: Env): string[] {
-  const ids = new Set<string>();
-  for (const k of ["PLR_REGISTRY", "PLR_VPN_REGISTRY"] as const) {
-    const v = env[k];
-    if (typeof v === "string" && NEAR_ACCOUNT_RE.test(v)) ids.add(v);
-  }
-  return [...ids];
+  return { tdxSocket, composePath, host, port, llmPort, llmApiKey, anchorIntervalMs, near, nearConfigError };
 }
 
 /**

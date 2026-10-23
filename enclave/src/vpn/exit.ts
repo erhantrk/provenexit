@@ -13,7 +13,7 @@ import http from "node:http";
 import type { Duplex } from "node:stream";
 import { sha256 } from "@noble/hashes/sha2.js";
 import type { Attester } from "@plr/shared";
-import { parseVpnCompose } from "../compose.js";
+import { vpnPolicyOf } from "../compose.js";
 import { HttpError, parseUrl, sendError } from "../http-util.js";
 import { commonRoutes, type RouteHandler } from "../service-routes.js";
 import { createDohLookup } from "./doh.js";
@@ -32,8 +32,6 @@ export interface ExitOptions {
   /** Exact bytes of the measured VPN app-compose.json (its policy.egress is enforced). */
   composeBytes: Uint8Array;
   receipts: VpnReceiptLog;
-  /** Registration nonces of this instance's registries: refused on `/v1/attestation` (see `commonRoutes`). */
-  reservedNonces?: readonly Uint8Array[];
   /** Upstream dialer (default: the honest {@link dialEgress}). */
   dial?: Dialer;
   /**
@@ -81,8 +79,9 @@ function connectionHasUpgrade(v: string | string[] | undefined): boolean {
 
 export function createExit(o: ExitOptions): ExitServer {
   const composeBytes = o.composeBytes.slice();
-  const compose = parseVpnCompose(composeBytes); // strict + canonical; the policy we enforce is the measured one
-  const policy = { allow_loopback: compose.policy.egress.allow_loopback, deny_private: compose.policy.egress.deny_private };
+  // Strict + canonical (`plr-vpn`, or the `vpn` part of a `plr-combo`); the policy we enforce is the measured one.
+  const vpnPolicy = vpnPolicyOf(composeBytes);
+  const policy = { allow_loopback: vpnPolicy.egress.allow_loopback, deny_private: vpnPolicy.egress.deny_private };
   const composeHash = sha256(composeBytes);
   const maxTunnels = o.maxTunnels ?? MAX_TUNNELS;
   const timeouts: TunnelTimeouts = { ...DEFAULT_TUNNEL_TIMEOUTS, ...o.timeouts };
@@ -92,14 +91,14 @@ export function createExit(o: ExitOptions): ExitServer {
     policy,
     receipts: o.receipts,
     dial: o.dial ?? dialEgress,
-    lookup: o.lookup ?? createDohLookup(compose.policy.dns.doh),
+    lookup: o.lookup ?? createDohLookup(vpnPolicy.dns.doh),
     timeouts,
     timers: o.timers ?? nodeTimers,
     now: o.now ?? Date.now,
   };
   const open = new Set<ExitTunnel>();
 
-  const common = commonRoutes({ attester: o.attester, keys: o.keys, composeBytes, receipts: o.receipts, reservedNonces: o.reservedNonces ?? [] });
+  const common = commonRoutes({ attester: o.attester, keys: o.keys, composeBytes, receipts: o.receipts });
   const tunnelWithoutUpgrade: RouteHandler = () => {
     throw new HttpError(400, "E_BAD_REQUEST");
   };

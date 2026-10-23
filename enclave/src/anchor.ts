@@ -3,9 +3,11 @@
  * (SPEC-VPN §5: same `register_instance` / `anchor_receipts` on the VPN registry; only the receipt kind differs,
  * and the Anchorer only ever sees leaf hashes).
  *
- * - At boot the router obtains a quote over `key_hash ‖ SHA256("PLR-v1/register" ‖ contract_id)` and calls
- *   `register_instance`. On failure it keeps serving (clients refuse an unregistered instance), logs only the
- *   error code and retries with exponential backoff. Successful registrations are refreshed periodically.
+ * - At boot the instance obtains a registration quote over `key_hash ‖ registration_nonce(contract_id, operator_id)`
+ *   (SPEC §5 rev 1.3: bound to the registry and to this anchorer's own operator account, which the contract checks
+ *   against `current_account_id` / `predecessor_account_id`) and calls `register_instance`. On failure it keeps
+ *   serving (clients refuse an unregistered instance), logs only the error code and retries with exponential backoff.
+ *   Successful registrations are refreshed periodically.
  * - Every `intervalMs`, when receipts are pending, the next contiguous batch (≤ 10 000) is committed as an
  *   RFC 6962 root via `anchor_receipts`, signed with the instance Ed25519 key, with a storage deposit attached
  *   by the chain writer (PLR_ANCHOR_DEPOSIT; the contract refunds the excess and never pays storage from its own
@@ -14,11 +16,12 @@
  *   chain disagrees with the local log, anchoring halts (fail closed: no proofs are served for it).
  * - With `onOperatorMismatch` set (the VPN exit, whose on-chain operator decides its `org_id`, SPEC §7 rev 1.2 /
  *   SPEC-VPN §10), every successful registration is read back: if the instance's recorded `operator` is not this
- *   anchorer's own account (someone else registered the key first), the instance is permanently mis-attributed.
+ *   anchorer's own account, the instance is permanently mis-attributed. Since rev 1.3 the operator-bound registration
+ *   quote already prevents that on-chain; the read-back stays as defense in depth (e.g. a faulty registry).
  *   The anchorer then stops for good (no retries: the record's operator never changes), logs
  *   `registration_failed code=E_OPERATOR_MISMATCH` and calls `onOperatorMismatch` so the service stops serving.
  */
-import { PlrError, anchorMessage, equalBytes, fromHex, registrationNonce, toHex, type Attester } from "@plr/shared";
+import { PlrError, anchorMessage, equalBytes, fromHex, toHex, type Attester } from "@plr/shared";
 import type { EnclaveKeys } from "./keys.js";
 import { Logger, code as codeField, codeOf, hex as hexField, type Code } from "./log.js";
 import type { AnchorView, RegistryWriter } from "./near.js";
@@ -140,8 +143,7 @@ export class Anchorer {
     return this.#exclusive(async () => {
       if (this.#lastError === "E_OPERATOR_MISMATCH") return false; // permanent
       try {
-        const contractId = this.#o.chain.contractId;
-        const rd = this.#o.keys.reportData(registrationNonce(contractId));
+        const rd = this.#o.keys.registrationReportData(this.#o.chain.contractId, this.#o.chain.operatorId);
         const { quote, eventLog } = await this.#o.attester.getQuote(rd);
         await this.#o.chain.registerInstance({
           quote: toHex(quote),

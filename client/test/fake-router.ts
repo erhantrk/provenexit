@@ -10,6 +10,7 @@ import {
   MemoryRegistry,
   keyHash,
   reportData,
+  registrationReportData,
   osMeasurement,
   mockOsReport,
   serverOpen,
@@ -65,6 +66,11 @@ export interface Behaviour {
   replayAttestation?: boolean;
   /** Advertise a different x25519 key than the one the quote binds. */
   mitmKey?: boolean;
+  /**
+   * Quote a report_data of another purpose than §5 rev 1.3 session: `raw-nonce` = pre-1.3 `key_hash ‖ client nonce`,
+   * `registration` = the operator-bound registration report_data (the router's own keys, a real quote either way).
+   */
+  quotePurpose?: "raw-nonce" | "registration";
   /** Never finish the stream after the deltas (hang). */
   hangAfterDeltas?: boolean;
 }
@@ -85,6 +91,24 @@ export interface FakeRouter {
 }
 
 const enc = new TextEncoder();
+/** report_data a fake quotes for `nonce`: the §5 rev 1.3 session value unless a misbehaviour picks another purpose. */
+export function quoteReportData(
+  purpose: "raw-nonce" | "registration" | undefined,
+  xp: Uint8Array,
+  ep: Uint8Array,
+  nonce: Uint8Array,
+  reg: { contractId: string; operator: string },
+): Uint8Array {
+  if (purpose === "raw-nonce") {
+    const rd = new Uint8Array(64);
+    rd.set(keyHash(xp, ep), 0);
+    rd.set(nonce, 32);
+    return rd;
+  }
+  if (purpose === "registration") return registrationReportData(xp, ep, reg.contractId, reg.operator);
+  return reportData(xp, ep, nonce);
+}
+
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -138,7 +162,7 @@ export function makeFakeRouter(o: { debug?: boolean } = {}): FakeRouter {
         stats.attestations++;
         stats.nonces.push(nonceHex);
         if (r.behaviour.replayAttestation && firstBundle) return json(200, firstBundle);
-        const { quote, eventLog } = await attester.getQuote(reportData(xp, ep, fromHex(nonceHex, 32)));
+        const { quote, eventLog } = await attester.getQuote(quoteReportData(r.behaviour.quotePurpose, xp, ep, fromHex(nonceHex, 32), { contractId: "registry.test.near", operator: record.operator }));
         const bundle: AttestationBundle = {
           v: "PLR-v1",
           root_kind: "MOCK",

@@ -41,7 +41,7 @@ const MESSAGES: Partial<Record<PlrErrorCode, string>> = {
   E_QUOTE_SIG: "attestation quote signature is invalid",
   E_DEBUG_TD: "router runs in a debug-mode TD",
   E_REPORT_DATA_KEYS: "attestation does not bind the advertised router keys",
-  E_NONCE: "attestation is not fresh (nonce mismatch)",
+  E_NONCE: "attestation is not a fresh session quote for this request's nonce",
   E_EVENT_LOG: "attestation event log is invalid",
   E_RTMR3: "attestation event log does not replay to RTMR3",
   E_COMPOSE_MISMATCH: "published app-compose does not match the measured compose hash",

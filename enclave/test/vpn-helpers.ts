@@ -78,9 +78,9 @@ export interface TestExit {
  * An in-process exit on 127.0.0.1:0. Without `lookup` it resolves through the DoH resolvers of its compose
  * (`doh`, default: the test resolver 127.0.0.1:18253 — nothing listens there in unit tests, so names fail E_DNS).
  */
-export async function startTestExit(o: { allowLoopback?: boolean; doh?: readonly string[]; lookup?: LookupAll; dial?: Dialer; timeouts?: Partial<TunnelTimeouts>; timers?: Timers; maxTunnels?: number; reservedNonces?: Uint8Array[] } = {}): Promise<TestExit> {
+export async function startTestExit(o: { allowLoopback?: boolean; doh?: readonly string[]; lookup?: LookupAll; dial?: Dialer; timeouts?: Partial<TunnelTimeouts>; timers?: Timers; maxTunnels?: number; /** Measured compose override (e.g. a plr-combo); default a plr-vpn test compose. */ composeBytes?: Uint8Array } = {}): Promise<TestExit> {
   const root = MockRoot.generate();
-  const cb = vpnCompose(o.allowLoopback ?? true, o.doh);
+  const cb = o.composeBytes ?? vpnCompose(o.allowLoopback ?? true, o.doh);
   const attester = new MockTdxAttester({ root, composeBytes: cb });
   const keys = VpnKeys.generate();
   const receipts = new VpnReceiptLog();
@@ -91,7 +91,6 @@ export async function startTestExit(o: { allowLoopback?: boolean; doh?: readonly
     ...(o.timeouts ? { timeouts: o.timeouts } : {}),
     ...(o.maxTunnels !== undefined ? { maxTunnels: o.maxTunnels } : {}),
     ...(o.timers ? { timers: o.timers } : {}),
-    ...(o.reservedNonces ? { reservedNonces: o.reservedNonces } : {}),
   });
   await new Promise<void>((ok) => exit.server.listen(0, "127.0.0.1", ok));
   const port = (exit.server.address() as net.AddressInfo).port;
@@ -277,4 +276,15 @@ export async function deadPort(): Promise<number> {
   const p = (s.address() as net.AddressInfo).port;
   await new Promise<void>((ok) => s.close(() => ok()));
   return p;
+}
+
+/**
+ * Whether `text` mentions the number `n` as a standalone token (e.g. "port=59523", ":59523", `"port":59523`).
+ * A plain substring search for a short number is a false positive waiting to happen: it also matches inside
+ * random hex (key hashes, nonces) and ms timestamps (1792791459523 contains 59523). Alphanumeric neighbours
+ * on either side therefore do not count as a mention.
+ */
+export function mentionsNumber(text: string, n: number): boolean {
+  if (!Number.isSafeInteger(n) || n < 0) throw new Error("mentionsNumber: n must be a non-negative integer");
+  return new RegExp(`(?<![0-9A-Za-z])${n}(?![0-9A-Za-z])`).test(text);
 }

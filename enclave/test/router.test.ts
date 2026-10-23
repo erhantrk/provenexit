@@ -3,7 +3,7 @@ import type http from "node:http";
 import type { AddressInfo } from "node:net";
 import { randomBytes } from "@noble/hashes/utils.js";
 import { x25519 } from "@noble/curves/ed25519.js";
-import { MockRoot, MockTdxAttester, PlrError, registrationNonce, toHex } from "@plr/shared";
+import { MockRoot, MockTdxAttester, PlrError, QUOTE, fromHex, registrationNonce, registrationReportData, reportData, toHex } from "@plr/shared";
 import { createRouter } from "../src/router.js";
 import { RouterKeys } from "../src/keys.js";
 import { ReceiptLog } from "../src/receipts.js";
@@ -36,7 +36,7 @@ function captureStdio() {
 }
 
 interface Ctx { url: string; server: http.Server; receipts: ReceiptLog; keys: RouterKeys }
-async function startRouter(llm: LlmClient, extra: { maxSeenEpks?: number; maxInflight?: number; attester?: MockTdxAttester; reservedNonces?: Uint8Array[] } = {}): Promise<Ctx> {
+async function startRouter(llm: LlmClient, extra: { maxSeenEpks?: number; maxInflight?: number; attester?: MockTdxAttester } = {}): Promise<Ctx> {
   const keys = RouterKeys.generate();
   const receipts = new ReceiptLog();
   const server = createRouter({
@@ -44,7 +44,6 @@ async function startRouter(llm: LlmClient, extra: { maxSeenEpks?: number; maxInf
     log: new Logger("plr-router", (l) => logLines.push(l)),
     ...(extra.maxSeenEpks !== undefined ? { maxSeenEpks: extra.maxSeenEpks } : {}),
     ...(extra.maxInflight !== undefined ? { maxInflight: extra.maxInflight } : {}),
-    ...(extra.reservedNonces ? { reservedNonces: extra.reservedNonces } : {}),
   });
   const port = await listen(server);
   return { url: `http://127.0.0.1:${port}`, server, receipts, keys };
@@ -96,15 +95,25 @@ describe("attestation (SPEC §6.2)", () => {
     expect((await fetch(`${R.url}/nope`)).status).toBe(404);
   });
 
-  it("never quotes its registry's registration nonce (only its own anchorer may obtain a registration quote)", async () => {
-    let quoted = 0;
-    const counting = { getQuote: (rd: Uint8Array) => { quoted++; return attester.getQuote(rd); } } as unknown as MockTdxAttester;
-    const r = await startRouter(new HttpLlmClient(llmPort), { attester: counting, reservedNonces: [registrationNonce("registry.test.near")] });
-    const res = await fetch(`${r.url}/v1/attestation?nonce=${toHex(registrationNonce("registry.test.near"))}`);
-    expect([res.status, await res.json()]).toEqual([400, { error: "E_BAD_REQUEST" }]);
-    expect(quoted).toBe(0);
-    expect((await fetch(`${r.url}/v1/attestation?nonce=${"ab".repeat(32)}`)).status).toBe(200);
-    expect(quoted).toBe(1);
+  // SPEC §5 rev 1.3: the interim refusal of registration-nonce values is gone; quote-purpose domain separation makes
+  // every session quote useless for registration, whatever nonce the client picks.
+  it("a session quote for ANY nonce (even a registration nonce) never equals a registration report_data", async () => {
+    const quoted: Uint8Array[] = [];
+    const recording = { getQuote: (rd: Uint8Array) => { quoted.push(rd.slice()); return attester.getQuote(rd); } } as unknown as MockTdxAttester;
+    const r = await startRouter(new HttpLlmClient(llmPort), { attester: recording });
+    const ops = ["operator.test.near", "attacker.test.near"];
+    const nonces = [randomBytes(32), new Uint8Array(32), registrationNonce("registry.test.near", ops[0]!), registrationNonce("registry.test.near", ops[1]!)];
+    for (const n of nonces) {
+      const res = await fetch(`${r.url}/v1/attestation?nonce=${toHex(n)}`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { quote: string };
+      const rd = fromHex(body.quote).subarray(QUOTE.OFF.REPORT_DATA, QUOTE.OFF.REPORT_DATA + 64);
+      // Exactly the session report_data: key_hash ‖ SHA256("PLR-v1/session-nonce" ‖ nonce); the raw nonce never appears.
+      expect(toHex(rd)).toBe(toHex(reportData(r.keys.x25519, r.keys.ed25519, n)));
+      expect(toHex(rd.subarray(32))).not.toBe(toHex(n));
+      for (const op of ops) expect(toHex(rd)).not.toBe(toHex(registrationReportData(r.keys.x25519, r.keys.ed25519, "registry.test.near", op)));
+    }
+    expect(quoted.length).toBe(nonces.length);
     await closeServer(r.server);
   });
 

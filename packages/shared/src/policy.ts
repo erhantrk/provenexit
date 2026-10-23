@@ -5,7 +5,7 @@ import { PlrError, type PlrErrorCode } from "./errors.js";
 import { equalBytes, fromHex, isAllZero, isBytes, isHex, isPlainObject, isWellFormedString, toHex, utf8 } from "./bytes.js";
 import { QUOTE, isDebug, osMeasurement, parseQuote, type ParsedQuote, type RootKind } from "./tdx/quote.js";
 import { verifyEventLog, type TdxEvent } from "./tdx/eventlog.js";
-import { keyHash } from "./tdx/measure.js";
+import { keyHash, sessionNonceDigest } from "./tdx/measure.js";
 import type { QuoteVerifier } from "./attest/types.js";
 import { isInstanceRecord, isRegistryRoot, type RegistryReader } from "./registry.js";
 
@@ -179,11 +179,11 @@ export async function verifyAttestation(p: VerifyAttestationParams): Promise<Ver
   if (isDebug(report)) fail("E_DEBUG_TD");
   checks.push(CHECKS.DEBUG);
 
-  // 5. report_data = key_hash ‖ nonce
+  // 5. report_data = key_hash ‖ SHA256("PLR-v1/session-nonce" ‖ nonce) (rev 1.3)
   const kh = keyHash(b.x25519, b.ed25519);
   if (!equalBytes(report.reportData.subarray(0, 32), kh)) fail("E_REPORT_DATA_KEYS");
   checks.push(CHECKS.REPORT_DATA_KEYS);
-  if (!equalBytes(report.reportData.subarray(32, 64), nonce)) fail("E_NONCE");
+  if (!equalBytes(report.reportData.subarray(32, 64), sessionNonceDigest(nonce))) fail("E_NONCE");
   checks.push(CHECKS.NONCE);
 
   // 6. event log, RTMR3

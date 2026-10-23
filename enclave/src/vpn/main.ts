@@ -8,10 +8,10 @@
 import type http from "node:http";
 import type { AddressInfo } from "node:net";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { registrationNonce, toHex } from "@plr/shared";
+import { toHex } from "@plr/shared";
 import { Anchorer } from "../anchor.js";
 import { selfCheckQuote } from "../boot.js";
-import { parseVpnCompose, readCompose } from "../compose.js";
+import { readCompose, vpnPolicyOf } from "../compose.js";
 import { Logger, code, hex, url } from "../log.js";
 import { SocketAttester } from "../mock-tdx/attester.js";
 import { NearRegistryWriter } from "../near.js";
@@ -40,17 +40,15 @@ export async function bootExit(
 ): Promise<RunningExit> {
   const log = o.log ?? new Logger("plr-vpn");
   const composeBytes = readCompose(cfg.composePath);
-  const compose = parseVpnCompose(composeBytes);
-  const lookup = createDohLookup(compose.policy.dns.doh);
+  // Strict + canonical: a `plr-vpn` compose or the `vpn` part of a `plr-combo` (SPEC-COMBO §1).
+  const lookup = createDohLookup(vpnPolicyOf(composeBytes).dns.doh);
   const composeHash = sha256(composeBytes);
   const keys = VpnKeys.generate();
   const attester = new SocketAttester(cfg.tdxSocket);
   await selfCheckQuote(attester, keys, composeHash);
 
   const receipts = new VpnReceiptLog();
-  // Registration nonces are never session-quoted: only our own anchorer can obtain a registration quote (SPEC §5, §7).
-  const reservedNonces = cfg.registryIds.map((id) => registrationNonce(id));
-  const exit = createExit({ attester, keys, composeBytes, receipts, lookup, reservedNonces, ...(o.dial ? { dial: o.dial } : {}) });
+  const exit = createExit({ attester, keys, composeBytes, receipts, lookup, ...(o.dial ? { dial: o.dial } : {}) });
   const server = exit.server;
   await new Promise<void>((ok, fail) => {
     server.once("error", fail);
@@ -75,9 +73,10 @@ export async function bootExit(
 
   if (cfg.near) {
     const chain = new NearRegistryWriter(cfg.near);
-    // The on-chain operator decides this exit's org_id (SPEC-VPN §10). If another account registered our key first,
-    // two-hop clients would attribute us to that account's organization: stop serving (fail closed). A restart
-    // generates new keys.
+    // The on-chain operator decides this exit's org_id (SPEC-VPN §10). The operator-bound registration quote (SPEC §5
+    // rev 1.3) means only our own account can register our key; reading the operator back stays as defense in depth:
+    // if the record names anyone else, two-hop clients would attribute us to that account's organization, so stop
+    // serving (fail closed). A restart generates new keys.
     const onOperatorMismatch = (): void => {
       void close().finally(() => o.onFatal?.());
     };

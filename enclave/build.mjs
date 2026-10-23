@@ -17,9 +17,16 @@
 //                                                                test resolver http://127.0.0.1:18253/dns-query (local
 //                                                                tests only; different compose hash, never production)
 //                                               vpn-evil-logger  ⚠️ honest source + evil/logging-dialer.ts, test policy
+//   combo/<variant>/<kind>/router.bundle.mjs       LLM router + VPN exit in one TD (SPEC-COMBO §1), the honest bundles
+//   combo/<variant>/<kind>/vpn.bundle.mjs          side by side with their "plr-combo" compose, for variant
+//   combo/<variant>/<kind>/app-compose.json        combo (production VPN policy + DoH list) and combo-test
+//                                               (allow_loopback true, local test resolver), kind mock | llama
 //   build-info.json                           every hash above, for harnesses and the demo (VPN under the "vpn" key:
 //                                             { <variant>: { dir, bundle, bundle_sha256, allow_loopback, doh,
-//                                                            compose: { file, compose_hash } } }, paths relative to OUT)
+//                                                            compose: { file, compose_hash } } }; combo under the
+//                                             "combo" key: { <variant>: { allow_loopback, doh, router_bundle_sha256,
+//                                                            vpn_bundle_sha256, compose: { mock|llama: { dir, file,
+//                                                            compose_hash } } } }; paths relative to OUT)
 //
 // Runtime pins: `router.node_sha256` = runtime closure digest of the node running this build (the host runs the
 // router and the mock LLM with the same node), `llm.runtime_sha256` = closure digest of llama-server
@@ -46,7 +53,7 @@ if (!existsSync(composeModule)) {
   process.stderr.write("build.mjs: dist/compose.js missing — run `tsc -b` first (npm run build does)\n");
   process.exit(1);
 }
-const { makeCompose, makeVpnCompose, composeBytes, VPN_DOH_PRODUCTION, VPN_DOH_TEST } = await import(pathToFileURL(composeModule).href);
+const { makeCompose, makeVpnCompose, makeComboCompose, composeBytes, VPN_DOH_PRODUCTION, VPN_DOH_TEST } = await import(pathToFileURL(composeModule).href);
 const { measureRuntime } = await import(pathToFileURL(join(HERE, "dist", "mock-tdx", "runtime.js")).href);
 const LLAMA_SERVER = process.env.PLR_LLAMA_SERVER || "/opt/homebrew/bin/llama-server";
 let nodeRuntime, llamaRuntime;
@@ -109,20 +116,25 @@ const variants = [
   { name: "honest", entry: "src/entry.ts", bundle: "router.bundle.mjs", prefix: "app-compose" },
   { name: "evil-logger", entry: "evil/entry.ts", bundle: "evil-logger.bundle.mjs", prefix: "app-compose.evil-logger" },
 ];
+const LLM_KINDS = [["mock", "mock"], ["llama", "llama.cpp"]];
+/** Router compose parts for an llm kind (shared by the router and combo builds). */
+const routerParts = (kind, bundleSha256, entry) => ({
+  kind,
+  modelSha256: info.llm[kind],
+  runtime: RUNTIME[kind],
+  runtimeSha256: RUNTIME_SHA[kind],
+  bundleSha256,
+  entry,
+  nodeSha256: nodeRuntime.digest,
+});
+const routerBundles = {};
 for (const v of variants) {
   const bytes = await bundle(v.entry, v.bundle);
+  routerBundles[v.name] = bytes;
   const bundleSha = writeOut(v.bundle, bytes);
   const entry = { bundle: v.bundle, bundle_sha256: bundleSha, compose: {} };
-  for (const [kindName, kind] of [["mock", "mock"], ["llama", "llama.cpp"]]) {
-    const c = makeCompose({
-      kind,
-      modelSha256: info.llm[kind],
-      runtime: RUNTIME[kind],
-      runtimeSha256: RUNTIME_SHA[kind],
-      bundleSha256: bundleSha,
-      entry: v.bundle,
-      nodeSha256: nodeRuntime.digest,
-    });
+  for (const [kindName, kind] of LLM_KINDS) {
+    const c = makeCompose(routerParts(kind, bundleSha, v.bundle));
     const file = `${v.prefix}.${kindName}.json`;
     const cb = composeBytes(c);
     writeOut(file, cb);
@@ -159,6 +171,33 @@ for (const v of vpnVariants) {
   };
 }
 
+// Combo (SPEC-COMBO §1): the honest router and the honest exit in one TD, one compose per VPN policy and llm kind.
+// One directory per (variant, kind) because the host reads both bundles next to their compose.
+const comboVariants = [
+  { name: "combo", allowLoopback: false, doh: VPN_DOH_PRODUCTION },
+  { name: "combo-test", allowLoopback: true, doh: VPN_DOH_TEST },
+];
+info.combo = {};
+for (const v of comboVariants) {
+  const entry = { allow_loopback: v.allowLoopback, doh: [...v.doh], router_bundle_sha256: null, vpn_bundle_sha256: null, compose: {} };
+  for (const [kindName, kind] of LLM_KINDS) {
+    const dir = `combo/${v.name}/${kindName}`;
+    const routerSha = writeOut(`${dir}/router.bundle.mjs`, routerBundles.honest);
+    const vpnSha = writeOut(`${dir}/vpn.bundle.mjs`, vpnBundles.honest);
+    const cb = composeBytes(
+      makeComboCompose({
+        router: routerParts(kind, routerSha, "router.bundle.mjs"),
+        vpn: { bundleSha256: vpnSha, nodeSha256: nodeRuntime.digest, allowLoopback: v.allowLoopback, doh: v.doh },
+      }),
+    );
+    const composeHash = writeOut(`${dir}/app-compose.json`, cb);
+    entry.router_bundle_sha256 = routerSha;
+    entry.vpn_bundle_sha256 = vpnSha;
+    entry.compose[kindName] = { dir, file: `${dir}/app-compose.json`, compose_hash: composeHash };
+  }
+  info.combo[v.name] = entry;
+}
+
 writeFileSync(join(OUT, "build-info.json"), JSON.stringify(info, null, 2) + "\n");
 process.stdout.write(
   `built ${OUT}\n` +
@@ -167,5 +206,8 @@ process.stdout.write(
       .join("") +
     Object.entries(info.vpn)
       .map(([n, v]) => `  ${n.padEnd(16)} bundle ${v.bundle_sha256}  compose ${v.compose.compose_hash}\n`)
+      .join("") +
+    Object.entries(info.combo)
+      .map(([n, v]) => `  ${n.padEnd(16)} compose(mock) ${v.compose.mock.compose_hash}  compose(llama) ${v.compose.llama.compose_hash}\n`)
       .join(""),
 );

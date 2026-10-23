@@ -54,6 +54,29 @@ enum StorageKey {
     AnchorCredit,
     /// rev 1.2. Appended last: borsh enum indices of the existing prefixes must not move.
     Operators,
+    /// rev 1.3: the compose allowlist starts empty under a new prefix, so no pre-rev-1.3 build stays approved
+    /// (see [`Registry::migrate`]). The rev ≤ 1.2 `AllowedCompose` entries are orphaned, never read again.
+    AllowedComposeRev13,
+}
+
+/// State layout revision written by this code (SPEC rev 1.3). The trailing `state_rev` field makes a rev ≤ 1.2
+/// state fail to deserialize, so redeploying this code over an old registry fails closed until [`Registry::migrate`].
+pub const STATE_REV: u8 = 3;
+
+/// The rev 1.2 contract state, read only by [`Registry::migrate`]. Field order = the rev 1.2 borsh layout.
+#[near(serializers = [borsh])]
+struct RegistryRev12 {
+    owner: AccountId,
+    pending_owner: Option<AccountId>,
+    root_kind: RootKind,
+    root_p256: [u8; 64],
+    allowed_compose: LookupSet<[u8; 32]>,
+    allowed_os: LookupSet<[u8; 32]>,
+    instances: LookupMap<[u8; 32], Instance>,
+    anchors: Vector<Anchor>,
+    instance_ttl_ms: u64,
+    anchor_credit: LookupMap<[u8; 32], u128>,
+    operators: LookupMap<AccountId, String>,
 }
 
 /// A registered router instance (SPEC §7 `Instance`).
@@ -150,8 +173,10 @@ pub struct Registry {
     /// draws on it when the caller attaches no (or too little) deposit, so the contract balance never pays.
     anchor_credit: LookupMap<[u8; 32], u128>,
     /// rev 1.2: owner-approved operator organizations, `account → org_id`. Two-hop clients require
-    /// `entry.org_id != exit.org_id` (SPEC-VPN). Appended last in the state layout.
+    /// `entry.org_id != exit.org_id` (SPEC-VPN).
     operators: LookupMap<AccountId, String>,
+    /// rev 1.3: always [`STATE_REV`]. Appended last; see [`STATE_REV`] and [`Registry::migrate`].
+    state_rev: u8,
 }
 
 // ---------- argument parsing (fail closed, never echo input) ----------
@@ -248,16 +273,50 @@ impl Registry {
             pending_owner: None,
             root_kind: kind,
             root_p256: key,
-            allowed_compose: LookupSet::new(StorageKey::AllowedCompose),
+            allowed_compose: LookupSet::new(StorageKey::AllowedComposeRev13),
             allowed_os: LookupSet::new(StorageKey::AllowedOs),
             instances: LookupMap::new(StorageKey::Instances),
             anchors: Vector::new(StorageKey::Anchors),
             instance_ttl_ms: ttl_arg(instance_ttl_ms),
             anchor_credit: LookupMap::new(StorageKey::AnchorCredit),
             operators: LookupMap::new(StorageKey::Operators),
+            state_rev: STATE_REV,
         };
         events::emit(events::ROOT_SET, json!({ "kind": kind.as_str(), "p256": encode_hex(&key) }));
         this
+    }
+
+    /// One-time upgrade of a rev 1.2 registry to rev 1.3, called by the contract account itself right after the
+    /// rev 1.3 code is deployed (every other method fails until then: the old state does not deserialize).
+    ///
+    /// A pre-rev-1.3 router or exit put the raw client nonce into its `/v1/attestation` quotes, so anyone could
+    /// ask it for a quote over `registration_nonce(this registry, attacker)` and register its keys under their own
+    /// account. The rev 1.3 check cannot tell which build produced a quote, so the migration **empties the compose
+    /// allowlist**: the owner re-approves only rev 1.3 builds. Owner, pending owner, root, OS allowlist, instances,
+    /// anchors, credits, TTL and operator organizations are kept. Instances of old builds stay readable but their
+    /// compose is no longer allowed, so clients reject them and they cannot anchor. Running it on anything but a
+    /// rev 1.2 state (incl. a second time) fails with `E_BAD_INPUT`.
+    #[init(ignore_state)]
+    #[private]
+    pub fn migrate() -> Self {
+        let raw = env::storage_read(b"STATE").unwrap_or_else(|| fail_with(E_BAD_INPUT, "no state to migrate"));
+        let old: RegistryRev12 = near_sdk::borsh::from_slice(&raw)
+            .unwrap_or_else(|_| fail_with(E_BAD_INPUT, "state is not a rev 1.2 registry"));
+        events::emit(events::COMPOSE_ALLOWLIST_RESET, json!({ "state_rev": STATE_REV }));
+        Self {
+            owner: old.owner,
+            pending_owner: old.pending_owner,
+            root_kind: old.root_kind,
+            root_p256: old.root_p256,
+            allowed_compose: LookupSet::new(StorageKey::AllowedComposeRev13),
+            allowed_os: old.allowed_os,
+            instances: old.instances,
+            anchors: old.anchors,
+            instance_ttl_ms: old.instance_ttl_ms,
+            anchor_credit: old.anchor_credit,
+            operators: old.operators,
+            state_rev: STATE_REV,
+        }
     }
 
     // ---------- owner policy ----------
@@ -372,17 +431,19 @@ impl Registry {
         let xp = key32_arg(&x25519);
         let ep = key32_arg(&ed25519);
         let contract_id = ctx::current_account_id();
+        // The enclave bound its registration quote to this operator account (SPEC §5/§7 rev 1.3).
+        let operator = ctx::predecessor_account_id();
 
         let reg = Registration { quote: &quote, event_log: &event_log, app_compose: app_compose.as_bytes(), x25519: &xp, ed25519: &ep };
-        let v = verify_registration(&reg, &*self, contract_id.as_str()).or_fail();
+        let v = verify_registration(&reg, &*self, contract_id.as_str(), operator.as_str()).or_fail();
 
         let now = ctx::block_timestamp_ms();
         let expires_at_ms = now.checked_add(self.instance_ttl_ms).unwrap_or_else(|| fail_with(E_BAD_INPUT, "time overflow"));
-        let operator = ctx::predecessor_account_id();
         let storage_before = env::storage_usage();
         let refreshed = match self.instances.get_mut(&v.key_hash) {
             Some(rec) => {
-                // Same keys ⇒ same enclave boot. Keep operator, registered_at_ms and next_seq; refresh the rest.
+                // Same keys ⇒ same enclave boot, and step 7 bound the quote to its submitter, so only the operator
+                // that enclave chose can refresh. Keep operator, registered_at_ms and next_seq; refresh the rest.
                 rec.compose_hash = v.compose_hash;
                 rec.os_measurement = v.os_measurement;
                 rec.expires_at_ms = expires_at_ms;
@@ -575,6 +636,11 @@ impl Registry {
 
     pub fn get_instance_ttl_ms(&self) -> u64 {
         self.instance_ttl_ms
+    }
+
+    /// State layout revision ([`STATE_REV`] = 3 for rev 1.3). Lets the owner check that [`Registry::migrate`] ran.
+    pub fn get_state_rev(&self) -> u8 {
+        self.state_rev
     }
 
     /// Remaining prepaid anchor storage credit of an instance, in yoctoNEAR (decimal string).

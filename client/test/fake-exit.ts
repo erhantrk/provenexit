@@ -24,7 +24,6 @@ import {
   parseHello,
   deriveTunnel,
   encodeServerHello,
-  reportData,
   signVpnReceipt,
   toHex,
   fromHex,
@@ -35,6 +34,7 @@ import {
   type InstanceRecord,
   type VpnReceipt,
 } from "@plr/shared";
+import { quoteReportData } from "./fake-router.js";
 
 export const vpnCompose = (bundleSha = "33".repeat(32)): string =>
   JSON.stringify(
@@ -57,6 +57,8 @@ export interface ExitBehaviour {
   mitmKey?: boolean;
   /** Replay the first attestation bundle for every nonce. */
   replayAttestation?: boolean;
+  /** Quote a report_data of another purpose than §5 rev 1.3 session (see the fake router's `quotePurpose`). */
+  quotePurpose?: "raw-nonce" | "registration";
   /** Answer every CONNECT with this CONNECT_ERR code. */
   connectErr?: ConnectErrCode;
   /** Raw CONNECT_ERR payload (protocol abuse). */
@@ -120,11 +122,13 @@ export interface FakeExitOptions {
   operator?: string;
   /** Another build: `vpn.bundle_sha256` of the compose (default 33…33). */
   bundleSha?: string;
+  /** Measured compose text instead of the default `plr-vpn` one (e.g. a `plr-combo`, SPEC-COMBO). */
+  composeText?: string;
 }
 
 export async function startFakeExit(o: FakeExitOptions = {}): Promise<FakeExit> {
   const root = o.root ?? MockRoot.generate();
-  const composeText = vpnCompose(o.bundleSha);
+  const composeText = o.composeText ?? vpnCompose(o.bundleSha);
   const composeBytes = enc.encode(composeText);
   const attester = new MockTdxAttester({ root, composeBytes });
   const xs = x25519.utils.randomSecretKey();
@@ -180,7 +184,7 @@ export async function startFakeExit(o: FakeExitOptions = {}): Promise<FakeExit> 
         if (!/^[0-9a-f]{64}$/.test(nonceHex)) return json(res, 400, { error: "E_BAD_REQUEST" });
         stats.attestations++;
         if (behaviour.replayAttestation && firstBundle) return json(res, 200, firstBundle);
-        const { quote, eventLog } = await attester.getQuote(reportData(xp, ep, fromHex(nonceHex, 32)));
+        const { quote, eventLog } = await attester.getQuote(quoteReportData(behaviour.quotePurpose, xp, ep, fromHex(nonceHex, 32), { contractId: "vpnregistry.test.near", operator: record.operator }));
         const bundle: AttestationBundle = {
           v: "PLR-v1",
           root_kind: "MOCK",

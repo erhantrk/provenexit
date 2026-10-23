@@ -60,8 +60,14 @@ pub struct Verified {
     pub os_measurement: [u8; 32],
 }
 
-/// Runs SPEC §7 steps 1-7. `contract_id` is the registry's own account id (registration nonce binding).
-pub fn verify_registration(reg: &Registration<'_>, policy: &impl Policy, contract_id: &str) -> Result<Verified, Error> {
+/// Runs SPEC §7 steps 1-7. `contract_id` is the registry's own account id and `operator_id` the account
+/// submitting the registration (`predecessor_account_id`): the quote must be bound to both (SPEC §5 rev 1.3).
+pub fn verify_registration(
+    reg: &Registration<'_>,
+    policy: &impl Policy,
+    contract_id: &str,
+    operator_id: &str,
+) -> Result<Verified, Error> {
     // 1. structure (MOCK mode).
     let q = parse_mock(reg.quote)?;
 
@@ -101,8 +107,10 @@ pub fn verify_registration(reg: &Registration<'_>, policy: &impl Policy, contrac
         return Err(Error::new(E_OS_NOT_ALLOWED, ""));
     }
 
-    // 7. report_data binds exactly these keys and this registry.
-    let expected = registration_report_data(reg.x25519, reg.ed25519, contract_id);
+    // 7. report_data binds exactly these keys, this registry and this operator (SPEC §5 rev 1.3). A session
+    //    quote (`SHA256("PLR-v1/session-nonce" ‖ nonce)`) or a rev 1.2 registration nonce can never match.
+    let expected = registration_report_data(reg.x25519, reg.ed25519, contract_id, operator_id)
+        .ok_or_else(|| Error::new(E_REPORT_DATA, "account id length"))?;
     if !ct_eq(&q.report_data(), &expected) {
         return Err(Error::new(E_REPORT_DATA, ""));
     }

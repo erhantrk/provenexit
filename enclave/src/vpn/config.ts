@@ -1,5 +1,5 @@
 /** VPN exit configuration from the environment (set by the mock TDX host). Strictly validated; fail closed. */
-import { HOST_RE, bad, intVar, loadNear, registryIdsOf, type Env, type NearConfig } from "../config.js";
+import { HOST_RE, bad, intVar, loadNear, type Env, type NearConfig } from "../config.js";
 
 /** SPEC-VPN §3 default exit port. */
 export const DEFAULT_EXIT_PORT = 18200;
@@ -14,8 +14,6 @@ export interface ExitConfig {
   near: NearConfig | null;
   /** True if NEAR variables were present but incomplete/invalid: registration is disabled (clients refuse). */
   nearConfigError: boolean;
-  /** Registries named in the environment; their registration nonces are never session-quoted (see `registryIdsOf`). */
-  registryIds: string[];
 }
 
 /**
@@ -41,5 +39,5 @@ export function loadExitConfig(env: Env = process.env): ExitConfig {
   } catch {
     nearConfigError = true;
   }
-  return { tdxSocket, composePath, host, port, anchorIntervalMs, near, nearConfigError, registryIds: registryIdsOf(env) };
+  return { tdxSocket, composePath, host, port, anchorIntervalMs, near, nearConfigError };
 }

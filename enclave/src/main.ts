@@ -5,10 +5,10 @@
 import type http from "node:http";
 import type { AddressInfo } from "node:net";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { registrationNonce, toHex } from "@plr/shared";
+import { toHex } from "@plr/shared";
 import { Anchorer } from "./anchor.js";
 import { installProcessGuards, selfCheckQuote } from "./boot.js";
-import { parseCompose, readCompose } from "./compose.js";
+import { readCompose, routerLlmKindOf } from "./compose.js";
 import type { RouterConfig } from "./config.js";
 import { RouterKeys } from "./keys.js";
 import type { LlmClient } from "./llm.js";
@@ -37,7 +37,8 @@ export { readCompose };
  */
 export async function bootRouter(cfg: RouterConfig, llmFor: (port: number) => LlmClient, log = new Logger("plr-router")): Promise<RunningRouter> {
   const composeBytes = readCompose(cfg.composePath);
-  const compose = parseCompose(composeBytes);
+  // Strict + canonical: a `plr-router` compose or the `router` part of a `plr-combo` (SPEC-COMBO §1).
+  const llmKind = routerLlmKindOf(composeBytes);
   const composeHash = sha256(composeBytes);
   const keys = RouterKeys.generate();
   const attester = new SocketAttester(cfg.tdxSocket);
@@ -45,9 +46,8 @@ export async function bootRouter(cfg: RouterConfig, llmFor: (port: number) => Ll
   await selfCheckQuote(attester, keys, composeHash);
 
   const receipts = new ReceiptLog();
-  const llmPort = cfg.llmPort ?? DEFAULT_LLM_PORT[compose.llm.kind];
-  const reservedNonces = cfg.registryIds.map((id) => registrationNonce(id));
-  const server = createRouter({ attester, keys, composeBytes, llm: llmFor(llmPort), receipts, log, reservedNonces });
+  const llmPort = cfg.llmPort ?? DEFAULT_LLM_PORT[llmKind];
+  const server = createRouter({ attester, keys, composeBytes, llm: llmFor(llmPort), receipts, log });
   await new Promise<void>((ok, fail) => {
     server.once("error", fail);
     server.listen(cfg.port, cfg.host, () => {

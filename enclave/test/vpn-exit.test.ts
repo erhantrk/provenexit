@@ -1,9 +1,10 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { randomBytes } from "@noble/hashes/utils.js";
 import { randomBytes as nodeRandomBytes } from "node:crypto";
-import { FRAME, TUNNEL, fromHex, parseConnectErr, parseReceiptPayload, registrationNonce, toHex, u32be, verifyVpnReceipt, vpnReceiptLeaf, merkleRoot, type EgressPolicy } from "@plr/shared";
-import { ManualTimers, TestTunnel, attestExit, deadPort, eventually, handshake, startEchoUpstream, startTestExit, upgrade, type TestExit } from "./vpn-helpers.js";
+import { FRAME, QUOTE, TUNNEL, fromHex, parseConnectErr, parseReceiptPayload, registrationNonce, registrationReportData, reportData, toHex, u32be, verifyVpnReceipt, vpnReceiptLeaf, merkleRoot, type EgressPolicy } from "@plr/shared";
+import { ManualTimers, TestTunnel, attestExit, deadPort, eventually, mentionsNumber, handshake, startEchoUpstream, startTestExit, upgrade, type TestExit } from "./vpn-helpers.js";
 import type { LookupAll } from "../src/vpn/egress.js";
+import { composeBytes as composeBytesOf, makeComboCompose } from "../src/compose.js";
 
 type Up = Awaited<ReturnType<typeof startEchoUpstream>>;
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -49,21 +50,34 @@ describe("exit HTTP API (SPEC-VPN §3)", () => {
     expect(toHex(v.keyHash)).toBe(toHex(e.keys.keyHash));
   });
 
-  // Review finding (high): a registration quote from the public endpoint let anyone register the exit first under
-  // their own account, deciding its on-chain operator and org_id (SPEC §7 rev 1.2, SPEC-VPN §10).
-  it("never quotes a registration nonce of its registries (400 E_BAD_REQUEST, no quote requested)", async () => {
-    const regNonce = registrationNonce("vpnregistry.test.near");
-    const e = await exitWith({ reservedNonces: [regNonce, registrationNonce("registry.test.near")] });
-    for (const id of ["vpnregistry.test.near", "registry.test.near"]) {
-      const r = await fetch(`${e.url}/v1/attestation?nonce=${toHex(registrationNonce(id))}`);
-      expect([r.status, await r.json()], id).toEqual([400, { error: "E_BAD_REQUEST" }]);
+  // SPEC §5 rev 1.3: the interim refusal of registration-nonce values is gone. A session quote is
+  // key_hash ‖ SHA256("PLR-v1/session-nonce" ‖ nonce), so it never equals a registration report_data (the
+  // registration hijack would need a SHA-256 preimage), whatever nonce is asked for.
+  it("a session quote for ANY nonce (even a registration nonce) never equals a registration report_data", async () => {
+    const e = await exitWith();
+    const regs = ["vpnregistry.test.near", "registry.test.near"].flatMap((c) => ["operator.test.near", "attacker.test.near"].map((op) => [c, op] as const));
+    for (const n of [randomBytes(32), new Uint8Array(32).fill(0xff), ...regs.map(([c, op]) => registrationNonce(c, op))]) {
+      const r = await fetch(`${e.url}/v1/attestation?nonce=${toHex(n)}`);
+      expect(r.status).toBe(200);
+      const rd = fromHex(((await r.json()) as { quote: string }).quote).subarray(QUOTE.OFF.REPORT_DATA, QUOTE.OFF.REPORT_DATA + 64);
+      expect(toHex(rd)).toBe(toHex(reportData(e.keys.x25519, e.keys.ed25519, n)));
+      for (const [c, op] of regs) expect(toHex(rd)).not.toBe(toHex(registrationReportData(e.keys.x25519, e.keys.ed25519, c, op)));
     }
-    // Upper-case hex of the same nonce is not a way around it (it is either refused as hex or as the nonce).
-    expect((await fetch(`${e.url}/v1/attestation?nonce=${toHex(regNonce).toUpperCase()}`)).status).toBe(400);
-    // Any other nonce (including another contract's registration nonce) is a normal session quote.
+    // Upper-case hex stays a malformed nonce.
+    expect((await fetch(`${e.url}/v1/attestation?nonce=${toHex(randomBytes(32)).toUpperCase()}`)).status).toBe(400);
+  });
+
+  it("serves a plr-combo compose (SPEC-COMBO): attests the combo bytes, enforces the combo's VPN policy", async () => {
+    const combo = composeBytesOf(makeComboCompose({
+      router: { kind: "mock", modelSha256: "11".repeat(32), runtime: "node-mock-llm", runtimeSha256: "33".repeat(32), bundleSha256: "22".repeat(32), entry: "router.bundle.mjs", nodeSha256: "33".repeat(32) },
+      vpn: { bundleSha256: "44".repeat(32), nodeSha256: "33".repeat(32), allowLoopback: false },
+    }));
+    const e = await exitWith({ composeBytes: combo });
     const v = await attestExit(e.url, e.root.publicKey);
-    expect(toHex(v.keyHash)).toBe(toHex(e.keys.keyHash));
-    expect((await fetch(`${e.url}/v1/attestation?nonce=${toHex(registrationNonce("other.test.near"))}`)).status).toBe(200);
+    expect(v.bundle.app_compose).toBe(new TextDecoder().decode(combo));
+    expect(JSON.parse(v.bundle.app_compose).name).toBe("plr-combo");
+    // Production policy of the combo: the router / LLM on loopback are unreachable from the exit.
+    expect(await connectOutcome(e, "127.0.0.1", up.port)).toBe("E_EGRESS_DENIED");
   });
 
   it("healthz, proof, 404, and /v1/tunnel without a proper upgrade → 400 E_BAD_REQUEST", async () => {
@@ -109,6 +123,7 @@ describe("tunnel round trip (SPEC-VPN §4)", () => {
     const e = await exitWith();
     const v = await attestExit(e.url, e.root.publicKey);
     for (const seq of [0, 1]) {
+      const tBefore = Date.now();
       const t = await TestTunnel.open(e.port, v, v.nonce);
       t.connect("127.0.0.1", up.port);
       expect(await t.until(() => t.frames.length >= 1)).toBe(true);
@@ -129,7 +144,13 @@ describe("tunnel round trip (SPEC-VPN §4)", () => {
       expect(receipt.compose_hash).toBe(toHex(v.composeHash));
       expect(receipt.seq).toBe(seq);
       expect(receipt.ts_open_ms).toBeLessThanOrEqual(receipt.ts_close_ms);
-      expect(JSON.stringify(receipt)).not.toContain(String(up.port));
+      // Metadata-free: the key set is exact (above), every hex field is pinned to a known value and the two
+      // timestamps are real wall-clock times of this tunnel, so the destination port can hide nowhere. (A plain
+      // substring check on the JSON was flaky: a 13-digit ms timestamp contains a 5-digit port by chance, e.g.
+      // ts_close_ms 1792791459523 vs port 59523.)
+      expect(Object.values(receipt)).not.toContain(up.port);
+      expect(receipt.ts_open_ms).toBeGreaterThanOrEqual(tBefore);
+      expect(receipt.ts_close_ms).toBeLessThanOrEqual(Date.now());
       expect(await t.waitClosed()).toBe(true);
       expect(t.error).toBeNull();
     }
@@ -457,7 +478,7 @@ describe("protocol violations and timeouts close the tunnel (SPEC-VPN §4.2, §4
 describe("no retention (SPEC-VPN §1.3, §5)", () => {
   it("nothing about destinations or payloads reaches stdout/stderr, success or failure", async () => {
     const MARK = "dest-secret-" + toHex(randomBytes(6));
-    const PORT_MARK = String(await deadPort());
+    const PORT_MARK = await deadPort();
     const lookup: LookupAll = async (h) => (h.startsWith("ok-") ? [{ address: "127.0.0.1", family: 4 }] : h.startsWith("lo-") ? [{ address: "10.9.9.9", family: 4 }] : Promise.reject(new Error(h)));
     const captured: string[] = [];
     const ow = process.stdout.write.bind(process.stdout), ew = process.stderr.write.bind(process.stderr);
@@ -474,7 +495,7 @@ describe("no retention (SPEC-VPN §1.3, §5)", () => {
       expect(t.data().toString()).toBe(MARK);
       expect(await connectOutcome(e, `lo-${MARK}.example`, up.port)).toBe("E_EGRESS_DENIED");
       expect(await connectOutcome(e, `nx-${MARK}.example`, up.port)).toBe("E_DNS");
-      expect(await connectOutcome(e, "127.0.0.1", Number(PORT_MARK))).toBe("E_CONNECT_FAILED");
+      expect(await connectOutcome(e, "127.0.0.1", PORT_MARK)).toBe("E_CONNECT_FAILED");
       const bad = await openVerified(e);
       bad.send(FRAME.CONNECT, enc(JSON.stringify({ host: `${MARK} !`, port: 1 })));
       await bad.until(() => bad.frames.length >= 1);
@@ -486,7 +507,7 @@ describe("no retention (SPEC-VPN §1.3, §5)", () => {
     }
     const all = captured.join("");
     expect(all).not.toContain(MARK);
-    expect(all).not.toContain(PORT_MARK);
+    expect(mentionsNumber(all, PORT_MARK)).toBe(false);
   });
 
   it("dial errors carry codes only (no host, address or port)", async () => {

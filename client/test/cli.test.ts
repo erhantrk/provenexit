@@ -51,6 +51,22 @@ describe("plr CLI", () => {
     expect(text).toContain("REFUSED");
   });
 
+  it("verify names the rev 1.3 session-nonce binding, and marks a pre-1.3 raw-nonce quote ✘ [E_NONCE]", async () => {
+    const ok = await stack();
+    const t = io();
+    expect(await runCli(["verify"], ok.env, t.io, t.write)).toBe(0);
+    expect(t.out.join("\n")).toContain(`✔ report_data binds client nonce as a session quote (SHA256("PLR-v1/session-nonce" ‖ nonce))`);
+
+    const bad = await stack();
+    bad.r.behaviour.quotePurpose = "raw-nonce";
+    const u = io();
+    expect(await runCli(["verify"], bad.env, u.io, u.write)).toBe(1);
+    const text = u.out.join("\n");
+    expect(text).toMatch(/✘ report_data binds client nonce as a session quote .*\[E_NONCE\]/);
+    expect(text).toMatch(/✔ report_data binds router keys/);
+    expect(text).toMatch(/· event log digests and boot sequence/);
+  });
+
   it("verify attributes E_REGISTRY_UNAVAILABLE to the registry step that failed", async () => {
     const { env } = await stack();
     const t = io();

@@ -6,7 +6,10 @@
 #   MITM, revocation, encrypted DNS inside the exit (DoH: resolver down ⇒ E_DNS, no plaintext fallback), the
 #   production egress policy, and (only when online) https://example.com via the exit → two-hop (SPEC-VPN §10):
 #   both hops + operator organizations verified, a fetch through entry → exit, same organization refused, a logging
-#   entry that sees only the exit's address, and (only when online) https://example.com through two hops.
+#   entry that sees only the exit's address, and (only when online) https://example.com through two hops →
+#   combo (SPEC-COMBO): ONE TD runs the LLM, the router and the VPN exit (one measurement, two keys, two registries):
+#   both services verified, chat + tunnel, per-registry revocation, and the production combo's exit cannot reach
+#   the router's port.
 # Everything it starts is stopped on exit (trap), whatever happens.
 #
 # Env: PLR_LLM=llama|mock (default llama), PLR_SKIP_BUILD=1, NO_COLOR=1,
@@ -95,18 +98,21 @@ in a second, independent NEAR registry, re-checked on every connection.
 ${Y}MOCK ROOT:${X}${D} attestation is signed by a local test root, not Intel — see README "What this proves".${X}
 EOF
 
+LLM="${PLR_LLM:-llama}"
+[[ $LLM == llama || $LLM == mock ]] || { echo "PLR_LLM must be llama or mock" >&2; exit 2; }
+export LLM_KIND="$LLM"
+
 # ------------------------------------------------------------------------------------------- 1. build
 step "Build (TypeScript, measured router bundles, registry wasm)"
 if [[ "${PLR_SKIP_BUILD:-0}" == 1 ]]; then info "skipped (PLR_SKIP_BUILD=1)"; else scripts/build.sh 2>&1 | show; fi
-node -e 'const i=require("./enclave/dist/build-info.json"); for (const v of ["honest","evil-logger"]) console.log(`${v.padEnd(16)} bundle ${i.variants[v].bundle_sha256}`); for (const v of ["vpn-honest","vpn-honest-test","vpn-evil-logger"]) console.log(`${v.padEnd(16)} compose ${i.vpn[v].compose.compose_hash}`)' | show
+node -e 'const i=require("./enclave/dist/build-info.json"); for (const v of ["honest","evil-logger"]) console.log(`${v.padEnd(16)} bundle ${i.variants[v].bundle_sha256}`); for (const v of ["vpn-honest","vpn-honest-test","vpn-evil-logger"]) console.log(`${v.padEnd(16)} compose ${i.vpn[v].compose.compose_hash}`); for (const v of ["combo","combo-test"]) console.log(`${v.padEnd(16)} compose(${process.env.LLM_KIND}) ${i.combo[v].compose[process.env.LLM_KIND].compose_hash}`)' | show
 
 # ------------------------------------------------------------------------------------------- 2. stack
-LLM="${PLR_LLM:-llama}"
 step "Start near-sandbox, deploy both registries, approve + launch the honest router (llm=$LLM) and VPN exits"
 mkdir -p "$RUN"
 : >"$STACK_LOG"
 rm -f "$STOP_FILE"
-node e2e/dist/stack-cli.js up --llm "$LLM" --id "$ID" --extra evil-logger,mitm-key,vpn-honest-test,vpn-evil-logger,vpn-mitm-key --destination \
+node e2e/dist/stack-cli.js up --llm "$LLM" --id "$ID" --extra evil-logger,mitm-key,vpn-honest-test,vpn-evil-logger,vpn-mitm-key,combo-test,combo --destination \
   --evil-entry --dns-down-file "$DNS_DOWN_FILE" \
   --env-out "$ENV_FILE" --stop-file "$STOP_FILE" --parent-pid "$$" </dev/null >"$STACK_LOG" 2>&1 &
 STACK_PID=$!
@@ -376,6 +382,66 @@ else
 fi
 stop_socks
 
+# =========================================================================================== combo (SPEC-COMBO)
+# One TD (one confidential VM in the cloud) runs three processes: the LLM, the router and the VPN exit. One
+# measurement covers both programs; each service has its own keys, registry and receipts.
+combo_verify_router() { env PLR_ROUTER_URL="$1" node "$ROOT/client/dist/cli.js" verify; }
+combo_verify_exit() { env PLR_VPN_ENTRY_URL= PLR_VPN_URL="$1" node "$ROOT/client/dist/cli.js" vpn verify; }
+combo_chat() { env PLR_ROUTER_URL="$1" node "$ROOT/client/dist/cli.js" chat "$2"; }
+MARK4="combo-demo-secret-$(date +%s)-$RANDOM"
+COMBO_Q="Answer in five words: what is a TEE?"
+
+step "Combo: ONE TD runs the router AND the VPN exit — one measurement, two keys, two registries"
+info "combo-test TD: router $PLR_COMBO_TEST_ROUTER_URL · exit $PLR_COMBO_TEST_VPN_URL (LLM: a third process, reachable only by the router)"
+info "compose (both services) $PLR_COMBO_TEST_COMPOSE_HASH, approved on the LLM registry AND on the VPN registry"
+run "PLR_ROUTER_URL=\$PLR_COMBO_TEST_ROUTER_URL plr verify"
+set +e; OUT_R=$(combo_verify_router "$PLR_COMBO_TEST_ROUTER_URL" 2>&1); RC_R=$?; set -e
+printf '%s\n' "$OUT_R" | grep -E "VERIFIED|REFUSED|compose hash|key hash|operator" | show || true
+run "PLR_VPN_URL=\$PLR_COMBO_TEST_VPN_URL plr vpn verify"
+set +e; OUT_X=$(combo_verify_exit "$PLR_COMBO_TEST_VPN_URL" 2>&1); RC_X=$?; set -e
+printf '%s\n' "$OUT_X" | grep -E "VERIFIED|REFUSED|build:|compose hash|key hash|operator" | show || true
+if [[ $RC_R -eq 0 && $RC_X -eq 0 && "$OUT_R" == *"$PLR_COMBO_TEST_COMPOSE_HASH"* && "$OUT_X" == *"$PLR_COMBO_TEST_COMPOSE_HASH"* ]]; then
+  ok "both services verified against their own registry, same combo compose"
+else bad "combo verification failed (router exit $RC_R, exit exit $RC_X)"; fi
+if [[ "$OUT_R" == *"$PLR_COMBO_TEST_ROUTER_KEY_HASH"* && "$OUT_X" == *"$PLR_COMBO_TEST_VPN_KEY_HASH"* && "$PLR_COMBO_TEST_ROUTER_KEY_HASH" != "$PLR_COMBO_TEST_VPN_KEY_HASH" ]]; then
+  ok "distinct keys: router ${PLR_COMBO_TEST_ROUTER_KEY_HASH:0:16}… ≠ exit ${PLR_COMBO_TEST_VPN_KEY_HASH:0:16}… (each generated in its own process at boot)"
+else bad "the combo services do not show their own distinct keys"; fi
+
+step "Combo: private chat through the combo router + a tunnel through the combo exit"
+run "PLR_ROUTER_URL=\$PLR_COMBO_TEST_ROUTER_URL plr chat \"$COMBO_Q\""
+set +e; OUT=$(combo_chat "$PLR_COMBO_TEST_ROUTER_URL" "$COMBO_Q" 2>&1); RC=$?; set -e
+printf '%s\n' "$OUT" | show
+if [[ $RC -eq 0 && "$OUT" == *"compose $PLR_COMBO_TEST_COMPOSE_HASH"* ]]; then ok "answer received; the receipt names the combo compose"; else bad "chat through the combo router failed (exit $RC)"; fi
+if expect_probe ok - "$PLR_COMBO_TEST_VPN_URL" "$PLR_DEST_HOST" "$PLR_DEST_PORT" "/$MARK4"; then ok "$PLR_DEST_HOST resolved over DoH inside the combo exit, fetched, session receipt verified"; fi
+if grep -qF -e "$MARK4" -e "$COMBO_Q" -e "$PLR_DEST_HOST" "$PLR_STACK_LOG_DIR/combo-test.log" 2>/dev/null; then bad "a prompt, destination or payload appears in the combo TD's output!"; else ok "the combo TD's output (host + LLM + router + exit) has no prompt, destination or payload"; fi
+
+step "Combo: approval is per registry — revoking one role leaves the other serving"
+run "owner --vpn revoke_compose $PLR_COMBO_TEST_COMPOSE_HASH   # the VPN registry only"
+vpn_owner revoke_compose "{\"hash\":\"$PLR_COMBO_TEST_COMPOSE_HASH\"}" 2>&1 | show
+if expect_probe E_COMPOSE_NOT_ALLOWED - "$PLR_COMBO_TEST_VPN_URL" "$PLR_DEST_HOST" "$PLR_DEST_PORT" /combo-revoked; then ok "exit role refused (E_COMPOSE_NOT_ALLOWED)"; fi
+run "PLR_ROUTER_URL=\$PLR_COMBO_TEST_ROUTER_URL plr chat \"Say yes.\""
+if combo_chat "$PLR_COMBO_TEST_ROUTER_URL" "Say yes." 2>&1 | show; then ok "router role in the same TD still serves (the LLM registry still allows it)"; else bad "the combo router stopped serving after a VPN-registry revocation"; fi
+run "owner --vpn allow_compose $PLR_COMBO_TEST_COMPOSE_HASH"
+vpn_owner allow_compose "{\"hash\":\"$PLR_COMBO_TEST_COMPOSE_HASH\"}" 2>&1 | show
+run "owner revoke_compose $PLR_COMBO_TEST_COMPOSE_HASH   # the LLM registry only"
+owner revoke_compose "{\"hash\":\"$PLR_COMBO_TEST_COMPOSE_HASH\"}" 2>&1 | show
+run "PLR_ROUTER_URL=\$PLR_COMBO_TEST_ROUTER_URL plr chat \"Say yes.\""
+expect_refusal E_COMPOSE_NOT_ALLOWED combo_chat "$PLR_COMBO_TEST_ROUTER_URL" "Say yes."
+if expect_probe ok - "$PLR_COMBO_TEST_VPN_URL" "$PLR_DEST_HOST" "$PLR_DEST_PORT" /combo-vpn-still-up; then ok "exit role in the same TD still serves (the VPN registry still allows it)"; fi
+run "owner allow_compose $PLR_COMBO_TEST_COMPOSE_HASH"
+owner allow_compose "{\"hash\":\"$PLR_COMBO_TEST_COMPOSE_HASH\"}" 2>&1 | show
+
+step "Combo (production build): the exit cannot reach the router or the LLM"
+info "production combo TD: router $PLR_COMBO_ROUTER_URL (port $PLR_COMBO_ROUTER_PORT) · exit $PLR_COMBO_VPN_URL · compose $PLR_COMBO_COMPOSE_HASH"
+run "PLR_VPN_URL=\$PLR_COMBO_VPN_URL plr vpn verify"
+set +e; OUT=$(combo_verify_exit "$PLR_COMBO_VPN_URL" 2>&1); RC=$?; set -e
+printf '%s\n' "$OUT" | grep -E "VERIFIED|REFUSED|build:|compose hash" | show || true
+if [[ $RC -eq 0 && "$OUT" == *"allow_loopback=false"* ]]; then ok "production combo exit verified: allow_loopback=false is part of the measurement"; else bad "production combo exit failed verification (exit $RC)"; fi
+for H in 127.0.0.1 ::1 localhost; do
+  if expect_probe E_EGRESS_DENIED - "$PLR_COMBO_VPN_URL" "$H" "$PLR_COMBO_ROUTER_PORT"; then ok "$H:$PLR_COMBO_ROUTER_PORT (the router in the same TD) refused by the exit before any connection"; fi
+done
+info "the LLM needs the per-boot API key that only the router process receives; separate processes, one memory-encryption domain (SPEC-COMBO §3)"
+
 # ------------------------------------------------------------------------------------------- shutdown
 printf '\n%s━━ shutdown%s\n' "$B$C" "$X"
 stop_stack                       # stop file → bounded teardown; waits for the stack process
@@ -388,6 +454,7 @@ if [[ $FAILURES -eq 0 ]]; then
   printf '%s━━ DEMO PASSED: honest router served privately; evil build, MITM and revoked build were all refused before any prompt left the client.%s\n' "$B$G" "$X"
   printf '%s━━ VPN PASSED: attested exit tunnelled end-to-end with no logs; evil exit, MITM, revoked build and forbidden targets were all refused before any byte reached a destination.%s\n' "$B$G" "$X"
   printf '%s━━ DNS + TWO-HOP PASSED: names resolved only over DoH inside the exit (resolver down ⇒ E_DNS, no fallback); two hops of different organizations verified and chained, same organization refused, a logging entry saw only the exit.%s\n' "$B$G" "$X"
+  printf '%s━━ COMBO PASSED: one TD served the attested router and the attested exit (same measurement, own keys, own registries); revoking one role left the other serving; the production exit could not reach the router.%s\n' "$B$G" "$X"
 else
   printf '%s━━ DEMO FAILED: %d check(s) failed (stack log: %s)%s\n' "$B$R" "$FAILURES" "$STACK_LOG" "$X"
   exit 1

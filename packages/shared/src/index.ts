@@ -12,7 +12,10 @@ export {
   EVENT_TYPE, EVENT_IMR, MAX_EVENTS, MAX_EVENT_PAYLOAD, BOOT_SEQUENCE, makeEvent, replayRtmr3, verifyEventLog, bootEvents,
   type TdxEvent,
 } from "./tdx/eventlog.js";
-export { keyHash, reportData, registrationNonce } from "./tdx/measure.js";
+export {
+  keyHash, reportData, registrationNonce, registrationReportData, sessionNonceDigest,
+  SESSION_NONCE_DOMAIN, REGISTRATION_NONCE_DOMAIN, MAX_ACCOUNT_ID_BYTES,
+} from "./tdx/measure.js";
 
 export type { Attester, QuoteVerifier } from "./attest/types.js";
 export {
