@@ -13,7 +13,9 @@
 #   PLR_VPN_ENTRY_URL= node client/dist/cli.js vpn                  # one hop (empty = unset), straight to PLR_VPN_URL
 # Stop with scripts/dev-down.sh.
 #
-# Env: PLR_LLM=llama|mock (default llama: real Qwen 0.5B), PLR_RPC_PORT (default 3030),
+# Env: PLR_CHAIN=near|zcash (default near; zcash = SPEC-CHAINS tier C: a zebrad regtest node instead of near-sandbox,
+#        the registries are the OP_RETURN record logs of two owner t-addresses; needs zebrad, see README "Multi-chain"),
+#      PLR_LLM=llama|mock (default llama: real Qwen 0.5B), PLR_RPC_PORT (default 3030; zcash: 18232),
 #      PLR_ROUTER_PORT (default 18100), PLR_EXIT_PORT (default 18200, the VPN exit),
 #      PLR_EXTRA=evil-logger,mitm-key,vpn-honest-test,vpn-evil-logger,vpn-mitm-key,… (extra routers / exits),
 #      PLR_DESTINATION=1 (also start a local HTTP test destination; port in PLR_DEST_PORT),
@@ -47,10 +49,17 @@ case "${PLR_COMBO:-0}" in
   *) echo "PLR_COMBO must be 1, combo or combo-test" >&2; exit 1 ;;
 esac
 if [[ -n "$COMBO_ARG" && -n "${PLR_EXTRA:-}" ]]; then echo "PLR_COMBO runs one TD only: unset PLR_EXTRA" >&2; exit 1; fi
+CHAIN="${PLR_CHAIN:-near}"
+case "$CHAIN" in
+  near) DEFAULT_RPC_PORT=3030 ;;
+  zcash) DEFAULT_RPC_PORT=18232 ;;
+  *) echo "PLR_CHAIN must be near or zcash" >&2; exit 1 ;;
+esac
 
 node e2e/dist/stack-cli.js up \
+  --chain "$CHAIN" \
   --llm "${PLR_LLM:-llama}" \
-  --rpc-port "${PLR_RPC_PORT:-3030}" \
+  --rpc-port "${PLR_RPC_PORT:-$DEFAULT_RPC_PORT}" \
   --router-port "${PLR_ROUTER_PORT:-18100}" \
   --exit-port "${PLR_EXIT_PORT:-18200}" \
   ${PLR_EXTRA:+--extra "$PLR_EXTRA"} \

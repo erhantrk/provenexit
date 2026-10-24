@@ -155,6 +155,6 @@ describe("exit config (env from the host)", () => {
   });
   it("rev 1.3: no reserved-nonce configuration is left (session quotes are domain-separated instead)", () => {
     const c = loadExitConfig({ ...env, PLR_REGISTRY: "registry.test.near", PLR_VPN_REGISTRY: "vpnregistry.test.near" });
-    expect(Object.keys(c).sort()).toEqual(["anchorIntervalMs", "composePath", "host", "near", "nearConfigError", "port", "tdxSocket"]);
+    expect(Object.keys(c).sort()).toEqual(["anchorIntervalMs", "composePath", "host", "near", "nearConfigError", "port", "registry", "tdxSocket"]);
   });
 });

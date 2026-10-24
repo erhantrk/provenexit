@@ -8,11 +8,14 @@
  * optional PLR_PROXY_PORT (default 18787) and PLR_PROXY_HOST (default 127.0.0.1).
  * VPN env: PLR_VPN_URL, PLR_VPN_REGISTRY, PLR_NEAR_RPC, PLR_TRUSTED_ROOT; optional PLR_VPN_SOCKS_PORT (default 18180),
  * PLR_VPN_ATTEST_TTL_MS (default 60000), PLR_VPN_ENTRY_URL (set ⇒ two-hop, SPEC-VPN §10, with PLR_VPN_URL as the exit).
+ * Chain (SPEC-CHAINS §4, §5): PLR_CHAIN = near (default) | zcash. Zcash: PLR_ZCASH_RPC, PLR_ZCASH_NETWORK,
+ * PLR_ZCASH_OWNER (or PLR_REGISTRY / PLR_VPN_REGISTRY = `zcash:<network>:<owner>`), PLR_ZCASH_START_HEIGHT.
  */
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { PlrError, isHex, isPlrError, isValidP256Pub, fromHex, toHex, type RegistryReader } from "@plr/shared";
+import { PlrError, isHex, isPlrError, isTAddress, isValidP256Pub, isZcashNetwork, fromHex, toHex, type RegistryReader, type ZcashNetwork } from "@plr/shared";
 import { NearRegistry, checkRpcUrl } from "./near-registry.js";
+import { ZcashRegistry, parseZcashContractId } from "./zcash-registry.js";
 import { PrivateClient } from "./client.js";
 import { startProxy } from "./proxy.js";
 import { TracingRegistry, checkLines, formatCheckLine } from "./verify-report.js";
@@ -26,10 +29,25 @@ export interface CliIo {
   err: (s: string) => void;
 }
 
+/** Registry chains this client can read (SPEC-CHAINS §1); other `PLR_CHAIN` values are refused. */
+export type CliChain = "near" | "zcash";
+
+/** Zcash reader settings (SPEC-CHAINS §5). */
+export interface ZcashCliConfig {
+  network: ZcashNetwork;
+  owner: string;
+  startHeight: number;
+  /** Max wall time of the first catch-up (PLR_ZCASH_SYNC_TIMEOUT_MS; the reader's default otherwise). */
+  syncTimeoutMs?: number;
+}
+
 export interface CliConfig {
+  chain: CliChain;
   routerUrl: string;
   rpcUrl: string;
   contractId: string;
+  /** Set iff `chain` is zcash. */
+  zcash?: ZcashCliConfig;
   trustedRoot: Uint8Array;
   proxyPort: number;
   proxyHost: string;
@@ -39,8 +57,11 @@ export interface VpnCliConfig {
   exitUrl: string;
   /** Entry exit URL: set ⇒ two-hop (SPEC-VPN §10) with `exitUrl` as the exit. */
   entryUrl: string | undefined;
+  chain: CliChain;
   rpcUrl: string;
   contractId: string;
+  /** Set iff `chain` is zcash. */
+  zcash?: ZcashCliConfig;
   trustedRoot: Uint8Array;
   socksPort: number;
   attestTtlMs: number;
@@ -49,6 +70,8 @@ export interface VpnCliConfig {
 const DEFAULTS = {
   router: "http://127.0.0.1:18100",
   rpc: "http://127.0.0.1:3030",
+  /** Zebra's default RPC ports: 8232 (mainnet), 18232 (testnet / regtest). */
+  zcashRpc: (n: ZcashNetwork): string => `http://127.0.0.1:${n === "mainnet" ? 8232 : 18232}`,
   proxyPort: 18787,
   proxyHost: "127.0.0.1",
   vpnExit: "http://127.0.0.1:18200",
@@ -82,6 +105,11 @@ env:   PLR_ROUTER_URL (default ${DEFAULTS.router})
        PLR_REGISTRY   registry contract account id (required)
        PLR_TRUSTED_ROOT  pinned attestation root, 128 hex (required)
        PLR_PROXY_PORT (default ${DEFAULTS.proxyPort}), PLR_PROXY_HOST (default ${DEFAULTS.proxyHost})
+chain: PLR_CHAIN      near (default) | zcash — which chain holds the registry
+       zcash:  PLR_ZCASH_RPC (Zebra JSON-RPC; https, or http to a loopback host only; default http://127.0.0.1:18232,
+               8232 on mainnet), PLR_ZCASH_NETWORK (regtest | testnet | mainnet), PLR_ZCASH_OWNER (registry owner
+               t-address; or PLR_REGISTRY / PLR_VPN_REGISTRY = zcash:<network>:<owner>), PLR_ZCASH_START_HEIGHT (default 0),
+               PLR_ZCASH_SYNC_TIMEOUT_MS (first catch-up bound, default 60000)
 vpn:   ${VPN_USAGE.replace(/\n/g, "\n       ")}`;
 
 export class ConfigError extends Error {}
@@ -110,17 +138,104 @@ function portFrom(env: Record<string, string | undefined>, name: string, dflt: n
   return Number(portStr);
 }
 
+function chainFrom(env: Record<string, string | undefined>): CliChain {
+  const c = env.PLR_CHAIN || "near";
+  if (c === "near" || c === "zcash") return c;
+  if (c === "evm" || c === "stellar" || c === "solana") throw new ConfigError(`PLR_CHAIN=${c} is not supported by this client yet (near | zcash)`);
+  throw new ConfigError("PLR_CHAIN must be near or zcash");
+}
+
+/**
+ * Zcash registry settings: the registry id comes from `registryVar` (`zcash:<network>:<owner>`) or from
+ * PLR_ZCASH_OWNER + PLR_ZCASH_NETWORK; when both are given they must agree. Never guesses the network.
+ */
+function zcashFrom(
+  env: Record<string, string | undefined>,
+  registryVar: "PLR_REGISTRY" | "PLR_VPN_REGISTRY",
+): { rpcUrl: string; contractId: string; zcash: ZcashCliConfig } {
+  const netEnv = env.PLR_ZCASH_NETWORK || undefined;
+  if (netEnv !== undefined && !isZcashNetwork(netEnv)) throw new ConfigError("PLR_ZCASH_NETWORK must be regtest, testnet or mainnet");
+  const ownerEnv = env.PLR_ZCASH_OWNER || undefined;
+  const regEnv = env[registryVar] || undefined;
+  let network: ZcashNetwork;
+  let owner: string;
+  if (regEnv !== undefined) {
+    const id = parseZcashContractId(regEnv);
+    if (id === null) throw new ConfigError(`${registryVar} must be zcash:<regtest|testnet|mainnet>:<owner t-address> when PLR_CHAIN=zcash`);
+    if (netEnv !== undefined && netEnv !== id.network) throw new ConfigError(`PLR_ZCASH_NETWORK disagrees with ${registryVar}`);
+    // PLR_ZCASH_OWNER names the LLM registry owner; the VPN registry (PLR_VPN_REGISTRY) has its own owner.
+    if (registryVar === "PLR_REGISTRY" && ownerEnv !== undefined && ownerEnv !== id.owner) throw new ConfigError("PLR_ZCASH_OWNER disagrees with PLR_REGISTRY");
+    ({ network, owner } = id);
+  } else {
+    if (netEnv === undefined) throw new ConfigError("PLR_ZCASH_NETWORK is required (regtest | testnet | mainnet)");
+    if (ownerEnv === undefined) throw new ConfigError(`PLR_ZCASH_OWNER (registry owner t-address) or ${registryVar} is required`);
+    if (!isTAddress(ownerEnv, netEnv)) throw new ConfigError(`PLR_ZCASH_OWNER is not a P2PKH t-address on ${netEnv}`);
+    network = netEnv;
+    owner = ownerEnv;
+  }
+  const rpcUrl = env.PLR_ZCASH_RPC || DEFAULTS.zcashRpc(network);
+  try {
+    checkRpcUrl(rpcUrl);
+  } catch {
+    throw new ConfigError("PLR_ZCASH_RPC must be an https URL (plain http only to a loopback host: the node decides the registry checks)");
+  }
+  const startStr = env.PLR_ZCASH_START_HEIGHT || "0";
+  if (!/^\d{1,10}$/.test(startStr) || Number(startStr) > 2 ** 31 - 1) throw new ConfigError("PLR_ZCASH_START_HEIGHT must be a block height");
+  const syncStr = env.PLR_ZCASH_SYNC_TIMEOUT_MS || undefined;
+  if (syncStr !== undefined && (!/^\d{1,6}$/.test(syncStr) || Number(syncStr) < 1 || Number(syncStr) > 900_000)) {
+    throw new ConfigError("PLR_ZCASH_SYNC_TIMEOUT_MS must be 1..900000");
+  }
+  const zcash: ZcashCliConfig = { network, owner, startHeight: Number(startStr), ...(syncStr !== undefined ? { syncTimeoutMs: Number(syncStr) } : {}) };
+  return { rpcUrl, contractId: `zcash:${network}:${owner}`, zcash };
+}
+
+/** Registry location for the selected chain: NEAR (PLR_NEAR_RPC + `registryVar`) or Zcash (SPEC-CHAINS §5 env). */
+function registryFrom(
+  env: Record<string, string | undefined>,
+  registryVar: "PLR_REGISTRY" | "PLR_VPN_REGISTRY",
+): { chain: CliChain; rpcUrl: string; contractId: string; zcash?: ZcashCliConfig } {
+  const chain = chainFrom(env);
+  if (chain === "zcash") return { chain, ...zcashFrom(env, registryVar) };
+  const contractId = env[registryVar];
+  if (contractId === undefined || contractId === "") throw new ConfigError(`${registryVar} is required`);
+  return { chain, rpcUrl: rpcUrlFrom(env), contractId };
+}
+
+/** The registry reader for a loaded config. */
+export function makeRegistry(cfg: { chain: CliChain; rpcUrl: string; contractId: string; zcash?: ZcashCliConfig }): RegistryReader {
+  if (cfg.chain === "zcash") {
+    const z = cfg.zcash;
+    if (z === undefined) throw new ConfigError("zcash settings missing");
+    return new ZcashRegistry({
+      rpcUrl: cfg.rpcUrl, network: z.network, owner: z.owner, startHeight: z.startHeight,
+      ...(z.syncTimeoutMs !== undefined ? { syncTimeoutMs: z.syncTimeoutMs } : {}),
+    });
+  }
+  return new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.contractId });
+}
+
+/** SPEC-CHAINS §1 tier of a registry, for display only (safety never depends on it, only on `verifiesOnChain`). */
+export function registryTier(r: RegistryReader): "A" | "B" | "C" {
+  if (r.verifiesOnChain === true) return "A";
+  return r.chain === "zcash" ? "C" : "B";
+}
+
+/** `plr verify` header line: the registry's tier and what the client adds (SPEC-CHAINS §1, §2). */
+function tierLine(r: RegistryReader): string {
+  const t = registryTier(r);
+  return r.verifiesOnChain === true
+    ? `  tier:     ${t} — the registry contract verified the registration quote on-chain`
+    : `  tier:     ${t} — the chain does not verify quotes: this client checks the registration evidence and anchor signatures`;
+}
+
 /** Reads and validates the env config. Fails closed: no trusted root ⇒ no default. */
 export function loadConfig(env: Record<string, string | undefined>): CliConfig {
-  const contractId = env.PLR_REGISTRY;
-  if (contractId === undefined || contractId === "") throw new ConfigError("PLR_REGISTRY is required");
+  const reg = registryFrom(env, "PLR_REGISTRY");
   const trustedRoot = trustedRootFrom(env);
-  const rpcUrl = rpcUrlFrom(env);
   const proxyPort = portFrom(env, "PLR_PROXY_PORT", DEFAULTS.proxyPort);
   return {
+    ...reg,
     routerUrl: env.PLR_ROUTER_URL || DEFAULTS.router,
-    rpcUrl,
-    contractId,
     trustedRoot,
     proxyPort,
     proxyHost: env.PLR_PROXY_HOST || DEFAULTS.proxyHost,
@@ -129,10 +244,8 @@ export function loadConfig(env: Record<string, string | undefined>): CliConfig {
 
 /** VPN env config (SPEC-VPN §9.2). Fails closed: the VPN registry and the trusted root have no default. */
 export function loadVpnConfig(env: Record<string, string | undefined>): VpnCliConfig {
-  const contractId = env.PLR_VPN_REGISTRY;
-  if (contractId === undefined || contractId === "") throw new ConfigError("PLR_VPN_REGISTRY is required");
+  const reg = registryFrom(env, "PLR_VPN_REGISTRY");
   const trustedRoot = trustedRootFrom(env);
-  const rpcUrl = rpcUrlFrom(env);
   const socksPort = portFrom(env, "PLR_VPN_SOCKS_PORT", DEFAULTS.vpnSocksPort);
   const ttlStr = env.PLR_VPN_ATTEST_TTL_MS ?? String(VPN_ATTEST_TTL_MS);
   if (!/^\d{1,7}$/.test(ttlStr) || Number(ttlStr) > 3_600_000) throw new ConfigError("PLR_VPN_ATTEST_TTL_MS must be 0..3600000");
@@ -140,7 +253,7 @@ export function loadVpnConfig(env: Record<string, string | undefined>): VpnCliCo
   const entryUrl = env.PLR_VPN_ENTRY_URL || undefined;
   if (!isHttpUrl(exitUrl)) throw new ConfigError("PLR_VPN_URL must be an http(s) URL");
   if (entryUrl !== undefined && !isHttpUrl(entryUrl)) throw new ConfigError("PLR_VPN_ENTRY_URL must be an http(s) URL");
-  return { exitUrl, entryUrl, rpcUrl, contractId, trustedRoot, socksPort, attestTtlMs: Number(ttlStr) };
+  return { exitUrl, entryUrl, ...reg, trustedRoot, socksPort, attestTtlMs: Number(ttlStr) };
 }
 
 function isHttpUrl(u: string): boolean {
@@ -160,18 +273,19 @@ async function cmdVerify(cfg: CliConfig, registry: TracingRegistry, client: Priv
   io.out(`PLR verify`);
   io.out(`  router:   ${client.routerUrl}`);
   io.out(`  registry: ${registry.contractId} on ${registry.chain} (${cfg.rpcUrl})`);
+  io.out(tierLine(registry));
   io.out(`  pinned root: ${client.rootKind} ROOT ${toHex(cfg.trustedRoot)}`);
   io.out("");
   let verified;
   try {
     verified = await client.attest();
   } catch (e) {
-    for (const l of checkLines(e, registry.lastCall)) io.out(formatCheckLine(l));
+    for (const l of checkLines(e, registry.lastCall, { evidence: !registry.verifiesOnChain })) io.out(formatCheckLine(l));
     io.out("");
     io.out(`✘ REFUSED — ${errCode(e)}. Nothing would be sent to this router.`);
     return 1;
   }
-  for (const l of checkLines(undefined)) io.out(formatCheckLine(l));
+  for (const l of checkLines(undefined, undefined, { evidence: !registry.verifiesOnChain })) io.out(formatCheckLine(l));
   io.out("");
   io.out(`✔ VERIFIED`);
   io.out(`  root:            ${verified.rootKind} ROOT${verified.rootKind === "MOCK" ? " (local test root, NOT Intel)" : ""}`);
@@ -266,19 +380,20 @@ async function cmdVpnVerify(cfg: VpnCliConfig, registry: TracingRegistry, client
   io.out(`PLR VPN verify`);
   io.out(`  exit:     ${client.exitUrl}`);
   io.out(`  registry: ${registry.contractId} on ${registry.chain} (${cfg.rpcUrl})`);
+  io.out(tierLine(registry));
   io.out(`  pinned root: ${client.rootKind} ROOT ${toHex(cfg.trustedRoot)}`);
   io.out("");
   let session: AttestationSession;
   try {
     session = await client.attestSession();
   } catch (e) {
-    for (const l of checkLines(e, registry.lastCall)) io.out(formatCheckLine(l));
+    for (const l of checkLines(e, registry.lastCall, { evidence: !registry.verifiesOnChain })) io.out(formatCheckLine(l));
     io.out(`  · ${RECHECK_LINE}  (not checked)`);
     io.out("");
     io.out(`✘ REFUSED — ${errCode(e)}. No connection would be tunnelled through this exit.`);
     return 1;
   }
-  for (const l of checkLines(undefined)) io.out(formatCheckLine(l));
+  for (const l of checkLines(undefined, undefined, { evidence: !registry.verifiesOnChain })) io.out(formatCheckLine(l));
   try {
     await recheckRegistry(registry, session.verified);
     io.out(`  ✔ ${RECHECK_LINE}`);
@@ -310,12 +425,12 @@ async function verifyHop(
   try {
     session = await attest();
   } catch (e) {
-    for (const l of checkLines(e, registry.lastCall)) io.out(formatCheckLine(l));
+    for (const l of checkLines(e, registry.lastCall, { evidence: !registry.verifiesOnChain })) io.out(formatCheckLine(l));
     io.out(`  · ${RECHECK_LINE}  (not checked)`);
     for (const l of orgLines(undefined, undefined)) io.out(`  · ${l}  (not checked)`);
     return { error: e };
   }
-  for (const l of checkLines(undefined)) io.out(formatCheckLine(l));
+  for (const l of checkLines(undefined, undefined, { evidence: !registry.verifiesOnChain })) io.out(formatCheckLine(l));
   try {
     const org = await check(session);
     io.out(`  ✔ ${RECHECK_LINE}`);
@@ -345,6 +460,7 @@ async function cmdTwoHopVerify(cfg: VpnCliConfig, registry: TracingRegistry, cli
   io.out(`  entry:    ${client.entryUrl}`);
   io.out(`  exit:     ${client.exitUrl}  (reached only through the entry)`);
   io.out(`  registry: ${registry.contractId} on ${registry.chain} (${cfg.rpcUrl})`);
+  io.out(tierLine(registry));
   io.out(`  pinned root: ${client.rootKind} ROOT ${toHex(cfg.trustedRoot)}`);
   io.out("");
   const refused = (e: unknown): number => {
@@ -448,7 +564,7 @@ async function runVpn(rest: string[], env: Record<string, string | undefined>, i
   let client: VpnClient | TwoHopClient;
   try {
     cfg = loadVpnConfig(env);
-    registry = new TracingRegistry(new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.contractId }));
+    registry = new TracingRegistry(makeRegistry(cfg));
     const common = { registry, trustedRoot: cfg.trustedRoot, attestTtlMs: cfg.attestTtlMs };
     client =
       cfg.entryUrl !== undefined
@@ -529,8 +645,7 @@ export async function runCli(
   let client: PrivateClient;
   try {
     cfg = loadConfig(env);
-    const near: RegistryReader = new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.contractId });
-    registry = new TracingRegistry(near);
+    registry = new TracingRegistry(makeRegistry(cfg));
     client = new PrivateClient({ routerUrl: cfg.routerUrl, registry, trustedRoot: cfg.trustedRoot });
   } catch (e) {
     io.err(`config error: ${e instanceof ConfigError ? e.message : errCode(e)}`);

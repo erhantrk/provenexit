@@ -7,7 +7,9 @@
  *   (SPEC §5 rev 1.3: bound to the registry and to this anchorer's own operator account, which the contract checks
  *   against `current_account_id` / `predecessor_account_id`) and calls `register_instance`. On failure it keeps
  *   serving (clients refuse an unregistered instance), logs only the error code and retries with exponential backoff.
- *   Successful registrations are refreshed periodically.
+ *   Successful registrations are refreshed periodically. The registration quote of the latest successful registration
+ *   is kept ({@link Anchorer.registrationQuote}) and served in `/v1/attestation` (SPEC-CHAINS §4); writers that set
+ *   `reuseRegistrationQuote` (tier C, which commits only its hash) refresh with that same quote.
  * - Every `intervalMs`, when receipts are pending, the next contiguous batch (≤ 10 000) is committed as an
  *   RFC 6962 root via `anchor_receipts`, signed with the instance Ed25519 key, with a storage deposit attached
  *   by the chain writer (PLR_ANCHOR_DEPOSIT; the contract refunds the excess and never pays storage from its own
@@ -21,10 +23,10 @@
  *   The anchorer then stops for good (no retries: the record's operator never changes), logs
  *   `registration_failed code=E_OPERATOR_MISMATCH` and calls `onOperatorMismatch` so the service stops serving.
  */
-import { PlrError, anchorMessage, equalBytes, fromHex, toHex, type Attester } from "@plr/shared";
+import { PlrError, anchorMessage, equalBytes, fromHex, toHex, type Attester, type TdxEvent } from "@plr/shared";
 import type { EnclaveKeys } from "./keys.js";
 import { Logger, code as codeField, codeOf, hex as hexField, type Code } from "./log.js";
-import type { AnchorView, RegistryWriter } from "./near.js";
+import type { AnchorView, RegistryWriter } from "./registry-writer.js";
 import type { LeafLog } from "./receipts.js";
 
 export interface AnchorerOptions {
@@ -62,6 +64,7 @@ export class Anchorer {
   #anchorTimer: NodeJS.Timeout | null = null;
   #regTimer: NodeJS.Timeout | null = null;
   #retryMs: number;
+  #regQuote: { quote: Uint8Array; eventLog: TdxEvent[] } | null = null;
 
   constructor(o: AnchorerOptions) {
     this.#o = {
@@ -86,6 +89,10 @@ export class Anchorer {
   }
   get halted(): boolean {
     return this.#halted;
+  }
+  /** The quote of the latest successful registration (a copy), or null before the first one. */
+  get registrationQuote(): Uint8Array | null {
+    return this.#regQuote === null ? null : this.#regQuote.quote.slice();
   }
 
   /** Starts registration (with retries) and the periodic anchor loop. */
@@ -144,7 +151,8 @@ export class Anchorer {
       if (this.#lastError === "E_OPERATOR_MISMATCH") return false; // permanent
       try {
         const rd = this.#o.keys.registrationReportData(this.#o.chain.contractId, this.#o.chain.operatorId);
-        const { quote, eventLog } = await this.#o.attester.getQuote(rd);
+        const { quote, eventLog } =
+          this.#o.chain.reuseRegistrationQuote === true && this.#regQuote !== null ? this.#regQuote : await this.#o.attester.getQuote(rd);
         await this.#o.chain.registerInstance({
           quote: toHex(quote),
           event_log: eventLog,
@@ -162,6 +170,7 @@ export class Anchorer {
           }
         }
         const first = this.#state !== "registered";
+        this.#regQuote = { quote: quote.slice(), eventLog };
         this.#state = "registered";
         this.#lastError = null;
         if (first) this.#o.log.info("registered", { key_hash: hexField(this.#keyHashHex) });

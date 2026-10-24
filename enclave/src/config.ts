@@ -1,5 +1,5 @@
 /** Router configuration from the environment (set by the mock TDX host). Strictly validated; fail closed. */
-import { PlrError } from "@plr/shared";
+import { PlrError, isTAddress, isZcashNetwork, parseZcashSecretKey, type ZcashNetwork } from "@plr/shared";
 import { NEAR_ACCOUNT_RE, NEAR_KEY_RE } from "./near.js";
 
 export interface NearConfig {
@@ -15,6 +15,26 @@ export interface NearConfig {
   anchorDeposit: bigint;
 }
 
+/** SPEC-CHAINS §4 `PLR_CHAIN` values. Only `near` and `zcash` have writers in this build. */
+export const CHAIN_NAMES = ["near", "evm", "stellar", "solana", "zcash"] as const;
+export type ChainName = (typeof CHAIN_NAMES)[number];
+
+/** Zcash tier-C registry settings (SPEC-CHAINS §5 `PLR_ZCASH_*`). */
+export interface ZcashConfig {
+  /** Zebra JSON-RPC URL (http/https; optional `user:pass@` for basic auth). */
+  rpcUrl: string;
+  network: ZcashNetwork;
+  /** Owner t-address of the registry (the `contractId` part). */
+  owner: string;
+  /** Operator secret key (WIF or 64 hex), validated. */
+  key: string;
+  /** First block height scanned for records (PLR_ZCASH_START_HEIGHT, default 0). */
+  startHeight: number;
+}
+
+/** The registry an instance registers on, selected by `PLR_CHAIN` (default `near`). */
+export type RegistryConfig = { chain: "near"; near: NearConfig } | { chain: "zcash"; zcash: ZcashConfig };
+
 export interface RouterConfig {
   tdxSocket: string;
   composePath: string;
@@ -25,8 +45,14 @@ export interface RouterConfig {
   /** Per-boot LLM API key from the host (PLR_LLM_API_KEY, 64 hex), or null when the LLM is unauthenticated. */
   llmApiKey: string | null;
   anchorIntervalMs: number;
+  /** The NEAR settings when `PLR_CHAIN` is `near` (= `registry.near`), else null. */
   near: NearConfig | null;
-  /** True if NEAR variables were present but incomplete/invalid: registration is disabled (clients refuse). */
+  /** The selected registry (any chain), or null (unregistered: clients refuse). */
+  registry: RegistryConfig | null;
+  /**
+   * True if the selected chain's variables were present but incomplete/invalid, or `PLR_CHAIN` is invalid or has no
+   * writer in this build: registration is disabled (clients refuse).
+   */
   nearConfigError: boolean;
 }
 
@@ -65,14 +91,76 @@ export function loadConfig(env: Env = process.env): RouterConfig {
   const llmApiKey = llmApiKeyRaw === undefined || llmApiKeyRaw === "" ? null : llmApiKeyRaw;
   if (llmApiKey !== null && !/^[0-9a-f]{64}$/.test(llmApiKey)) bad("PLR_LLM_API_KEY");
 
-  let near: NearConfig | null = null;
-  let nearConfigError = false;
-  try {
-    near = loadNear(env);
-  } catch {
-    nearConfigError = true;
+  const { registry, near, nearConfigError } = loadRegistrySafe(env, { nearRegistryVar: "PLR_REGISTRY", zcashOwnerVar: "PLR_ZCASH_OWNER" });
+  return { tdxSocket, composePath, host, port, llmPort, llmApiKey, anchorIntervalMs, near, registry, nearConfigError };
+}
+
+/** Which env variables name the registry (they differ between the LLM router and the VPN exit). */
+export interface RegistryVars {
+  nearRegistryVar: string;
+  zcashOwnerVar: string;
+}
+
+/**
+ * The registry selected by `PLR_CHAIN` (default `near`): null when none of the chain's variables are set.
+ * @throws PlrError E_BAD_INPUT on an invalid `PLR_CHAIN`, a chain without a writer in this build, or partial/invalid
+ * variables
+ */
+export function loadRegistry(env: Env, vars: RegistryVars): RegistryConfig | null {
+  const chainRaw = env.PLR_CHAIN === undefined || env.PLR_CHAIN === "" ? "near" : env.PLR_CHAIN;
+  if (!(CHAIN_NAMES as readonly string[]).includes(chainRaw)) bad("PLR_CHAIN");
+  const chain = chainRaw as ChainName;
+  if (chain === "near") {
+    const near = loadNear(env, vars.nearRegistryVar);
+    return near === null ? null : { chain, near };
   }
-  return { tdxSocket, composePath, host, port, llmPort, llmApiKey, anchorIntervalMs, near, nearConfigError };
+  if (chain === "zcash") {
+    const zcash = loadZcash(env, vars.zcashOwnerVar);
+    return zcash === null ? null : { chain, zcash };
+  }
+  return bad(`PLR_CHAIN ${chain} has no registry writer in this build`);
+}
+
+/** {@link loadRegistry} that never throws: a configuration error disables registration (fail closed). */
+export function loadRegistrySafe(env: Env, vars: RegistryVars): { registry: RegistryConfig | null; near: NearConfig | null; nearConfigError: boolean } {
+  try {
+    const registry = loadRegistry(env, vars);
+    return { registry, near: registry?.chain === "near" ? registry.near : null, nearConfigError: false };
+  } catch {
+    return { registry: null, near: null, nearConfigError: true };
+  }
+}
+
+/**
+ * Zcash registration config (SPEC-CHAINS §5): all of PLR_ZCASH_RPC, PLR_ZCASH_NETWORK, the owner (`ownerVar`) and
+ * PLR_ZCASH_KEY, or none (→ null); PLR_ZCASH_START_HEIGHT optional. @throws PlrError E_BAD_INPUT if partially set or invalid
+ */
+export function loadZcash(env: Env, ownerVar: string = "PLR_ZCASH_OWNER"): ZcashConfig | null {
+  const vars = ["PLR_ZCASH_RPC", "PLR_ZCASH_NETWORK", ownerVar, "PLR_ZCASH_KEY"] as const;
+  const set = vars.filter((k) => (env[k] ?? "") !== "");
+  if (set.length === 0) return null;
+  if (set.length !== vars.length) bad(`Zcash (PLR_ZCASH_RPC, PLR_ZCASH_NETWORK, ${ownerVar}, PLR_ZCASH_KEY must be set together)`);
+  const rpcUrl = env.PLR_ZCASH_RPC!;
+  if (rpcUrl.length > 2048) bad("PLR_ZCASH_RPC");
+  let u: URL;
+  try {
+    u = new URL(rpcUrl);
+  } catch {
+    bad("PLR_ZCASH_RPC");
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") bad("PLR_ZCASH_RPC");
+  const network = env.PLR_ZCASH_NETWORK!;
+  if (!isZcashNetwork(network)) bad("PLR_ZCASH_NETWORK");
+  const owner = env[ownerVar]!;
+  if (owner.length > 64 || !isTAddress(owner, network)) bad(ownerVar);
+  const key = env.PLR_ZCASH_KEY!;
+  try {
+    parseZcashSecretKey(key);
+  } catch {
+    bad("PLR_ZCASH_KEY");
+  }
+  const startHeight = intVar(env, "PLR_ZCASH_START_HEIGHT", 0, 0, 1_000_000_000);
+  return { rpcUrl, network, owner, key, startHeight };
 }
 
 /**

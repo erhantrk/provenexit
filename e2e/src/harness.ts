@@ -16,16 +16,24 @@
  *   …
  *   await S.stop();
  *
- * Layout: `<repo>/.run/<id>/` is the stack's `runDir` (near-sandbox home under `near/`); the mock host's
- * private socket directories live in the sibling `<repo>/.run/<id>-host/` (a Unix socket cannot be read as a
+ * Chains (SPEC-CHAINS §6): `startStack({ chain })` — `near` (default: near-sandbox, both registries deployed as
+ * contracts) or `zcash` (zebrad regtest, the registries are the record logs of two owner t-addresses). Owner policy
+ * goes through `S.admin` / `S.vpnAdmin` (`ChainAdmin`) on every chain; `S.call` / `S.view` are the NEAR-native calls.
+ *
+ * Layout: `<root>/<id>/` is the stack's `runDir` (`<root>` = `runRoot()`: `PLR_RUN_ROOT`, else `<repo>/.run`, else
+ * `<repo>/e2e/.run` when the repo root is not writable — e.g. a sandbox that only allows writes under the e2e cwd) (near-sandbox home under `near/`, zebrad state under
+ * `zcash/`); the mock host's
+ * private socket directories live in the sibling `<root>/<id>-host/` (a Unix socket cannot be read as a
  * file, and macOS limits socket paths to 104 bytes). Both are removed by `stop()` unless `PLR_KEEP_RUN=1`.
- * Registration (SPEC §5 rev 1.3) is operator-bound: every launch gets `PLR_OPERATOR_ID` (and a fresh key of that
- * account), and the enclave binds exactly that account into its registration quote.
+ * Registration (SPEC §5 rev 1.3) is operator-bound: every launch gets the operator's credentials for its chain (NEAR:
+ * `PLR_OPERATOR_ID` + a fresh key of that account; Zcash: `PLR_ZCASH_KEY` of the operator t-address), and the
+ * enclave binds exactly that account into its registration quote. A registering launch resolves only once the
+ * stack's reader sees the instance (tier B/C: the operator must be approved on that registry first).
  * Nothing listens on a fixed port unless asked to (`rpcPort`, `routerPort`), except the local DoH resolver: the
  * test builds measure `http://127.0.0.1:18253/dns-query` (SPEC-VPN §2), so every stack runs it on exactly that port
  * (one stack at a time on a machine; a busy port fails `startStack`).
  */
-import { existsSync, readFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, mkdirSync, readFileSync, rmdirSync } from "node:fs";
 import http from "node:http";
 import net, { type AddressInfo } from "node:net";
 import { mkdir, rm } from "node:fs/promises";
@@ -33,23 +41,24 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes as nodeRandomBytes } from "node:crypto";
-import { Account, JsonRpcProvider, KeyPair, KeyPairSigner, type KeyPairString } from "near-api-js";
-import { parseIpv4, parseIpv6, toHex, type RegistryReader, type TdxEvent } from "@plr/shared";
-import { NearRegistry } from "@plr/client";
+import { parseIpv4, parseIpv6, type RegistryReader, type TdxEvent } from "@plr/shared";
 import { generateRootSecret, measureBoot, measureComboBoot, measureVpnBoot } from "@plr/enclave/mock-tdx";
 import { isAttack, startAttackProxy, type AttackProxy } from "./attacks.js";
 import { isVpnAttack, startVpnAttackProxy } from "./vpn-attacks.js";
 import { startManaged, waitFor, type ManagedProcess } from "./procs.js";
-import { startSandbox, type SandboxNode } from "./sandbox.js";
+import { CHAINS, OPERATORS, type Chain, type ChainAdmin, type ChainDriver, type OperatorAccount, type RegistryName, type Signer } from "./chains/driver.js";
+import { startNearDriver } from "./chains/near.js";
+import { startZcashDriver } from "./chains/zcash.js";
+
+export { CHAINS, type Chain, type ChainAdmin, type OperatorAccount, type Signer };
+export { REGISTRY_WASM } from "./chains/near.js";
+export { zebradBinary } from "./chains/zcash.js";
 
 // ------------------------------------------------------------------------------------------------ public types
 
 export const VARIANTS = ["honest", "evil-logger", "mitm-key", "replay-quote", "debug-td", "truncate-stream", "tamper-stream"] as const;
 export type Variant = (typeof VARIANTS)[number];
 export type LlmChoice = "mock" | "llama";
-export type Signer = "owner" | "operator" | "operator2" | "stranger";
-/** Accounts that operate (register) VPN exits; the owner maps them to organizations (SPEC §7 rev 1.2). */
-export type OperatorAccount = "operator" | "operator2";
 /** VPN exits (SPEC-VPN §9.3): three measured builds, and network attackers in front of `vpn-honest-test`. */
 export const VPN_BUILDS = ["vpn-honest", "vpn-honest-test", "vpn-evil-logger"] as const;
 export type VpnBuild = (typeof VPN_BUILDS)[number];
@@ -61,9 +70,11 @@ export type ComboVariant = (typeof COMBO_VARIANTS)[number];
 
 export interface StackOptions {
   llm: LlmChoice;
-  /** near-sandbox RPC port (default: a free port). */
+  /** Registry chain (SPEC-CHAINS §6, default "near"). */
+  chain?: Chain;
+  /** The chain node's RPC port (default: a free port). */
   rpcPort?: number;
-  /** Run id (default: random); the run directory is `<repo>/.run/<id>/`. */
+  /** Run id (default: random); the run directory is `<runRoot()>/<id>/`. */
   id?: string;
   /** Router anchoring interval (default 1000 ms). */
   anchorIntervalMs?: number;
@@ -161,14 +172,28 @@ export interface Destination {
 }
 
 export interface Stack {
+  /** The registry chain (SPEC-CHAINS §6). */
+  chain: Chain;
+  /** Owner of the LLM registry (resolves once the write is on chain). */
+  admin: ChainAdmin;
+  /** Owner of the VPN registry. */
+  vpnAdmin: ChainAdmin;
+  /** The same API signed by the stranger account (must be refused / ignored). */
+  asStranger(a: ChainAdmin): ChainAdmin;
+  /** The chain node's RPC URL (near-sandbox / zebrad). */
   rpcUrl: string;
   contractId: string;
   trustedRoot: Uint8Array;
   registry: RegistryReader;
   runDir: string;
+  /** NEAR: account ids; Zcash: t-addresses (the LLM registry's owner; the VPN owner is a separate address). */
   accounts: { owner: string; operator: string; operator2: string; stranger: string };
+  /** NEAR-native contract view on the LLM registry (rejects on chains without contracts). */
   view<T>(method: string, args: object): Promise<T>;
-  /** Rejects with an Error whose message includes the contract panic code. */
+  /**
+   * Rejects with an Error whose message includes the contract panic code. On Zcash only the owner methods exist
+   * (`allow_compose`, …, `approve_operator {account_id: t-address, org_id}`): they post the owner record.
+   */
   call(signer: Signer, method: string, args: object, o?: { deposit?: string; gas?: string }): Promise<unknown>;
   approveBuild(variant: Variant): Promise<{ composeHash: string; osMeasurement: string }>;
   startRouter(variant: Variant, o?: RouterOptions): Promise<RouterHandle>;
@@ -181,7 +206,7 @@ export interface Stack {
   approveVpnBuild(build: VpnBuild): Promise<{ composeHash: string; osMeasurement: string }>;
   startExit(variant: VpnVariant, o?: ExitOptions): Promise<ExitHandle>;
   startDestination(): Promise<Destination>;
-  /** Owner → `approve_operator` on the VPN registry (re-approving changes the org). */
+  /** Owner → `approve_operator` on the VPN registry (re-approving changes the org). Same as `vpnAdmin.approveOperator`. */
   approveOperator(account: OperatorAccount, orgId: string): Promise<void>;
   /** Owner → `revoke_operator` on the VPN registry. */
   revokeOperator(account: OperatorAccount): Promise<void>;
@@ -201,7 +226,11 @@ export interface Stack {
 /** Extras for the dev tooling (stack-cli): not used by the tests. */
 export interface DevStack extends Stack {
   /** The fresh dev-chain key of a stack account (for out-of-process owner actions in the demo). */
-  exportSigner(signer: Signer): { accountId: string; secretKey: KeyPairString };
+  exportSigner(signer: Signer): { accountId: string; secretKey: string };
+  /** JSON of the owner key file for `stack-cli owner` (both registries' owners). */
+  ownerFile(): Record<string, unknown>;
+  /** Client env lines locating the registries (PLR_CHAIN / PLR_NEAR_RPC / PLR_ZCASH_* / PLR_REGISTRY / PLR_VPN_REGISTRY). */
+  clientEnvLines(): string[];
 }
 
 // ------------------------------------------------------------------------------------------------ paths & builds
@@ -210,11 +239,46 @@ export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", 
 const ENCLAVE_DIST = join(REPO_ROOT, "enclave", "dist");
 const HOST_CLI = join(ENCLAVE_DIST, "mock-tdx", "cli.js");
 const BUILD_INFO = join(ENCLAVE_DIST, "build-info.json");
-export const REGISTRY_WASM = join(REPO_ROOT, "contracts", "near", "target", "near", "plr_registry.wasm");
+const E2E_ROOT = join(REPO_ROOT, "e2e");
+
+/** Longest run root accepted: the host's socket paths (`<root>/<id>-host/<dir>/q.sock`) must stay under 104 bytes. */
+const MAX_RUN_ROOT_LEN = 56;
+let runRootCache: string | undefined;
+
+/**
+ * The directory holding every stack's run/host/log directories: `PLR_RUN_ROOT` if set (must be absolute), else the
+ * first writable of `<repo>/.run` and `<repo>/e2e/.run` (both git-ignored). Created 0700 on first use; throws when
+ * none is usable (fail closed, never silently elsewhere).
+ */
+export function runRoot(): string {
+  if (runRootCache !== undefined) return runRootCache;
+  const env = process.env.PLR_RUN_ROOT;
+  const candidates = env ? [env] : [join(REPO_ROOT, ".run"), join(E2E_ROOT, ".run")];
+  const errors: string[] = [];
+  for (const dir of candidates) {
+    if (!dir.startsWith("/")) { errors.push(`${dir}: not absolute`); continue; }
+    if (dir.length > MAX_RUN_ROOT_LEN) { errors.push(`${dir}: longer than ${MAX_RUN_ROOT_LEN} bytes (socket paths)`); continue; }
+    try {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      accessSync(dir, fsConstants.W_OK);
+      // Directory creation is what the stack needs; a sandbox may allow access(W_OK) yet deny mkdir.
+      const probe = join(dir, `.probe-${process.pid}-${nodeRandomBytes(4).toString("hex")}`);
+      mkdirSync(probe, { mode: 0o700 });
+      rmdirSyncQuiet(probe);
+      return (runRootCache = dir);
+    } catch (e) {
+      errors.push(`${dir}: ${(e as NodeJS.ErrnoException).code ?? String(e)}`);
+    }
+  }
+  throw new Error(`no writable run root (${errors.join("; ")})`);
+}
+
+function rmdirSyncQuiet(dir: string): void {
+  try { rmdirSync(dir); } catch { /* best effort: an empty probe dir */ }
+}
+
 const DEFAULT_LLAMA_MODEL = join(homedir(), "models", "qwen2.5-0.5b-instruct-q4_k_m.gguf");
 
-const NEAR = 10n ** 24n;
-const DEFAULT_GAS = 300_000_000_000_000n;
 const INSTANCE_TTL_MS = 86_400_000;
 
 interface BuildInfo {
@@ -287,26 +351,30 @@ const DEST_IDLE_MS = 60_000;
 
 /** The test builds' measured resolver URL is `http://127.0.0.1:18253/dns-query` (SPEC-VPN §2). */
 export const TEST_DOH_PORT = 18253;
-const OPERATORS: readonly OperatorAccount[] = ["operator", "operator2"];
+/** Bound on a registered instance becoming visible to the stack's reader (tier C: blocks + reader catch-up). */
+const REGISTERED_VISIBLE_TIMEOUT_MS = 120_000;
 
 export async function startStack(o: StackOptions): Promise<DevStack> {
   if (o.llm !== "mock" && o.llm !== "llama") throw new Error(`startStack: llm must be "mock" or "llama"`);
+  const chain: Chain = o.chain ?? "near";
+  if (!CHAINS.includes(chain)) throw new Error(`startStack: unknown chain: ${String(chain)}`);
+  if (chain !== "near" && chain !== "zcash") throw new Error(`startStack: no ${chain} chain driver in this build (near | zcash)`);
   const info = loadBuildInfo();
-  if (!existsSync(REGISTRY_WASM)) throw new Error(`registry wasm missing (${REGISTRY_WASM}); run: cd contracts/near && cargo near build non-reproducible-wasm --no-abi`);
   const llmFile = o.llm === "llama" ? (process.env.PLR_MODEL_PATH || DEFAULT_LLAMA_MODEL) : undefined;
   if (llmFile && !existsSync(llmFile)) throw new Error(`model not found: ${llmFile}`);
 
   const id = o.id ?? `e2e-${Date.now().toString(36)}-${nodeRandomBytes(3).toString("hex")}`;
   if (!RUN_ID_RE.test(id)) throw new Error("startStack: bad run id");
-  const runDir = join(REPO_ROOT, ".run", id);
-  const hostDir = join(REPO_ROOT, ".run", `${id}-host`);
+  const root = runRoot();
+  const runDir = join(root, id);
+  const hostDir = join(root, `${id}-host`);
   if (existsSync(runDir) || existsSync(hostDir)) throw new Error(`run directory already exists: ${runDir}`);
   await mkdir(runDir, { recursive: true, mode: 0o700 });
   await mkdir(hostDir, { recursive: true, mode: 0o700 });
 
   /** Teardown of everything started so far, registered the moment it starts (incl. launches in progress). */
   const teardowns = new Set<() => Promise<void>>();
-  let node: SandboxNode | null = null;
+  let node: ChainDriver | null = null;
   let stopping: Promise<void> | null = null;
   /**
    * Idempotent, bounded teardown: every router subtree, attack proxy and the chain are stopped in parallel,
@@ -332,75 +400,10 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
     teardowns.add(doh.close);
     const dns: StackDns = { set: doh.set, hits: doh.hits, setDown: doh.setDown };
 
-    node = await startSandbox({ homeDir: join(runDir, "near"), ...(o.rpcPort !== undefined ? { rpcPort: o.rpcPort } : {}) });
-    const rpcUrl = node.rpcUrl;
-    const provider = new JsonRpcProvider({ url: rpcUrl });
-    const rootAcct = new Account(node.rootAccountId, provider, KeyPairSigner.fromSecretKey(node.rootKey));
-
-    // Accounts: registry + vpnregistry (contracts), owner, operator, operator2, stranger — each with its own fresh key.
-    const names = {
-      registry: `registry.${node.rootAccountId}`,
-      vpnregistry: `vpnregistry.${node.rootAccountId}`,
-      owner: `owner.${node.rootAccountId}`,
-      operator: `operator.${node.rootAccountId}`,
-      operator2: `operator2.${node.rootAccountId}`,
-      stranger: `stranger.${node.rootAccountId}`,
-    };
-    type Role = keyof typeof names;
-    const keys = new Map<string, KeyPair>();
-    for (const [role, accountId] of Object.entries(names)) {
-      const kp = KeyPair.fromRandom("ed25519");
-      keys.set(role, kp);
-      const isContract = role === "registry" || role === "vpnregistry";
-      await rootAcct.createAccount({ newAccountId: accountId, publicKey: kp.getPublicKey().toString(), nearToTransfer: (isContract ? 50n : 100n) * NEAR });
-    }
-    const acct = (role: Role) => new Account(names[role], provider, KeyPairSigner.fromSecretKey(keys.get(role)!.toString() as KeyPairString));
-    const signers: Record<Signer, Account> = { owner: acct("owner"), operator: acct("operator"), operator2: acct("operator2"), stranger: acct("stranger") };
-    const contractId = names.registry;
-    const vpnContractId = names.vpnregistry;
-
-    // Both registries: the same wasm, owner and MOCK root; independent allowlists, instances and anchors.
-    const wasm = new Uint8Array(readFileSync(REGISTRY_WASM));
-    for (const role of ["registry", "vpnregistry"] as const) {
-      const a = acct(role);
-      await a.deployContract(wasm);
-      await a.callFunction({
-        contractId: names[role],
-        methodName: "new",
-        args: { owner_id: names.owner, root_kind: "MOCK", root_p256: toHex(trustedRoot), instance_ttl_ms: INSTANCE_TTL_MS },
-        gas: DEFAULT_GAS,
-      });
-    }
-
-    const registry = new NearRegistry({ rpcUrl, contractId });
-    const vpnRegistry = new NearRegistry({ rpcUrl, contractId: vpnContractId });
-
-    const view = async <T>(method: string, args: object): Promise<T> => {
-      const raw = await provider.callFunctionRaw({ contractId, method, args: args as Record<string, unknown>, blockQuery: { finality: "optimistic" } });
-      const bytes = new Uint8Array(raw.result);
-      if (bytes.length === 0) return undefined as T;
-      return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as T;
-    };
-
-    const callOn = (target: string) => async (signer: Signer, method: string, args: object, co: { deposit?: string; gas?: string } = {}): Promise<unknown> => {
-      const a = signers[signer];
-      if (!a) throw new Error(`unknown signer: ${String(signer)}`);
-      const amount = (v: string | undefined, def: bigint, what: string): bigint => {
-        if (v === undefined) return def;
-        if (!/^[0-9]{1,40}$/.test(v)) throw new Error(`call: bad ${what}`);
-        return BigInt(v);
-      };
-      try {
-        return await a.callFunction({ contractId: target, methodName: method, args: args as Record<string, unknown>, gas: amount(co.gas, DEFAULT_GAS, "gas"), deposit: amount(co.deposit, 0n, "deposit") });
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        const err = new Error(`${method} failed: ${msg}`);
-        (err as Error & { cause?: unknown }).cause = e;
-        throw err;
-      }
-    };
-    const call = callOn(contractId);
-    const callVpn = callOn(vpnContractId);
+    const driverOpts = { dir: runDir, trustedRoot, instanceTtlMs: INSTANCE_TTL_MS, ...(o.rpcPort !== undefined ? { rpcPort: o.rpcPort } : {}) };
+    node = chain === "zcash" ? await startZcashDriver(driverOpts) : await startNearDriver(driverOpts);
+    const d: ChainDriver = node;
+    const { rpcUrl, contractId, vpnContractId, registry, vpnRegistry, admin, vpnAdmin, view, call, callVpn } = d;
 
     const composePathOf = (build: "honest" | "evil-logger") => join(ENCLAVE_DIST, info.variants[build].compose[o.llm].file);
 
@@ -421,8 +424,8 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
 
     const approveBuild = async (variant: Variant) => {
       const m = await measure(variant);
-      await call("owner", "allow_compose", { hash: m.composeHash });
-      await call("owner", "allow_os", { hash: m.osMeasurement });
+      await admin.allowCompose(m.composeHash);
+      await admin.allowOs(m.osMeasurement);
       return { composeHash: m.composeHash, osMeasurement: m.osMeasurement };
     };
 
@@ -447,8 +450,8 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
       register: boolean;
       /** The account that registers the instance(s) (default "operator"). */
       operator?: OperatorAccount;
-      /** The registry variable(s) (`PLR_REGISTRY` / `PLR_VPN_REGISTRY`) → contract id. */
-      registryEnv: Record<string, string>;
+      /** The registries the TD's services register on (router → llm, exit → vpn). */
+      registries: readonly RegistryName[];
       listenTimeoutMs: number;
     }
     interface ServiceInfo {
@@ -470,16 +473,8 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
         PLR_MOCK_ROOT_SECRET_FILE: rootSecretFile,
         PLR_ANCHOR_INTERVAL_MS: String(o.anchorIntervalMs ?? 1000),
       };
-      if (l.register) {
-        // A dedicated full-access key per TD on the operator account: no nonce races between TDs or with the
-        // harness's own operator calls (a combo's two services share it; near-api-js retries InvalidNonce).
-        // Function-call keys cannot attach the storage deposit. PLR_OPERATOR_ID is the account the enclave binds
-        // into its registration quote (SPEC §5 rev 1.3): only that account can submit it.
-        const op = l.operator ?? "operator";
-        const instanceKey = KeyPair.fromRandom("ed25519");
-        await signers[op].addFullAccessKey(instanceKey.getPublicKey().toString());
-        Object.assign(env, { PLR_NEAR_RPC: rpcUrl, ...l.registryEnv, PLR_OPERATOR_ID: names[op], PLR_OPERATOR_KEY: instanceKey.toString() });
-      }
+      // The operator's credentials for the stack's chain (NEAR: a fresh full-access key per TD, see chains/near.ts).
+      if (l.register) Object.assign(env, await d.instanceEnv(l.operator ?? "operator", l.registries));
       const proc: ManagedProcess = startManaged({
         name: `${l.services.join("+")}:${l.label}`,
         cmd: process.execPath,
@@ -488,8 +483,8 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
         cwd: hostDir,
         ...(o.onRouterOutput ? { onOutput: (s: string) => o.onRouterOutput!(l.label, s) } : {}),
       });
-      // Bounded and idempotent (group SIGTERM → ≤ 10 s → group SIGKILL). The per-instance access key is left on
-      // the throw-away chain: deleting it would put an RPC round-trip on every shutdown path.
+      // Bounded and idempotent (group SIGTERM → ≤ 10 s → group SIGKILL). Per-instance credentials are left on
+      // the throw-away chain: deleting them would put an RPC round-trip on every shutdown path.
       let stopped: Promise<void> | null = null;
       const stopProc = (): Promise<void> =>
         (stopped ??= proc.stop().then(() => {
@@ -524,14 +519,23 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
               return undefined;
             }
           }, 30_000, 200);
+          const keyHash = m[2]!;
           if (l.register) {
             // Registration may legitimately fail (unapproved or debug builds): the instance keeps serving.
-            await waitFor(`${what} registration outcome`, () => {
+            const outcome = await waitFor(`${what} registration outcome`, () => {
               if (proc.exited) throw new Error(`${l.what} exited`);
-              return REG_RE[service].exec(proc.output()) ? true : undefined;
+              return REG_RE[service].exec(proc.output()) ?? undefined;
             }, 120_000, 100);
+            if (outcome[1]!.startsWith("registered")) {
+              // SPEC-CHAINS §6: resolve only once the stack's reader of that registry sees the instance.
+              const reader = service === "router" ? registry : vpnRegistry;
+              await waitFor(`${what} registration visible to the reader (operator approved on that registry?)`, async () => {
+                if (proc.exited) throw new Error(`${l.what} exited`);
+                return (await reader.getInstance(keyHash).catch(() => null)) !== null ? true : undefined;
+              }, REGISTERED_VISIBLE_TIMEOUT_MS, 250);
+            }
           }
-          return { url, keyHash: m[2]!, composeHash: m[3]! };
+          return { url, keyHash, composeHash: m[3]! };
         };
         const infos = await Promise.all(l.services.map(waitService));
         const services: Partial<Record<Service, ServiceInfo>> = {};
@@ -565,7 +569,7 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
           ...(process.env.PLR_LLAMA_SERVER ? ["--llama-server", process.env.PLR_LLAMA_SERVER] : []),
         ],
         register: ro.register !== false,
-        registryEnv: { PLR_REGISTRY: contractId },
+        registries: ["llm"],
         listenTimeoutMs: o.llm === "llama" ? 300_000 : 60_000,
       });
       return single(td, "router");
@@ -610,8 +614,8 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
       if (!(VPN_BUILDS as readonly string[]).includes(build)) throw new Error(`unknown VPN build: ${String(build)}`);
       // Measured exactly like the host's VPN launch path (same `measureVpnBoot`).
       const m = await measureVpnBoot({ composePath: vpnComposePathOf(build), root, debug: false, runtimeCache });
-      await callVpn("owner", "allow_compose", { hash: m.composeHash });
-      await callVpn("owner", "allow_os", { hash: m.osMeasurement });
+      await vpnAdmin.allowCompose(m.composeHash);
+      await vpnAdmin.allowOs(m.osMeasurement);
       return { composeHash: m.composeHash, osMeasurement: m.osMeasurement };
     };
 
@@ -623,7 +627,7 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
         hostArgs: ["--compose", vpnComposePathOf(build), "--run-dir", hostDir, "--exit-port", String(xo.port ?? 0)],
         register: xo.register !== false,
         operator: xo.operator ?? "operator",
-        registryEnv: { PLR_VPN_REGISTRY: vpnContractId },
+        registries: ["vpn"],
         listenTimeoutMs: 60_000,
       }), "vpn");
 
@@ -671,12 +675,12 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
       });
       // Approval is per registry (SPEC-COMBO §3): the LLM registry approves the router role, the VPN one the exit.
       if (onLlm) {
-        await call("owner", "allow_compose", { hash: m.composeHash });
-        await call("owner", "allow_os", { hash: m.osMeasurement });
+        await admin.allowCompose(m.composeHash);
+        await admin.allowOs(m.osMeasurement);
       }
       if (onVpn) {
-        await callVpn("owner", "allow_compose", { hash: m.composeHash });
-        await callVpn("owner", "allow_os", { hash: m.osMeasurement });
+        await vpnAdmin.allowCompose(m.composeHash);
+        await vpnAdmin.allowOs(m.osMeasurement);
       }
       return { composeHash: m.composeHash, osMeasurement: m.osMeasurement };
     };
@@ -703,7 +707,7 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
         register: co.register !== false,
         operator: co.operator ?? "operator",
         // Each role on its own registry; the host hands each process only its own (SPEC-COMBO §2).
-        registryEnv: { PLR_REGISTRY: contractId, PLR_VPN_REGISTRY: vpnContractId },
+        registries: ["llm", "vpn"],
         listenTimeoutMs: o.llm === "llama" ? 300_000 : 60_000,
       });
       const r = td.services.router!;
@@ -742,24 +746,20 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
       return { ...d, close };
     };
 
-    const operatorId = (account: OperatorAccount): string => {
-      if (!OPERATORS.includes(account)) throw new Error(`unknown operator account: ${String(account)}`);
-      return names[account];
-    };
-    const approveOperator = async (account: OperatorAccount, orgId: string): Promise<void> => {
-      await callVpn("owner", "approve_operator", { account_id: operatorId(account), org_id: orgId });
-    };
-    const revokeOperator = async (account: OperatorAccount): Promise<void> => {
-      await callVpn("owner", "revoke_operator", { account_id: operatorId(account) });
-    };
+    const approveOperator = (account: OperatorAccount, orgId: string): Promise<void> => vpnAdmin.approveOperator(account, orgId);
+    const revokeOperator = (account: OperatorAccount): Promise<void> => vpnAdmin.revokeOperator(account);
 
     return {
+      chain,
+      admin,
+      vpnAdmin,
+      asStranger: (a: ChainAdmin) => d.asStranger(a),
       rpcUrl,
       contractId,
       trustedRoot,
       registry,
       runDir,
-      accounts: { owner: names.owner, operator: names.operator, operator2: names.operator2, stranger: names.stranger },
+      accounts: d.accounts,
       view,
       call,
       approveBuild,
@@ -777,11 +777,9 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
       approveComboBuild,
       startCombo,
       stop,
-      exportSigner: (signer: Signer) => {
-        const kp = keys.get(signer);
-        if (!kp || !(signer in signers)) throw new Error(`unknown signer: ${String(signer)}`);
-        return { accountId: names[signer], secretKey: kp.toString() as KeyPairString };
-      },
+      exportSigner: (signer: Signer) => d.exportSigner(signer),
+      ownerFile: () => d.ownerFile(),
+      clientEnvLines: () => d.clientEnvLines(),
     };
   } catch (e) {
     await stop();

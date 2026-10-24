@@ -137,6 +137,8 @@ describe("TwoHopClient — honest hops", () => {
     const tracing: RegistryReader = {
       chain: reg.chain,
       contractId: reg.contractId,
+      verifiesOnChain: true, // tier A fixture (SPEC-CHAINS §2)
+      getRegistrationQuote: async () => null,
       getRoot: () => reg.getRoot(),
       isComposeAllowed: (h) => (calls.push("isComposeAllowed"), reg.isComposeAllowed(h)),
       isOsAllowed: (h) => (calls.push("isOsAllowed"), reg.isOsAllowed(h)),

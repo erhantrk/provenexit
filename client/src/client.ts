@@ -162,7 +162,7 @@ export class PrivateClient {
    * Checks that `receipt` (from a verified {@link ChatResult}) is included in an on-chain anchor: fetches the
    * router's proof (§6.4), then verifies it against `get_anchor` using the CHAIN's `first_seq`/`count`/`root`
    * (index = seq − first_seq, size = count); router values that disagree are rejected.
-   * @throws PlrError E_NOT_ANCHORED (not yet anchored — retry later), E_ANCHOR_MISMATCH, E_BAD_RESPONSE,
+   * @throws PlrError E_NOT_ANCHORED (not yet anchored — retry later), E_ANCHOR_MISMATCH, E_ANCHOR_SIG (tier B/C: bad or missing anchor signature, SPEC-CHAINS §2), E_BAD_RESPONSE,
    *         E_REGISTRY_UNAVAILABLE, E_BAD_INPUT
    */
   async verifyAnchored(receipt: Receipt): Promise<AnchoredReceipt> {
@@ -200,7 +200,7 @@ export class PrivateClient {
     } finally {
       deadline.clear();
     }
-    return verifyReceiptAnchored({ receipt, reply, registry: this.registry });
+    return verifyReceiptAnchored({ receipt, reply, registry: this.registry, signer: this.#attestation.verifiedKeys });
   }
 
   /** Forgets the cached verification; the next chat re-attests. */

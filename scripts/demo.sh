@@ -9,7 +9,9 @@
 #   entry that sees only the exit's address, and (only when online) https://example.com through two hops →
 #   combo (SPEC-COMBO): ONE TD runs the LLM, the router and the VPN exit (one measurement, two keys, two registries):
 #   both services verified, chat + tunnel, per-registry revocation, and the production combo's exit cannot reach
-#   the router's port.
+#   the router's port → Zcash (SPEC-CHAINS tier C, only when zebrad is installed): a second stack on a zebrad regtest
+#   node whose registries are signed OP_RETURN record logs; `plr verify` (tier C: the client checks the registration
+#   evidence itself), `plr chat`, and revocation / re-approval via owner records.
 # Everything it starts is stopped on exit (trap), whatever happens.
 #
 # Env: PLR_LLM=llama|mock (default llama), PLR_SKIP_BUILD=1, NO_COLOR=1,
@@ -446,15 +448,82 @@ info "the LLM needs the per-boot API key that only the router process receives; 
 printf '\n%s━━ shutdown%s\n' "$B$C" "$X"
 stop_stack                       # stop file → bounded teardown; waits for the stack process
 wait                             # (no other background jobs remain)
+NEAR_LOG_DIR="$PLR_STACK_LOG_DIR"; NEAR_STACK_LOG="$STACK_LOG"
+
+# =========================================================================================== PLR-CHAINS: Zcash
+# A second stack (the first one is stopped: one DoH resolver per machine) on zebrad regtest. The cleanup trap
+# follows the reassigned ENV_FILE / STOP_FILE / STACK_PID.
+ZEBRAD_BIN="${ZEBRAD_BIN:-$(command -v zebrad || true)}"
+[[ -n "$ZEBRAD_BIN" || ! -x "$HOME/.cargo/bin/zebrad" ]] || ZEBRAD_BIN="$HOME/.cargo/bin/zebrad"
+ZCASH_RAN=0
+if [[ -z "$ZEBRAD_BIN" || ! -x "$ZEBRAD_BIN" ]]; then
+  step "Zcash (SPEC-CHAINS tier C): skipped — zebrad is not installed (cargo install zebrad)"
+else
+  export ZEBRAD_BIN
+  ZCASH_RAN=1
+  ZC_ID="$ID-zcash"
+  ENV_FILE="$RUN/$ZC_ID.env"; STACK_LOG="$RUN/$ZC_ID.log"; STOP_FILE="$RUN/$ZC_ID.stop"
+  step "Zcash: zebrad regtest — the registries are OP_RETURN record logs of two owner t-addresses (no contracts)"
+  info "$("$ZEBRAD_BIN" --version 2>/dev/null | head -1) · owner and operator records are v5 transparent txs signed by their t-address (ZIP-244, ZIP-317)"
+  : >"$STACK_LOG"
+  rm -f "$STOP_FILE"
+  node e2e/dist/stack-cli.js up --chain zcash --llm "$LLM" --id "$ZC_ID" \
+    --env-out "$ENV_FILE" --stop-file "$STOP_FILE" --parent-pid "$$" </dev/null >"$STACK_LOG" 2>&1 &
+  STACK_PID=$!
+  STACK_STARTED=1
+  SHOWN=0
+  for _ in $(seq 1 1200); do
+    TOTAL=$(wc -l <"$STACK_LOG" | tr -d ' ')
+    if [[ $TOTAL -gt $SHOWN ]]; then sed -n "$((SHOWN + 1)),${TOTAL}p" "$STACK_LOG" | show; SHOWN=$TOTAL; fi
+    [[ -f "$ENV_FILE" ]] && break
+    grep -q "stack-cli: \(start failed\|stopped\)" "$STACK_LOG" && break
+    [[ -n "$(jobs -r)" ]] || break
+    sleep 0.5
+  done
+  if [[ ! -f "$ENV_FILE" ]]; then
+    sed -n "$((SHOWN + 1)),\$p" "$STACK_LOG" | show; bad "Zcash stack failed to start (log: $STACK_LOG)"
+  else
+    unset PLR_NEAR_RPC
+    set -a; . "$ENV_FILE"; set +a
+    unset PLR_VPN_ENTRY_URL
+    ok "Zcash stack ready: router $PLR_ROUTER_URL · registry $PLR_REGISTRY @ $PLR_ZCASH_RPC"
+
+    step "Zcash: plr verify — tier C, so the client also checks the registration evidence (SPEC-CHAINS §2)"
+    run "PLR_CHAIN=zcash plr verify"
+    if plr verify 2>&1 | show; then ok "router verified against the Zcash record log"; else bad "honest router failed verification on Zcash"; fi
+
+    step "Zcash: plr chat through the router registered on Zcash"
+    run "plr chat \"$QUESTION\""
+    if plr chat "$QUESTION" 2>&1 | show; then ok "answer received; receipt signature verified"; else bad "chat failed on Zcash"; fi
+
+    step "Zcash: revocation is an owner record (revoke_compose OP_RETURN); re-approval is another"
+    run "owner revoke_compose $PLR_COMPOSE_HASH   # signed by the owner t-address, waits until mined"
+    owner revoke_compose "{\"hash\":\"$PLR_COMPOSE_HASH\"}" 2>&1 | show
+    run "plr chat \"$QUESTION\""
+    expect_refusal E_COMPOSE_NOT_ALLOWED node "$ROOT/client/dist/cli.js" chat "$QUESTION"
+    run "owner allow_compose $PLR_COMPOSE_HASH"
+    owner allow_compose "{\"hash\":\"$PLR_COMPOSE_HASH\"}" 2>&1 | show
+    run "plr chat \"Say hello in three words.\""
+    if plr chat "Say hello in three words." 2>&1 | show; then ok "service restored by the re-approval record"; else bad "chat failed after re-approval on Zcash"; fi
+  fi
+  printf '\n%s━━ Zcash shutdown%s\n' "$B$C" "$X"
+  stop_stack
+  wait
+  ZC_LOG_DIR="${PLR_STACK_LOG_DIR:-}"
+fi
 
 # ------------------------------------------------------------------------------------------- summary
 printf '\n'
 if [[ $FAILURES -eq 0 ]]; then
-  rm -rf "$PLR_STACK_LOG_DIR" "$STACK_LOG"   # kept only when something failed
+  rm -rf "$NEAR_LOG_DIR" "$NEAR_STACK_LOG"   # kept only when something failed
+  if [[ $ZCASH_RAN == 1 ]]; then rm -rf "$STACK_LOG" ${ZC_LOG_DIR:+"$ZC_LOG_DIR"}; fi
   printf '%s━━ DEMO PASSED: honest router served privately; evil build, MITM and revoked build were all refused before any prompt left the client.%s\n' "$B$G" "$X"
   printf '%s━━ VPN PASSED: attested exit tunnelled end-to-end with no logs; evil exit, MITM, revoked build and forbidden targets were all refused before any byte reached a destination.%s\n' "$B$G" "$X"
   printf '%s━━ DNS + TWO-HOP PASSED: names resolved only over DoH inside the exit (resolver down ⇒ E_DNS, no fallback); two hops of different organizations verified and chained, same organization refused, a logging entry saw only the exit.%s\n' "$B$G" "$X"
   printf '%s━━ COMBO PASSED: one TD served the attested router and the attested exit (same measurement, own keys, own registries); revoking one role left the other serving; the production exit could not reach the router.%s\n' "$B$G" "$X"
+  if [[ $ZCASH_RAN == 1 ]]; then
+    printf '%s━━ ZCASH PASSED: a router registered in a Zcash OP_RETURN record log verified (tier C: registration evidence checked by the client), served a private chat, and was refused after the owner revocation record.%s\n' "$B$G" "$X"
+  fi
 else
   printf '%s━━ DEMO FAILED: %d check(s) failed (stack log: %s)%s\n' "$B$R" "$FAILURES" "$STACK_LOG" "$X"
   exit 1

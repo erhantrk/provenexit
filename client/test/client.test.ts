@@ -171,6 +171,8 @@ describe("PrivateClient — verification failures send nothing", () => {
     const broken: RegistryReader = {
       chain: "near",
       contractId: "reg.test",
+      verifiesOnChain: true, // tier A fixture (SPEC-CHAINS §2)
+      getRegistrationQuote: async () => null,
       getRoot: () => r0.registry.getRoot(),
       isComposeAllowed: () => Promise.reject(new Error("rpc down")),
       isOsAllowed: () => r0.registry.isOsAllowed(r0.osHash),

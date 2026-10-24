@@ -6,12 +6,20 @@
  * is taken FROM THE CHAIN (`get_anchor(anchor_id)`), never from the router: `index = receipt.seq -
  * anchor.first_seq`, `size = anchor.count`. Router-supplied values must agree with the chain, else the proof
  * is rejected (E_ANCHOR_MISMATCH). The anchor must belong to the receipt's instance (`key_hash`).
+ *
+ * SPEC-CHAINS §2: on registries that do not verify anchors on-chain (`verifiesOnChain !== true`, tier B/C) the
+ * anchor's stored `sig` must be a valid Ed25519 signature by the instance's attested key over SPEC §7
+ * `anchorMessage` (with the registry's `contractId`), else E_ANCHOR_SIG.
  */
+import { createPublicKey, verify as cryptoVerify } from "node:crypto";
 import {
   MAX_PROOF_LEN,
   PlrError,
+  anchorMessage,
   fromHex,
   isHex,
+  keyHash,
+  toHex,
   isReceipt,
   isVpnReceipt,
   receiptLeaf,
@@ -73,6 +81,78 @@ export function parseProofReply(j: unknown): ProofReply {
   };
 }
 
+/** The instance keys a caller already verified (attestation), used to check anchor signatures without a lookup. */
+export interface AnchorSignerHint {
+  x25519: Uint8Array;
+  ed25519: Uint8Array;
+}
+
+/** Ed25519 verification of a raw 32-byte public key (node:crypto). False on any malformed input. */
+export function ed25519Verify(pub: Uint8Array, msg: Uint8Array, sig: Uint8Array): boolean {
+  try {
+    if (pub.length !== 32 || sig.length !== 64) return false;
+    const key = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: Buffer.from(pub).toString("base64url") }, format: "jwk" });
+    return cryptoVerify(null, msg, key, sig);
+  } catch {
+    return false;
+  }
+}
+
+/** True unless the registry explicitly says it verified anchors on-chain (fail closed on a throwing getter). */
+function verifiesOnChain(registry: RegistryReader): boolean {
+  try {
+    return registry.verifiesOnChain === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * SPEC-CHAINS §2: the anchor's `sig` verifies under the Ed25519 key of instance `anchor.key_hash` over
+ * `anchorMessage(contractId, key_hash, root, first_seq, count)`. The key is the caller's verified one when its key
+ * hash matches, else the registry's instance record (whose keys must hash to `key_hash`).
+ * @throws PlrError E_ANCHOR_SIG, E_REGISTRY_UNAVAILABLE
+ */
+export async function verifyAnchorSig(registry: RegistryReader, anchor: AnchorRecord, hint?: AnchorSignerHint): Promise<void> {
+  const bad = (why: string): never => {
+    throw new PlrError("E_ANCHOR_SIG", why);
+  };
+  if (!isHex(anchor.sig, 64)) bad("anchor carries no signature");
+  if (!isHex(anchor.key_hash, 32) || !isHex(anchor.root, 32)) bad("anchor shape");
+  let ed: Uint8Array | undefined;
+  try {
+    if (hint !== undefined && toHex(keyHash(hint.x25519, hint.ed25519)) === anchor.key_hash) ed = hint.ed25519.slice();
+  } catch {
+    ed = undefined;
+  }
+  if (ed === undefined) {
+    let inst;
+    try {
+      inst = await registry.getInstance(anchor.key_hash);
+    } catch {
+      throw new PlrError("E_REGISTRY_UNAVAILABLE", "get_instance");
+    }
+    if (inst === null || !isHex(inst.x25519, 32) || !isHex(inst.ed25519, 32)) return bad("anchor signer unknown");
+    const x = fromHex(inst.x25519, 32);
+    const e = fromHex(inst.ed25519, 32);
+    if (toHex(keyHash(x, e)) !== anchor.key_hash) bad("instance keys do not match the anchor");
+    ed = e;
+  }
+  let msg: Uint8Array;
+  try {
+    msg = anchorMessage({
+      contractId: registry.contractId,
+      keyHash: fromHex(anchor.key_hash, 32),
+      root: fromHex(anchor.root, 32),
+      firstSeq: BigInt(anchor.first_seq),
+      count: BigInt(anchor.count),
+    });
+  } catch {
+    return bad("anchor message");
+  }
+  if (!ed25519Verify(ed, msg, fromHex(anchor.sig as string, 64))) bad("bad anchor signature");
+}
+
 async function chainAnchor(registry: RegistryReader, id: number): Promise<AnchorRecord | null> {
   try {
     return await registry.getAnchor(id);
@@ -86,22 +166,29 @@ async function chainAnchor(registry: RegistryReader, id: number): Promise<Anchor
  * @throws PlrError E_BAD_INPUT (receipt), E_BAD_RESPONSE (reply shape), E_NOT_ANCHORED (no such anchor),
  *         E_REGISTRY_UNAVAILABLE, E_ANCHOR_MISMATCH (any disagreement or a failing proof)
  */
-export async function verifyReceiptAnchored(p: { receipt: Receipt; reply: unknown; registry: RegistryReader }): Promise<AnchoredReceipt> {
+export async function verifyReceiptAnchored(p: { receipt: Receipt; reply: unknown; registry: RegistryReader; signer?: AnchorSignerHint }): Promise<AnchoredReceipt> {
   if (!isReceipt(p.receipt)) throw new PlrError("E_BAD_INPUT", "malformed receipt");
-  return verifyLeafAnchored({ seq: p.receipt.seq, keyHash: p.receipt.key_hash, leaf: receiptLeaf(p.receipt), reply: p.reply, registry: p.registry });
+  return verifyLeafAnchored({ seq: p.receipt.seq, keyHash: p.receipt.key_hash, leaf: receiptLeaf(p.receipt), reply: p.reply, registry: p.registry, signer: p.signer });
 }
 
 /**
  * Same as {@link verifyReceiptAnchored} for a PLR-VPN-v1 session receipt (SPEC-VPN §5, leaf = `vpnReceiptLeaf`),
  * against the VPN registry.
  */
-export async function verifyVpnReceiptAnchored(p: { receipt: VpnReceipt; reply: unknown; registry: RegistryReader }): Promise<AnchoredReceipt> {
+export async function verifyVpnReceiptAnchored(p: { receipt: VpnReceipt; reply: unknown; registry: RegistryReader; signer?: AnchorSignerHint }): Promise<AnchoredReceipt> {
   if (!isVpnReceipt(p.receipt)) throw new PlrError("E_BAD_INPUT", "malformed receipt");
-  return verifyLeafAnchored({ seq: p.receipt.seq, keyHash: p.receipt.key_hash, leaf: vpnReceiptLeaf(p.receipt), reply: p.reply, registry: p.registry });
+  return verifyLeafAnchored({ seq: p.receipt.seq, keyHash: p.receipt.key_hash, leaf: vpnReceiptLeaf(p.receipt), reply: p.reply, registry: p.registry, signer: p.signer });
 }
 
 /** Core check for any receipt kind: the leaf at chain-derived position `seq − first_seq` of the chain's root. */
-async function verifyLeafAnchored(p: { seq: number; keyHash: string; leaf: Uint8Array; reply: unknown; registry: RegistryReader }): Promise<AnchoredReceipt> {
+async function verifyLeafAnchored(p: {
+  seq: number;
+  keyHash: string;
+  leaf: Uint8Array;
+  reply: unknown;
+  registry: RegistryReader;
+  signer: AnchorSignerHint | undefined;
+}): Promise<AnchoredReceipt> {
   const reply = parseProofReply(p.reply);
   const anchor = await chainAnchor(p.registry, reply.anchor_id);
   if (anchor === null) throw new PlrError("E_NOT_ANCHORED", "anchor not on chain");
@@ -111,6 +198,8 @@ async function verifyLeafAnchored(p: { seq: number; keyHash: string; leaf: Uint8
   if (anchor.id !== reply.anchor_id) mismatch("anchor id");
   if (anchor.key_hash !== p.keyHash) mismatch("anchor belongs to another instance");
   if (!isUint(anchor.first_seq) || !isUint(anchor.count) || anchor.count < 1) mismatch("on-chain anchor shape");
+  // SPEC-CHAINS §2: tier B/C chains do not check who anchored what; the instance's signature does.
+  if (!verifiesOnChain(p.registry)) await verifyAnchorSig(p.registry, anchor, p.signer);
   const seq = p.seq;
   // Chain-derived position. `seq - first_seq` is only meaningful if seq lies inside the anchored range.
   if (seq < anchor.first_seq || seq - anchor.first_seq >= anchor.count) mismatch("receipt seq outside the anchored batch");

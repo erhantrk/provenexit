@@ -81,6 +81,13 @@ directory for the secret prompt.
   only talks to the registry over `https:`, or plain `http:` to a loopback address (a local node or light
   client); `PLR_NEAR_RPC=http://<remote>` is refused. Pick an RPC provider you trust (or run a node / a light
   client locally); a quorum of independent RPCs or light-client proofs is future work.
+- **Zcash registry (tier C, `SPEC-CHAINS.md`).** `PLR_CHAIN=zcash` makes the client read the registry from a
+  Zebra node (`PLR_ZCASH_RPC`, same https/loopback rule; `PLR_ZCASH_NETWORK`, `PLR_ZCASH_OWNER` or
+  `PLR_REGISTRY=zcash:<network>:<owner>`, `PLR_ZCASH_START_HEIGHT`). Zcash checks nothing beyond tx signatures,
+  so the client also verifies the registration quote (same boot, bound to registry + operator) and each anchor's
+  Ed25519 signature itself; `plr verify` prints the tier and this extra check. The node is trusted like the NEAR
+  RPC (no SPV proofs). Expiry is decided in chain time; the reader rebases block times to the local clock (Zebra
+  regtest blocks carry 2011 timestamps).
 
 ---
 
@@ -576,15 +583,84 @@ The mock is built to the real formats, so the swap is two components, not a rede
   quote (PCK chain + QE report) is out of scope for milestone 1: with an INTEL root `register_instance` fails
   closed (`E_QUOTE_SIG`); production would verify via a DCAP-verifier contract or an attested relayer.
 
-## Other chains (EVM adapter)
+## Multi-chain registries (SPEC-CHAINS)
 
 The client depends only on the chain-agnostic `RegistryReader` interface (`getRoot`, `isComposeAllowed`,
-`isOsAllowed`, `getInstance`, `getAnchor`, SPEC §10). The registry semantics (SPEC §7) were chosen so every
-chain can implement them natively: SHA-256 everywhere (not keccak), P-256 signatures (EVM: the RIP-7212
-`P256VERIFY` precompile), Ed25519 anchor signatures. An EVM port is a Solidity contract with the same methods and
-error codes plus an `EvmRegistry implements RegistryReader` (e.g. `eth_call` views); `PrivateClient`, the CLI
-and the proxy take any `RegistryReader` unchanged. The router side needs the matching writer for
-`register_instance` / `anchor_receipts` (today `enclave/src/near.ts`).
+`isOsAllowed`, `getInstance`, `getAnchor`, SPEC §10), so the registry (SPEC §7) can live on any chain. Chains
+differ in **what they can check on-chain**, which `SPEC-CHAINS.md` §1 sorts into tiers:
+
+| tier | chains | the chain enforces | the client additionally verifies |
+|---|---|---|---|
+| A | NEAR | full registration-quote verification (SPEC §7), owner policy, operator orgs, Ed25519-checked anchors | — |
+| B | EVM / Monad, Stellar, Solana | owner policy, operator orgs, registration only by owner-approved operators (`operator` = tx signer), the registration quote stored on-chain, contiguous anchors by the instance's operator | the stored registration quote + each anchor's Ed25519 signature |
+| C | **Zcash** (no contracts) | only ordering + authenticity of signed `OP_RETURN` records | everything of tier B, from records it parses itself; the quote is SHA-256-committed on-chain and served by the instance |
+
+**The rev 1.4 client rule (registration evidence, SPEC §9 step 9b).** Every reader says `verifiesOnChain` (true
+only on tier A). When it is false, after step 9 the client fetches the registration quote
+(`getRegistrationQuote(key_hash, bundle.registration_quote)` — tier C returns the instance-served quote only if
+its SHA-256 equals the on-chain commitment), verifies it against the same pinned root (DEBUG clear), checks
+`report_data == registrationReportData(x25519, ed25519, contractId, record.operator)` and that MRTD and RTMR0–3
+equal the session quote's (same TD boot, so the already-verified event log, compose hash and OS measurement
+apply). Anything missing or different ⇒ `E_REGISTRATION_EVIDENCE`. Anchors on tier B/C must also carry a valid
+Ed25519 signature by the attested key over `anchorMessage` (`E_ANCHOR_SIG`). Safety therefore never depends on
+the tier: a lower tier only moves checks from the chain to the client. Instance records count only from
+operators the owner approved on that registry (`approve_operator`, live), so strangers cannot front-run or spam
+registrations.
+
+**Zcash record log (SPEC-CHAINS §5).** The registry `zcash:<network>:<owner t-address>` is the sequence of
+confirmed transparent transactions whose inputs are all P2PKH-signed by one key and that carry exactly one
+`OP_RETURN` with `"PLR1" ‖ type ‖ body` (≤ 80 bytes): owner records (`allow_compose` / `revoke_compose` /
+`allow_os` / `revoke_os` / `set_root` / `approve_operator` / `revoke_operator` / `transfer_owner`) and operator
+records (`reg_keys`, `reg_measure`, `reg_os`, `reg_quote`, `anchor`, `anchor_sig`), ordered by (height, tx
+index). Readers (`client/src/zcash-registry.ts`, `ZcashLog` in `@plr/shared`) fold blocks from a Zebra node
+(`getblockcount`, `getblockhash`, raw `getblock <hash> 0` — bounded by the 2 MB consensus block size — and
+`getrawtransaction <txid> 0` for the coins record transactions spend) deterministically and never throw on chain
+data; routers and exits (`PLR_CHAIN=zcash`, `enclave/src/zcash.ts`) build and sign v5 transparent transactions
+themselves (ZIP-244 sighash, ZIP-317 fee, branch id from `getblockchaininfo`) and submit them with `sendrawtransaction`.
+
+Strict mode (SPEC-CHAINS §7 `strict`, used by every production reader and writer; found in review):
+- **Authorship needs the author's own coin.** Consensus runs the spent coin's script, so a `<sig> <pubkey>`
+  scriptSig alone proves nothing (a coin locked by `OP_2DROP OP_1` accepts any). A record counts only if every
+  input spends `P2PKH(hash160(pubkey))` with a SIGHASH_ALL signature; the reader fetches the prevouts and fails
+  the query (never skips) if it cannot.
+- **Anchor signatures are checked at fold time** (Ed25519 by the key's registered `ed25519` over `anchorMessage`)
+  and matched against every pending anchor of that operator and key, so a retried or reordered anchor can never
+  carry another batch's signature; the writer also never posts a new anchor while an earlier one of that key can
+  still be mined, and caps `anchor_sig` expiry at anchor height + 10.
+- **Registration selection is §5's** (earliest completed, operator currently approved). Approved operators are
+  owner-trusted: one that copies another's public registration records first becomes the recorded operator, and
+  clients then refuse the instance (`E_REGISTRATION_EVIDENCE`, the quote binds the real operator) — a denial of
+  service the owner ends by revoking it, never a hijack.
+- **Spam cannot block registrations.** Slots of authors that are not approved when their record lands share a
+  separate store capped at 10 000 (oldest evicted); approved operators are never limited by it.
+- **Catch-up is bounded in time** (`syncTimeoutMs`, CLI `PLR_ZCASH_SYNC_TIMEOUT_MS`, progress kept), not a fixed
+  block budget.
+
+**Run it on Zcash** (needs `zebrad` — `~/.cargo/bin/zebrad`, on `PATH`, or `ZEBRAD_BIN`; tested with 7.0.0):
+
+```sh
+PLR_CHAIN=zcash PLR_LLM=mock scripts/dev-up.sh     # zebrad regtest + both registries (two owner t-addresses)
+set -a; . .run/stack.env; set +a                    # PLR_CHAIN=zcash, PLR_ZCASH_RPC, PLR_ZCASH_NETWORK, PLR_REGISTRY=zcash:regtest:tm…
+node client/dist/cli.js verify                      # "tier: C — … this client checks the registration evidence"
+node e2e/dist/stack-cli.js owner revoke_compose '{"hash":"'$PLR_COMPOSE_HASH'"}'   # an owner OP_RETURN record
+scripts/dev-down.sh
+cd e2e && PLR_E2E_CHAINS=near,zcash npx vitest run test/chains.test.ts             # same conformance tests on both chains
+```
+
+The harness (`startStack({ chain: "zcash" })`, `e2e/src/chains/zcash.ts`) runs one ephemeral zebrad regtest node
+per stack with its state under `.run/<id>/zcash/`, mines 110 blocks to a fresh faucet key, gives owner, VPN owner,
+operator (twice), operator2 and stranger 40 coins each, keeps mining one block per second, and posts `set_root`
+for both registries. Owner actions go through `S.admin` / `S.vpnAdmin` (`ChainAdmin`) on every chain; the
+`demo.sh` Zcash section (only when zebrad is installed) shows verify, chat and revocation via records.
+
+**Limits.** The Zebra node is trusted like the NEAR RPC (no SPV / light-client proofs; https or loopback only).
+Records need a confirmation (≈ 1 s on the regtest stack, ~75 s on a public network): a revocation takes effect
+for clients once mined, and on public networks `minConfirmations` trades freshness for reorg safety. Every record
+costs a ZIP-317 fee (20 000 zats) and anchors take two transactions (`anchor`, then `anchor_sig`). Expiry runs on
+chain time (regtest blocks carry 2011 timestamps; readers rebase to the local clock). Only transparent
+(t-address) records are used — nothing here is shielded, and the log is public by design. Only `near` and
+`zcash` have writers and readers in this build; EVM / Stellar / Solana (tier B) are specified in SPEC-CHAINS but
+`PLR_CHAIN=evm|stellar|solana` is refused (fail closed).
 
 ---
 
@@ -601,7 +677,8 @@ and the proxy take any `RegistryReader` unchanged. The router side needs the mat
 | DoH resolver of the test builds | `127.0.0.1:18253` (`POST /dns-query`; measured in the test compose, so fixed; one stack per machine) |
 | client SOCKS5 (`plr vpn`) | `127.0.0.1:18180` (the demo also uses 18181–18183: production exit, two-hop, two-hop to production) |
 | near-sandbox RPC | `127.0.0.1:3030` (dev-up), ephemeral in tests and the demo; LLM registry `registry.<root>`, VPN registry `vpnregistry.<root>` |
-| run state | `.run/<id>/` (chain home under `near/`), host sockets in `.run/<id>-host/`; removed on stop (`PLR_KEEP_RUN=1` keeps them) |
+| zebrad regtest RPC (`PLR_CHAIN=zcash`) | `127.0.0.1:18232` (dev-up, `PLR_RPC_PORT` overrides), ephemeral in tests and the demo; registries `zcash:regtest:<owner>` / `zcash:regtest:<vpn owner>` |
+| run state | `.run/<id>/` (chain home under `near/` or `zcash/`), host sockets in `.run/<id>-host/`; removed on stop (`PLR_KEEP_RUN=1` keeps them). `.run` is `PLR_RUN_ROOT` if set, else `<repo>/.run`, else `<repo>/e2e/.run` when the repo root is not writable (e.g. a sandbox confined to the `e2e/` cwd) |
 
 The harness and the dev stack run every long-lived process under a "lifeline" that leads its own process
 group: stop = SIGTERM to the group, SIGKILL after 10 s; and if the controlling process dies in any way, the

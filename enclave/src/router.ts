@@ -23,6 +23,8 @@ export interface RouterOptions {
   composeBytes: Uint8Array;
   llm: LlmClient;
   receipts: ReceiptLog;
+  /** The registration quote once registered, served in `/v1/attestation` (SPEC-CHAINS §4). */
+  registrationQuote?: () => Uint8Array | null;
   log?: Logger;
   /** Concurrent /v1/private/chat requests (default 64). */
   maxInflight?: number;
@@ -173,7 +175,13 @@ export function createRouter(o: RouterOptions): http.Server {
     res.end(frameLine(seq, fin));
   }
 
-  const common = commonRoutes({ attester: o.attester, keys: o.keys, composeBytes, receipts: o.receipts });
+  const common = commonRoutes({
+    attester: o.attester,
+    keys: o.keys,
+    composeBytes,
+    receipts: o.receipts,
+    ...(o.registrationQuote ? { registrationQuote: o.registrationQuote } : {}),
+  });
   const routes: Record<string, RouteHandler> = {
     "/v1/attestation": common.attestation,
     "/v1/private/chat": chat,

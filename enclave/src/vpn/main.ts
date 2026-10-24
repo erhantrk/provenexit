@@ -1,6 +1,6 @@
 /**
  * VPN exit boot wiring (SPEC-VPN §2–§5): read the measured compose, generate keys in memory, self-check the
- * quote service against the compose, serve, then register + anchor on the VPN registry if NEAR is configured.
+ * quote service against the compose, serve, then register + anchor on the VPN registry if one is configured (`PLR_CHAIN`, SPEC-CHAINS §4).
  *
  * Destination names are resolved only through the compose's `policy.dns.doh` resolvers (SPEC-VPN §6.1): the DoH
  * lookup is the one resolver handed to the exit, and nothing here accepts another (no system-resolver path).
@@ -14,7 +14,8 @@ import { selfCheckQuote } from "../boot.js";
 import { readCompose, vpnPolicyOf } from "../compose.js";
 import { Logger, code, hex, url } from "../log.js";
 import { SocketAttester } from "../mock-tdx/attester.js";
-import { NearRegistryWriter } from "../near.js";
+import { createRegistryWriter } from "../chains.js";
+import type { RegistryWriter } from "../registry-writer.js";
 import type { ExitConfig } from "./config.js";
 import type { Dialer } from "./egress.js";
 import { createDohLookup } from "./doh.js";
@@ -48,7 +49,10 @@ export async function bootExit(
   await selfCheckQuote(attester, keys, composeHash);
 
   const receipts = new VpnReceiptLog();
-  const exit = createExit({ attester, keys, composeBytes, receipts, lookup, ...(o.dial ? { dial: o.dial } : {}) });
+  let anchorer: Anchorer | null = null;
+  let chain: RegistryWriter | null = null;
+  const registrationQuote = (): Uint8Array | null => anchorer?.registrationQuote ?? null;
+  const exit = createExit({ attester, keys, composeBytes, receipts, lookup, registrationQuote, ...(o.dial ? { dial: o.dial } : {}) });
   const server = exit.server;
   await new Promise<void>((ok, fail) => {
     server.once("error", fail);
@@ -62,17 +66,17 @@ export async function bootExit(
   const exitUrl = `http://${hostPart}:${addr.port}`;
   log.info("listening", { url: url(exitUrl), key_hash: hex(toHex(keys.keyHash)), compose_hash: hex(toHex(composeHash)) });
 
-  let anchorer: Anchorer | null = null;
   const close = (): Promise<void> =>
     new Promise<void>((ok) => {
       anchorer?.stop();
+      chain?.close?.();
       exit.destroyTunnels();
       server.close(() => ok());
       server.closeAllConnections();
     });
 
-  if (cfg.near) {
-    const chain = new NearRegistryWriter(cfg.near);
+  if (cfg.registry) {
+    chain = createRegistryWriter(cfg.registry);
     // The on-chain operator decides this exit's org_id (SPEC-VPN §10). The operator-bound registration quote (SPEC §5
     // rev 1.3) means only our own account can register our key; reading the operator back stays as defense in depth:
     // if the record names anyone else, two-hop clients would attribute us to that account's organization, so stop

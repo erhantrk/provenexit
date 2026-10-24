@@ -18,6 +18,11 @@ export interface CommonRoutesOptions {
   keys: EnclaveKeys;
   composeBytes: Uint8Array;
   receipts: LeafLog;
+  /**
+   * The instance's registration quote once registered (SPEC-CHAINS §4: served as `registration_quote`), else null.
+   * Called per request; a missing/throwing provider means "not registered".
+   */
+  registrationQuote?: () => Uint8Array | null;
 }
 
 export function commonRoutes(o: CommonRoutesOptions): {
@@ -28,6 +33,15 @@ export function commonRoutes(o: CommonRoutesOptions): {
   const composeText = new TextDecoder("utf-8", { fatal: true }).decode(o.composeBytes);
   const xpHex = toHex(o.keys.x25519);
   const epHex = toHex(o.keys.ed25519);
+
+  function registrationQuote(): Uint8Array | null {
+    try {
+      const q = o.registrationQuote?.() ?? null;
+      return q instanceof Uint8Array && q.length >= QUOTE.SIGNED_LEN && q.length <= MAX_QUOTE_BYTES ? q : null;
+    } catch {
+      return null;
+    }
+  }
 
   async function attestation(req: http.IncomingMessage, res: http.ServerResponse, query: URLSearchParams): Promise<void> {
     if (req.method !== "GET") throw new HttpError(405, "E_BAD_REQUEST");
@@ -47,7 +61,7 @@ export function commonRoutes(o: CommonRoutesOptions): {
       throw new HttpError(503, "E_UPSTREAM");
     }
     if (!equalBytes(quote.subarray(QUOTE.OFF.REPORT_DATA, QUOTE.OFF.REPORT_DATA + 64), rd)) throw new HttpError(503, "E_UPSTREAM");
-    sendJson(res, 200, {
+    const body: Record<string, unknown> = {
       v: "PLR-v1",
       root_kind: "MOCK",
       quote: toHex(quote),
@@ -55,7 +69,10 @@ export function commonRoutes(o: CommonRoutesOptions): {
       app_compose: composeText,
       x25519: xpHex,
       ed25519: epHex,
-    });
+    };
+    const rq = registrationQuote();
+    if (rq !== null) body.registration_quote = toHex(rq);
+    sendJson(res, 200, body);
   }
 
   function proof(req: http.IncomingMessage, res: http.ServerResponse, query: URLSearchParams): void {

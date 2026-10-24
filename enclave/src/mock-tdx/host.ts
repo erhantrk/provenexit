@@ -411,6 +411,13 @@ export const ROUTER_ENV_ALLOWLIST = [
   "PLR_ANCHOR_DEPOSIT",
   "PLR_ANCHOR_INTERVAL_MS",
   "PLR_ROUTER_HOST",
+  // SPEC-CHAINS §4/§5: registry chain selection and the Zcash registry
+  "PLR_CHAIN",
+  "PLR_ZCASH_RPC",
+  "PLR_ZCASH_NETWORK",
+  "PLR_ZCASH_OWNER",
+  "PLR_ZCASH_KEY",
+  "PLR_ZCASH_START_HEIGHT",
 ] as const;
 
 /**
@@ -428,6 +435,14 @@ export const EXIT_ENV_ALLOWLIST = [
   "PLR_ANCHOR_INTERVAL_MS",
   "PLR_VPN_HOST",
   "PLR_VPN_PORT",
+  // SPEC-CHAINS §4/§5: registry chain selection and the Zcash VPN registry (PLR_ZCASH_VPN_OWNER, else PLR_ZCASH_OWNER)
+  "PLR_CHAIN",
+  "PLR_ZCASH_RPC",
+  "PLR_ZCASH_NETWORK",
+  "PLR_ZCASH_OWNER",
+  "PLR_ZCASH_VPN_OWNER",
+  "PLR_ZCASH_KEY",
+  "PLR_ZCASH_START_HEIGHT",
 ] as const;
 
 export function freePort(): Promise<number> {
@@ -882,9 +897,10 @@ export const COMBO_ROUTER_ENV_ALLOWLIST = ROUTER_ENV_ALLOWLIST;
 
 /**
  * Exit env keys the host forwards in a combo: the VPN registry settings and listen host/port. Unlike a lone exit,
- * there is no PLR_REGISTRY fallback — that is the LLM registry here, and the exit must never register on it.
+ * there is no PLR_REGISTRY (or PLR_ZCASH_OWNER) fallback — that is the LLM registry here, and the exit must never
+ * register on it (it uses PLR_VPN_REGISTRY / PLR_ZCASH_VPN_OWNER).
  */
-export const COMBO_EXIT_ENV_ALLOWLIST = EXIT_ENV_ALLOWLIST.filter((k) => k !== "PLR_REGISTRY");
+export const COMBO_EXIT_ENV_ALLOWLIST = EXIT_ENV_ALLOWLIST.filter((k) => k !== "PLR_REGISTRY" && k !== "PLR_ZCASH_OWNER");
 
 /** What the host gives each process of a combo TD. */
 export interface ComboEnvInputs {

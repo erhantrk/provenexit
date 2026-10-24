@@ -2,10 +2,11 @@
 /**
  * Long-running local stack for manual use and the demo (scripts/dev-up.sh, scripts/demo.sh).
  *
- *   node e2e/dist/stack-cli.js up [--llm llama|mock] [--rpc-port N] [--router-port N] [--exit-port N] [--id <id>] [--combo <variant>]
+ *   node e2e/dist/stack-cli.js up [--chain near|zcash] [--llm llama|mock] [--rpc-port N] [--router-port N] [--exit-port N] [--id <id>] [--combo <variant>]
  *                                 [--extra evil-logger,mitm-key,vpn-honest-test,vpn-evil-logger,…] [--destination]
  *                                 [--env-out .run/stack.env] [--dns-down-file <path>]
- *       Starts near-sandbox + both registries (LLM + VPN) + the test builds' DoH resolver (127.0.0.1:18253),
+ *       Starts the chain (near-sandbox, or with `--chain zcash` a zebrad regtest node: SPEC-CHAINS §5, tier C) + both
+ *       registries (LLM + VPN) + the test builds' DoH resolver (127.0.0.1:18253),
  *       approves and launches the honest router and the honest PRODUCTION VPN exit (SPEC-VPN; `vpn-honest`,
  *       approved on the VPN registry, registered by `operator`) (+ extra variants: router attacks, and VPN
  *       builds/attacks — `vpn-evil-logger` is never approved).
@@ -39,7 +40,8 @@
  *       _VPN_KEY_HASH (e.g. PLR_COMBO_TEST_ROUTER_URL); output in <logs>/<variant>.log.
  *   node e2e/dist/stack-cli.js owner <method> '<json args>' [--vpn] [--env-out .run/stack.env]
  *       Calls a registry owner method (allow_compose, revoke_compose, …) with the stack's owner key, on the LLM
- *       registry or (with --vpn) on the VPN registry.
+ *       registry or (with --vpn) on the VPN registry. On a Zcash stack this posts the owner record (OP_RETURN) and waits
+ *       until it is mined (`approve_operator` / `revoke_operator` take the operator's t-address as `account_id`).
  */
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
@@ -47,8 +49,9 @@ import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { Account, JsonRpcProvider, KeyPairSigner, type KeyPairString } from "near-api-js";
 import { toHex } from "@plr/shared";
+import { postOwnerRecord } from "./chains/zcash.js";
 import {
-  COMBO_VARIANTS, REPO_ROOT, VARIANTS, VPN_VARIANTS, startStack, type ComboHandle, type ComboVariant, type Destination, type DevStack, type ExitHandle,
+  COMBO_VARIANTS, REPO_ROOT, VARIANTS, runRoot, VPN_VARIANTS, startStack, type ComboHandle, type ComboVariant, type Destination, type DevStack, type ExitHandle,
   type RouterHandle, type Variant, type VpnVariant,
 } from "./harness.js";
 import { signalAllManaged } from "./procs.js";
@@ -97,6 +100,8 @@ function port(v: string | undefined): number | undefined {
 async function up(values: Record<string, string | boolean | undefined>): Promise<void> {
   const llm = (values.llm as string | undefined) ?? "llama";
   if (llm !== "mock" && llm !== "llama") die("--llm must be mock or llama");
+  const chain = (values.chain as string | undefined) || "near";
+  if (chain !== "near" && chain !== "zcash") die("--chain must be near or zcash");
   const extras = ((values.extra as string | undefined) ?? "").split(",").filter(Boolean);
   const isRouterVariant = (e: string): e is Variant => (VARIANTS as readonly string[]).includes(e) && e !== "honest";
   const isExitVariant = (e: string): e is VpnVariant => (VPN_VARIANTS as readonly string[]).includes(e) && e !== "vpn-honest";
@@ -113,7 +118,7 @@ async function up(values: Record<string, string | boolean | undefined>): Promise
   const envFile = resolve((values["env-out"] as string | undefined) ?? DEFAULT_ENV_FILE);
   const ownerFile = ownerFileOf(envFile);
   const id = (values.id as string | undefined) ?? `dev-${Date.now().toString(36)}`;
-  const logDir = join(REPO_ROOT, ".run", `${id}-logs`);
+  const logDir = join(runRoot(), `${id}-logs`);
   mkdirSync(logDir, { recursive: true, mode: 0o700 });
   if (existsSync(envFile)) die(`${envFile} exists — is another stack running? (scripts/dev-down.sh)`);
 
@@ -172,9 +177,10 @@ async function up(values: Record<string, string | boolean | undefined>): Promise
     for (const [what, p] of [["rpc", rpcPort], ["router", routerPort], ["exit", exitPort]] as const) {
       if (p !== undefined && p !== 0 && !(await portFree(p))) throw new Error(`${what} port ${p} is already in use`);
     }
-    process.stdout.write(`stack-cli: starting near-sandbox + registry (llm=${llm}, id=${id})…\n`);
+    process.stdout.write(`stack-cli: starting ${chain === "zcash" ? "zebrad regtest" : "near-sandbox"} + registries (llm=${llm}, id=${id})…\n`);
     stack = await startStack({
       llm,
+      chain,
       id,
       ...(rpcPort !== undefined ? { rpcPort } : {}),
       onRouterOutput: (v, chunk) => appendFileSync(join(logDir, `${v}.log`), chunk, { mode: 0o600 }),
@@ -184,6 +190,7 @@ async function up(values: Record<string, string | boolean | undefined>): Promise
       await upCombo(stack, comboMode as ComboVariant, { llm, logDir, envFile, ownerFile, routerPort, exitPort, destination: values.destination === true });
       return;
     }
+    await approveLlmOperators(stack);
     const approved = await stack.approveBuild("honest");
     process.stdout.write(`stack-cli: owner approved honest build compose=${approved.composeHash} os=${approved.osMeasurement}\n`);
     process.stdout.write(`stack-cli: launching honest router via the mock TDX host${llm === "llama" ? " (loading Qwen 0.5B)" : ""}…\n`);
@@ -256,8 +263,7 @@ async function up(values: Record<string, string | boolean | undefined>): Promise
     const lines = [
       `# PLR local stack (${new Date().toISOString()}), written by e2e/src/stack-cli.ts; removed by dev-down.sh`,
       `PLR_ROUTER_URL=${routers.honest.url}`,
-      `PLR_NEAR_RPC=${stack.rpcUrl}`,
-      `PLR_REGISTRY=${stack.contractId}`,
+      ...stack.clientEnvLines(),
       `PLR_TRUSTED_ROOT=${toHex(stack.trustedRoot)}`,
       `PLR_COMPOSE_HASH=${approved.composeHash}`,
       `PLR_OS_MEASUREMENT=${approved.osMeasurement}`,
@@ -274,7 +280,6 @@ async function up(values: Record<string, string | boolean | undefined>): Promise
       `PLR_VPN_ENTRY_ORG=${ORGS.operator2}`,
       `PLR_OPERATOR_ID=${stack.accounts.operator}`,
       `PLR_OPERATOR2_ID=${stack.accounts.operator2}`,
-      `PLR_VPN_REGISTRY=${stack.vpnContractId}`,
       `PLR_VPN_COMPOSE_HASH=${vpnApproved.composeHash}`,
       `PLR_VPN_OS_MEASUREMENT=${vpnApproved.osMeasurement}`,
       `PLR_VPN_TEST_COMPOSE_HASH=${testApproved.composeHash}`,
@@ -294,9 +299,8 @@ async function up(values: Record<string, string | boolean | undefined>): Promise
 /** Writes the owner key file (0600) and then, last, the env file: its existence means "ready". */
 function writeReady(stack: DevStack, envFile: string, ownerFile: string, lines: string[]): void {
   mkdirSync(dirname(envFile), { recursive: true });
-  // Owner key for the `owner` sub-command (demo revocation): fresh dev-chain key, 0600, removed on stop.
-  const ownerKey = stack.exportSigner("owner");
-  writeFileSync(ownerFile, JSON.stringify({ account_id: ownerKey.accountId, secret_key: ownerKey.secretKey }), { mode: 0o600 });
+  // Owner key(s) for the `owner` sub-command (demo revocation): fresh dev-chain keys, 0600, removed on stop.
+  writeFileSync(ownerFile, JSON.stringify(stack.ownerFile()), { mode: 0o600 });
   chmodSync(ownerFile, 0o600);
   writeFileSync(envFile + ".tmp", lines.join("\n") + "\n", { mode: 0o600 });
   writeFileSync(envFile, readFileSync(envFile + ".tmp"), { mode: 0o600 });
@@ -313,6 +317,7 @@ async function upCombo(
   v: ComboVariant,
   o: { llm: string; logDir: string; envFile: string; ownerFile: string; routerPort: number | undefined; exitPort: number | undefined; destination: boolean },
 ): Promise<void> {
+  await approveLlmOperators(stack);
   const approved = await stack.approveComboBuild(v);
   process.stdout.write(`stack-cli: owner approved ${v} build on the LLM registry (router role) and the VPN registry (exit role) compose=${approved.composeHash} os=${approved.osMeasurement}\n`);
   await stack.approveOperator("operator", ORGS.operator);
@@ -335,8 +340,7 @@ async function upCombo(
     `# PLR local stack, COMBO mode (${new Date().toISOString()}): one ${v} TD runs the router and the VPN exit; removed by dev-down.sh`,
     `PLR_COMBO=${v}`,
     `PLR_ROUTER_URL=${c.routerUrl}`,
-    `PLR_NEAR_RPC=${stack.rpcUrl}`,
-    `PLR_REGISTRY=${stack.contractId}`,
+    ...stack.clientEnvLines(),
     `PLR_TRUSTED_ROOT=${toHex(stack.trustedRoot)}`,
     `PLR_COMPOSE_HASH=${approved.composeHash}`,
     `PLR_OS_MEASUREMENT=${approved.osMeasurement}`,
@@ -347,13 +351,24 @@ async function upCombo(
     `PLR_VPN_URL=${c.vpnUrl}`,
     `PLR_VPN_ORG=${ORGS.operator}`,
     `PLR_OPERATOR_ID=${stack.accounts.operator}`,
-    `PLR_VPN_REGISTRY=${stack.vpnContractId}`,
     `PLR_VPN_COMPOSE_HASH=${approved.composeHash}`,
     `PLR_VPN_OS_MEASUREMENT=${approved.osMeasurement}`,
     `PLR_COMBO_ROUTER_PORT=${c.routerPort}`,
     `PLR_DOH_URL=http://127.0.0.1:18253/dns-query`,
     ...(dest ? [`PLR_DEST_PORT=${dest.port}`, `PLR_DEST_HOST=${DEST_NAME}`] : []),
   ]);
+}
+
+/**
+ * Tier B/C (SPEC-CHAINS §1): instance records count only from operators the owner approved on THAT registry, so on
+ * those chains the LLM registry's owner approves both operators before any router registers (NEAR: unchanged).
+ */
+async function approveLlmOperators(stack: DevStack): Promise<void> {
+  if (stack.chain === "near") return;
+  for (const [account, org] of Object.entries(ORGS) as Array<[keyof typeof ORGS, string]>) {
+    await stack.admin.approveOperator(account, org);
+    process.stdout.write(`stack-cli: owner approved operator ${stack.accounts[account]} as organization ${org} on the LLM registry\n`);
+  }
 }
 
 function readEnvFile(path: string): Record<string, string> {
@@ -378,7 +393,9 @@ async function owner(method: string | undefined, argsJson: string | undefined, e
   }
   if (typeof args !== "object" || args === null || Array.isArray(args)) die("owner: args must be a JSON object");
   const env = readEnvFile(envFile);
-  const key = JSON.parse(readFileSync(ownerFileOf(envFile), "utf8")) as { account_id: string; secret_key: string };
+  const file = JSON.parse(readFileSync(ownerFileOf(envFile), "utf8")) as Record<string, unknown>;
+  if (file.chain === "zcash") return zcashOwner(method, args as object, file, vpn);
+  const key = file as { account_id: string; secret_key: string };
   const contractId = vpn ? env.PLR_VPN_REGISTRY : env.PLR_REGISTRY;
   if (!contractId) die(`owner: ${vpn ? "PLR_VPN_REGISTRY" : "PLR_REGISTRY"} missing in ${envFile}`);
   const provider = new JsonRpcProvider({ url: env.PLR_NEAR_RPC! });
@@ -391,6 +408,21 @@ async function owner(method: string | undefined, argsJson: string | undefined, e
   process.stdout.write(`${method} ✔ on ${contractId} (signed by ${key.account_id})\n`);
 }
 
+/** `owner` on a Zcash stack: the owner record, signed by the LLM or VPN registry's owner address, mined. */
+async function zcashOwner(method: string, args: object, file: Record<string, unknown>, vpn: boolean): Promise<void> {
+  const who = (vpn ? file.vpn_owner : file.owner) as { address?: unknown; secret_key?: unknown } | undefined;
+  if (typeof file.rpc_url !== "string" || typeof file.network !== "string" || typeof who?.address !== "string" || typeof who.secret_key !== "string") {
+    die("owner: malformed Zcash owner file");
+  }
+  try {
+    const r = await postOwnerRecord(file.rpc_url, who.secret_key, method, args);
+    if (r.signer !== who.address) die("owner: owner file key does not match its address");
+    process.stdout.write(`${method} ✔ on zcash:${file.network}:${who.address} (record tx ${r.txid}, block ${r.height})\n`);
+  } catch (e) {
+    die(`${method} failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 const argv = process.argv.slice(2);
 const cmd = argv[0];
 const { values, positionals } = parseArgs({
@@ -399,6 +431,7 @@ const { values, positionals } = parseArgs({
   strict: true,
   options: {
     llm: { type: "string" },
+    chain: { type: "string" },
     "rpc-port": { type: "string" },
     "router-port": { type: "string" },
     "exit-port": { type: "string" },

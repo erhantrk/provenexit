@@ -4,58 +4,15 @@
  * shape-checked; nothing returned by the RPC is trusted blindly.
  */
 import { Account, JsonRpcProvider, KeyPairSigner, type KeyPairString } from "near-api-js";
-import { PlrError, isHex, type TdxEvent } from "@plr/shared";
+import { PlrError } from "@plr/shared";
+import { isAnchorView, isUint, type AnchorArgs, type AnchorView, type RegisterArgs, type RegistryWriter } from "./registry-writer.js";
 
-export interface RegisterArgs {
-  quote: string;
-  event_log: TdxEvent[];
-  app_compose: string;
-  x25519: string;
-  ed25519: string;
-}
-
-export interface AnchorArgs {
-  key_hash: string;
-  root: string;
-  first_seq: number;
-  count: number;
-  sig: string;
-}
-
-export interface AnchorView {
-  id: number;
-  key_hash: string;
-  root: string;
-  first_seq: number;
-  count: number;
-}
-
-/** What the router needs from the registry chain. Implemented for NEAR below; faked in unit tests. */
-export interface RegistryWriter {
-  readonly contractId: string;
-  /** The account that signs this instance's transactions (its on-chain `operator`, SPEC §7 rev 1.2). */
-  readonly operatorId: string;
-  registerInstance(args: RegisterArgs): Promise<void>;
-  /** Returns the contract's return value (the anchor id if the contract returns one). */
-  anchorReceipts(args: AnchorArgs): Promise<unknown>;
-  getInstanceNextSeq(keyHash: string): Promise<number | null>;
-  /** The `operator` account recorded for the instance, or null if it is not (or no longer) registered. */
-  getInstanceOperator(keyHash: string): Promise<string | null>;
-  anchorCount(): Promise<number>;
-  getAnchor(id: number): Promise<AnchorView | null>;
-}
+export type { AnchorArgs, AnchorView, RegisterArgs, RegistryWriter } from "./registry-writer.js";
+export { isAnchorView } from "./registry-writer.js";
 
 export const NEAR_ACCOUNT_RE = /^(?=.{2,64}$)(?:(?:[a-z\d]+[-_])*[a-z\d]+\.)*(?:[a-z\d]+[-_])*[a-z\d]+$/;
 export const NEAR_KEY_RE = /^ed25519:[1-9A-HJ-NP-Za-km-z]{32,128}$/;
 const TGAS = 1_000_000_000_000n;
-
-const isUint = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
-
-export function isAnchorView(a: unknown): a is AnchorView {
-  if (typeof a !== "object" || a === null) return false;
-  const r = a as Record<string, unknown>;
-  return isUint(r.id) && isHex(r.key_hash, 32) && isHex(r.root, 32) && isUint(r.first_seq) && isUint(r.count);
-}
 
 export class NearRegistryWriter implements RegistryWriter {
   readonly contractId: string;

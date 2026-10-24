@@ -208,6 +208,11 @@ export class ExitHop {
     }
   }
 
+  /** Keys of this hop's last successful verification (anchor-signer hint, SPEC-CHAINS §2), or undefined. */
+  get verifiedKeys(): { x25519: Uint8Array; ed25519: Uint8Array } | undefined {
+    return this.#attestation.verifiedKeys;
+  }
+
   /** `GET /v1/receipts/proof?seq=` (bounded). @throws PlrError E_BAD_RESPONSE */
   async fetchProof(seq: number): Promise<{ status: number; body: Uint8Array }> {
     try {

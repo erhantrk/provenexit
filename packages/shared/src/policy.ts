@@ -3,11 +3,11 @@ import { ed25519 } from "@noble/curves/ed25519.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { PlrError, type PlrErrorCode } from "./errors.js";
 import { equalBytes, fromHex, isAllZero, isBytes, isHex, isPlainObject, isWellFormedString, toHex, utf8 } from "./bytes.js";
-import { QUOTE, isDebug, osMeasurement, parseQuote, type ParsedQuote, type RootKind } from "./tdx/quote.js";
+import { QUOTE, isDebug, osMeasurement, parseQuote, type ParsedQuote, type RootKind, type TdReport } from "./tdx/quote.js";
 import { verifyEventLog, type TdxEvent } from "./tdx/eventlog.js";
-import { keyHash, sessionNonceDigest } from "./tdx/measure.js";
+import { keyHash, registrationReportData, sessionNonceDigest } from "./tdx/measure.js";
 import type { QuoteVerifier } from "./attest/types.js";
-import { isInstanceRecord, isRegistryRoot, type RegistryReader } from "./registry.js";
+import { isInstanceRecord, isRegistryRoot, type InstanceRecord, type RegistryReader } from "./registry.js";
 
 /** `GET /v1/attestation` response body (SPEC §6.2). */
 export interface AttestationBundle {
@@ -18,6 +18,11 @@ export interface AttestationBundle {
   app_compose: string;
   x25519: string;
   ed25519: string;
+  /**
+   * SPEC-CHAINS §2 (rev 1.4): the instance's registration quote (hex), included once registered. Offered to
+   * tier-C registries, which accept it only if it matches the on-chain commitment. Malformed ⇒ treated as absent.
+   */
+  registration_quote?: string;
 }
 
 export interface VerifiedRouter {
@@ -29,6 +34,11 @@ export interface VerifiedRouter {
   rootKind: RootKind;
   /** Human-readable names of the checks that passed, in order. */
   checks: string[];
+  /**
+   * The registration quote that passed SPEC-CHAINS §2 (tier B/C only). Re-checks pass it to `getInstance` so a
+   * tier-C reader keeps selecting the registration this evidence binds.
+   */
+  registrationQuote?: Uint8Array;
 }
 
 export interface VerifyAttestationParams {
@@ -63,6 +73,12 @@ export const CHECKS = Object.freeze({
   OS_ALLOWED: "OS measurement allowed by registry",
   INSTANCE: "instance registered with matching keys",
 } as const);
+
+/**
+ * SPEC-CHAINS §2 step 9b, reported in {@link VerifiedRouter.checks} (after {@link CHECKS.INSTANCE}) only when the
+ * registry does not verify registration quotes on-chain. Kept out of `CHECKS` because tier-A verifications skip it.
+ */
+export const REGISTRATION_EVIDENCE_CHECK = "registration quote: same boot, bound to (registry, operator)";
 
 const fail = (code: PlrErrorCode, detail?: string): never => {
   throw new PlrError(code, detail);
@@ -99,6 +115,8 @@ interface ParsedBundle {
   composeBytes: Uint8Array;
   x25519: Uint8Array;
   ed25519: Uint8Array;
+  /** The bundle's well-formed `registration_quote`, else undefined. */
+  registrationQuote: Uint8Array | undefined;
 }
 
 /** Step 1: shape of the response (E_BAD_RESPONSE). Content of event entries is checked in step 6. */
@@ -123,8 +141,12 @@ function parseBundle(b: unknown, expectedKind: RootKind): ParsedBundle {
   } catch {
     bad("ed25519");
   }
+  // SPEC-CHAINS §4: a malformed registration_quote is treated as absent (never a reason to reject the bundle).
+  const rq = b.registration_quote;
+  const registrationQuote = isHex(rq) && rq.length > 0 && rq.length <= QUOTE.MAX_LEN * 2 ? fromHex(rq) : undefined;
   return {
     rootKind: expectedKind,
+    registrationQuote,
     quote: fromHex(b.quote as string),
     eventLog: b.event_log as TdxEvent[],
     composeBytes,
@@ -218,7 +240,22 @@ export async function verifyAttestation(p: VerifyAttestationParams): Promise<Ver
   }
   checks.push(CHECKS.INSTANCE);
 
+  // 9b. registration evidence (SPEC-CHAINS §2, rev 1.4) unless the registry verified the quote on-chain (tier A).
+  // Fail closed: anything but an explicit `true` requires the evidence.
+  let onChain: unknown;
+  try {
+    onChain = registry.verifiesOnChain;
+  } catch {
+    onChain = false;
+  }
+  let evidence: Uint8Array | undefined;
+  if (onChain !== true) {
+    evidence = await verifyRegistrationEvidence({ registry, verifier, keyHashHex: toHex(kh), offered: b.registrationQuote, session: report, inst, x25519: b.x25519, ed25519: b.ed25519, rootKind: b.rootKind });
+    checks.push(REGISTRATION_EVIDENCE_CHECK);
+  }
+
   return {
+    ...(evidence !== undefined ? { registrationQuote: evidence } : {}),
     x25519: b.x25519.slice(),
     ed25519: b.ed25519.slice(),
     keyHash: kh,
@@ -227,4 +264,50 @@ export async function verifyAttestation(p: VerifyAttestationParams): Promise<Ver
     rootKind: b.rootKind,
     checks,
   };
+}
+
+const isQuoteOrNull = (v: unknown): v is Uint8Array | null => v === null || isBytes(v);
+
+/**
+ * SPEC-CHAINS §2 steps 1–4: the registration quote verifies under the pinned root, is not DEBUG, binds
+ * `registrationReportData(keys, registry.contractId, record.operator)` and comes from the same TD boot
+ * (MRTD and RTMR0..3 equal the session quote's). Any failure ⇒ E_REGISTRATION_EVIDENCE; a throwing or
+ * malformed registry ⇒ E_REGISTRY_UNAVAILABLE.
+ */
+async function verifyRegistrationEvidence(p: {
+  registry: RegistryReader;
+  verifier: QuoteVerifier;
+  keyHashHex: string;
+  offered: Uint8Array | undefined;
+  session: TdReport;
+  inst: InstanceRecord;
+  x25519: Uint8Array;
+  ed25519: Uint8Array;
+  rootKind: RootKind;
+}): Promise<Uint8Array> {
+  const E = "E_REGISTRATION_EVIDENCE" as const;
+  const offered = p.offered === undefined ? undefined : p.offered.slice();
+  const rq = await reg(() => p.registry.getRegistrationQuote(p.keyHashHex, offered), isQuoteOrNull);
+  if (rq === null || rq.length === 0 || rq.length > QUOTE.MAX_LEN) return fail(E, "no registration quote");
+  const quote = rq.slice();
+  const parsed = guard(() => parseQuote(quote, p.rootKind), [], E);
+  const verified: unknown = guard(() => p.verifier.verify(quote), [], E);
+  if (!isPlainObject(verified) || !isBytes(verified.signedBytes) || !equalBytes(verified.signedBytes, parsed.signedBytes)) {
+    fail(E, "registration quote signature");
+  }
+  const r = parsed.report;
+  if (isDebug(r)) fail(E, "registration quote is DEBUG");
+  const expected = guard(() => registrationReportData(p.x25519, p.ed25519, p.registry.contractId, p.inst.operator), [], E);
+  if (!equalBytes(r.reportData, expected)) fail(E, "registration report_data");
+  const s = p.session;
+  if (
+    !equalBytes(r.mrTd, s.mrTd) ||
+    !equalBytes(r.rtmr[0], s.rtmr[0]) ||
+    !equalBytes(r.rtmr[1], s.rtmr[1]) ||
+    !equalBytes(r.rtmr[2], s.rtmr[2]) ||
+    !equalBytes(r.rtmr[3], s.rtmr[3])
+  ) {
+    fail(E, "registration quote is from another boot");
+  }
+  return quote.slice();
 }

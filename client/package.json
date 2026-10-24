@@ -18,6 +18,9 @@
   },
   "dependencies": {
     "@plr/shared": "*",
-    "near-api-js": "^7.3.1"
+    "@solana/web3.js": "^1.99.0",
+    "@stellar/stellar-sdk": "^17.3.0",
+    "near-api-js": "^7.3.1",
+    "viem": "^2.57.10"
   }
 }

@@ -123,14 +123,14 @@ export class VpnClient {
    * Checks that a verified session receipt is included in an on-chain anchor of the VPN registry: fetches the
    * exit's proof (`/v1/receipts/proof`) and verifies it against `get_anchor` with the CHAIN's
    * `first_seq` / `count` / `root`. Resolves `true`.
-   * @throws PlrError E_NOT_ANCHORED (retry later), E_ANCHOR_MISMATCH, E_BAD_RESPONSE, E_REGISTRY_UNAVAILABLE, E_BAD_INPUT
+   * @throws PlrError E_NOT_ANCHORED (retry later), E_ANCHOR_MISMATCH, E_ANCHOR_SIG (tier B/C), E_BAD_RESPONSE, E_REGISTRY_UNAVAILABLE, E_BAD_INPUT
    */
   async verifyAnchored(r: VpnReceipt): Promise<boolean> {
     if (!isVpnReceipt(r)) fail("E_BAD_INPUT", "malformed receipt");
     const res = await this.#hop.fetchProof(r.seq);
     if (res.status === 404) fail("E_NOT_ANCHORED");
     if (res.status !== 200) fail("E_BAD_RESPONSE", "proof HTTP status");
-    await verifyVpnReceiptAnchored({ receipt: r, reply: parseJsonBytes(res.body), registry: this.registry });
+    await verifyVpnReceiptAnchored({ receipt: r, reply: parseJsonBytes(res.body), registry: this.registry, signer: this.#hop.verifiedKeys });
     return true;
   }
 }

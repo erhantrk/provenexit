@@ -49,6 +49,8 @@ export const ERROR_CODES = [
   // two-hop operator organizations (SPEC-VPN §8, §10 rev 2)
   "E_OPERATOR_UNAPPROVED",
   "E_SAME_OPERATOR",
+  // rev 1.4 registration evidence for registries that do not verify quotes on-chain (SPEC-CHAINS §2)
+  "E_REGISTRATION_EVIDENCE",
 ] as const;
 
 export type PlrErrorCode = (typeof ERROR_CODES)[number];

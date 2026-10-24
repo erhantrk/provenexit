@@ -175,15 +175,16 @@ export class TwoHopClient {
 
   /**
    * As `VpnClient.verifyAnchored`, for a receipt of the exit (proof fetched through the entry) or of the entry.
-   * @throws PlrError E_NOT_ANCHORED, E_ANCHOR_MISMATCH, E_BAD_RESPONSE, E_REGISTRY_UNAVAILABLE, E_BAD_INPUT
+   * @throws PlrError E_NOT_ANCHORED, E_ANCHOR_MISMATCH, E_ANCHOR_SIG (tier B/C), E_BAD_RESPONSE, E_REGISTRY_UNAVAILABLE, E_BAD_INPUT
    */
   async verifyAnchored(r: VpnReceipt, hop: "exit" | "entry" = "exit"): Promise<boolean> {
     if (!isVpnReceipt(r)) fail("E_BAD_INPUT", "malformed receipt");
     if (hop !== "exit" && hop !== "entry") fail("E_BAD_INPUT", "bad hop");
-    const res = await (hop === "exit" ? this.#exit : this.#entry).fetchProof(r.seq);
+    const h = hop === "exit" ? this.#exit : this.#entry;
+    const res = await h.fetchProof(r.seq);
     if (res.status === 404) fail("E_NOT_ANCHORED");
     if (res.status !== 200) fail("E_BAD_RESPONSE", "proof HTTP status");
-    await verifyVpnReceiptAnchored({ receipt: r, reply: parseJsonBytes(res.body), registry: this.registry });
+    await verifyVpnReceiptAnchored({ receipt: r, reply: parseJsonBytes(res.body), registry: this.registry, signer: h.verifiedKeys });
     return true;
   }
 

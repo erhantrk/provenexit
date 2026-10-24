@@ -169,6 +169,8 @@ describe("verifyAnchored: positions come from the chain, never from the router",
     const chain: RegistryReader = {
       chain: "memory",
       contractId: r.registry.contractId,
+      verifiesOnChain: true, // tier A fixture (SPEC-CHAINS §2)
+      getRegistrationQuote: async () => null,
       getRoot: () => r.registry.getRoot(),
       isComposeAllowed: (h) => r.registry.isComposeAllowed(h),
       isOsAllowed: (h) => r.registry.isOsAllowed(h),

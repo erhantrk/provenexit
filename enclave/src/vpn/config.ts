@@ -1,5 +1,5 @@
 /** VPN exit configuration from the environment (set by the mock TDX host). Strictly validated; fail closed. */
-import { HOST_RE, bad, intVar, loadNear, type Env, type NearConfig } from "../config.js";
+import { HOST_RE, bad, intVar, loadRegistrySafe, type Env, type NearConfig, type RegistryConfig } from "../config.js";
 
 /** SPEC-VPN §3 default exit port. */
 export const DEFAULT_EXIT_PORT = 18200;
@@ -12,7 +12,9 @@ export interface ExitConfig {
   anchorIntervalMs: number;
   /** Registration + anchoring on the VPN registry, or null (unregistered: clients refuse). */
   near: NearConfig | null;
-  /** True if NEAR variables were present but incomplete/invalid: registration is disabled (clients refuse). */
+  /** The selected VPN registry (any chain, `PLR_CHAIN`), or null (unregistered: clients refuse). */
+  registry: RegistryConfig | null;
+  /** True if the selected chain's variables were present but incomplete/invalid: registration is disabled (clients refuse). */
   nearConfigError: boolean;
 }
 
@@ -20,7 +22,8 @@ export interface ExitConfig {
  * PLR_TDX_SOCKET, PLR_APP_COMPOSE_PATH (from the host), PLR_VPN_HOST (default 127.0.0.1), PLR_VPN_PORT (default
  * 18200, 0 = ephemeral), PLR_ANCHOR_INTERVAL_MS, and the NEAR variables of the router (PLR_NEAR_RPC,
  * PLR_OPERATOR_ID, PLR_OPERATOR_KEY, PLR_REGISTER_DEPOSIT, PLR_ANCHOR_DEPOSIT) with the VPN registry in
- * PLR_VPN_REGISTRY, or else PLR_REGISTRY.
+ * PLR_VPN_REGISTRY, or else PLR_REGISTRY. With `PLR_CHAIN=zcash` (SPEC-CHAINS §5): PLR_ZCASH_RPC, PLR_ZCASH_NETWORK,
+ * PLR_ZCASH_KEY, PLR_ZCASH_START_HEIGHT and the VPN registry owner in PLR_ZCASH_VPN_OWNER, or else PLR_ZCASH_OWNER.
  */
 export function loadExitConfig(env: Env = process.env): ExitConfig {
   const tdxSocket = env.PLR_TDX_SOCKET;
@@ -31,13 +34,8 @@ export function loadExitConfig(env: Env = process.env): ExitConfig {
   if (!HOST_RE.test(host)) bad("PLR_VPN_HOST");
   const port = intVar(env, "PLR_VPN_PORT", DEFAULT_EXIT_PORT, 0, 65535);
   const anchorIntervalMs = intVar(env, "PLR_ANCHOR_INTERVAL_MS", 3000, 100, 3_600_000);
-  const registryVar = (env.PLR_VPN_REGISTRY ?? "") !== "" ? "PLR_VPN_REGISTRY" : "PLR_REGISTRY";
-  let near: NearConfig | null = null;
-  let nearConfigError = false;
-  try {
-    near = loadNear(env, registryVar);
-  } catch {
-    nearConfigError = true;
-  }
-  return { tdxSocket, composePath, host, port, anchorIntervalMs, near, nearConfigError };
+  const nearRegistryVar = (env.PLR_VPN_REGISTRY ?? "") !== "" ? "PLR_VPN_REGISTRY" : "PLR_REGISTRY";
+  const zcashOwnerVar = (env.PLR_ZCASH_VPN_OWNER ?? "") !== "" ? "PLR_ZCASH_VPN_OWNER" : "PLR_ZCASH_OWNER";
+  const { registry, near, nearConfigError } = loadRegistrySafe(env, { nearRegistryVar, zcashOwnerVar });
+  return { tdxSocket, composePath, host, port, anchorIntervalMs, near, registry, nearConfigError };
 }

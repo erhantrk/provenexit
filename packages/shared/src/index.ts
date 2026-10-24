@@ -38,7 +38,7 @@ export {
 } from "./registry.js";
 
 export {
-  verifyAttestation, CHECKS, MAX_APP_COMPOSE_BYTES,
+  verifyAttestation, CHECKS, REGISTRATION_EVIDENCE_CHECK, MAX_APP_COMPOSE_BYTES,
   type AttestationBundle, type VerifiedRouter, type VerifyAttestationParams,
 } from "./policy.js";
 
@@ -68,3 +68,29 @@ export {
   SOCKS, SOCKS_REP, parseSocksGreeting, parseSocksRequest, encodeSocksReply, socksReplyFor, type SocksRequest,
 } from "./net/socks5.js";
 export { DNS, encodeDnsQuery, parseDnsResponse, isLocalhostName, type DnsType } from "./net/dns.js";
+
+// PLR-CHAINS Zcash tier C (SPEC-CHAINS §5, §7)
+export {
+  ZCASH_TX, SIGHASH, compactSize, parseZcashTx, serializeTransparentTx, isCoinbaseTx, txidDigest, sighashDigest,
+  zcashTxid, zcashSighash, zcashAuthDigest, zcashTxidToRpc, zcashTxidFromRpc,
+  type ZcashTx, type ZcashTxIn, type ZcashTxOut, type SighashParams,
+} from "./zcash/tx.js";
+export {
+  OP, MAX_OP_RETURN_DATA, ZCASH_NETWORKS, T_ADDR_PREFIX, ZIP317, isZcashNetwork, hash160, p2pkhScript, p2pkhHash, pushData,
+  opReturnScript, opReturnData, parsePushes, base58Encode, base58Decode, base58CheckEncode, base58CheckDecode, tAddress,
+  parseTAddress, isTAddress, parseZcashSecretKey, zip317Fee, type ZcashNetwork,
+} from "./zcash/script.js";
+export {
+  buildSignedTransparentTx, type TransparentInput, type TransparentOutput, type BuildTransparentTxParams,
+} from "./zcash/build.js";
+export {
+  ZCASH_RECORD_MAGIC, ZCASH_RECORD_TYPE, ZCASH_MAX_ORG_ID, ZCASH_MAX_ANCHOR_COUNT, encodeZcashRecord, decodeZcashRecord,
+  type ZcashRecord, type ZcashRecordType,
+} from "./zcash/record.js";
+export {
+  ZcashLog, ZCASH_LOG, zcashRecordOfTx, type ZcashBlock, type ZcashLogOptions, type AuthoredZcashRecord,
+} from "./zcash/log.js";
+export {
+  ZCASH_BLOCK, parseZcashBlock, parseAnyZcashTx, readAnyZcashTx, zcashBlockJson, fetchZcashBlock, buildZcashBlock,
+  type ZcashTxView, type ZcashRawBlock, type ZcashRpcCall, type FetchZcashBlockOptions,
+} from "./zcash/block.js";
