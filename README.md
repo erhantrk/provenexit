@@ -88,6 +88,11 @@ directory for the secret prompt.
   Ed25519 signature itself; `plr verify` prints the tier and this extra check. The node is trusted like the NEAR
   RPC (no SPV proofs). Expiry is decided in chain time; the reader rebases block times to the local clock (Zebra
   regtest blocks carry 2011 timestamps).
+- **EVM / Monad, Stellar, Solana registries (tier B, `SPEC-CHAINS.md` §9-§11).** `PLR_CHAIN=evm|stellar|solana`
+  reads a contract registry (`PLR_EVM_RPC` / `PLR_STELLAR_RPC` + `PLR_STELLAR_PASSPHRASE` / `PLR_SOLANA_RPC` +
+  `PLR_SOLANA_PROGRAM`, same https/loopback rule; `PLR_REGISTRY=evm:<chainId>:<0x…>` / `stellar:C…` /
+  `solana:<state>`). The chain stores the registration quote but does not verify it, so the client does the same
+  extra checks as on Zcash (see "Multi-chain registries").
 
 ---
 
@@ -658,9 +663,89 @@ Records need a confirmation (≈ 1 s on the regtest stack, ~75 s on a public net
 for clients once mined, and on public networks `minConfirmations` trades freshness for reorg safety. Every record
 costs a ZIP-317 fee (20 000 zats) and anchors take two transactions (`anchor`, then `anchor_sig`). Expiry runs on
 chain time (regtest blocks carry 2011 timestamps; readers rebase to the local clock). Only transparent
-(t-address) records are used — nothing here is shielded, and the log is public by design. Only `near` and
-`zcash` have writers and readers in this build; EVM / Stellar / Solana (tier B) are specified in SPEC-CHAINS but
-`PLR_CHAIN=evm|stellar|solana` is refused (fail closed).
+(t-address) records are used — nothing here is shielded, and the log is public by design.
+
+### Tier B: EVM / Monad, Stellar, Solana (SPEC-CHAINS §9-§11)
+
+Three contract registries with the same semantics: owner policy, operator organizations, registration only by an
+owner-approved operator (`operator` = the transaction signer; the contract recomputes `key_hash` and checks the quote
+format and that its `report_data` binds this registry's `contractId` and the signer), the **828-byte registration
+quote stored on-chain**, and anchors `(key_hash, root, first_seq, count, sig)` that must be contiguous and posted by
+the instance's operator while its compose and OS are still allowed. The quote signature and the anchor signature
+are *not* checked on-chain; the client checks both (the rev 1.4 rule above), so a tier-B registry is as safe for
+clients as NEAR. Errors are named after the PLR codes on every chain (Solidity custom errors, Soroban
+`#[contracterror]` 1-9, Solana `ProgramError::Custom(1-9)`).
+
+| chain | contract | `contractId` (§3) | instance env (`PLR_CHAIN=…`) | client (`plr`) env |
+|---|---|---|---|---|
+| EVM / Monad | `contracts/evm` (Foundry, `PlrRegistry.sol`, solc 0.8.30, `evm_version` cancun) | `evm:<chainId>:<0x address>` | `PLR_EVM_RPC`, `PLR_EVM_REGISTRY` (exit: `PLR_EVM_VPN_REGISTRY`), `PLR_EVM_KEY` (operator secp256k1 hex); optional `PLR_EVM_CHAIN_ID` (else asked from the node) | `PLR_EVM_RPC`, `PLR_REGISTRY` / `PLR_VPN_REGISTRY` = `evm:…` |
+| Stellar | `contracts/stellar` (Soroban, soroban-sdk 29.0.1) | `stellar:C…` | `PLR_STELLAR_RPC`, `PLR_STELLAR_PASSPHRASE`, `PLR_STELLAR_REGISTRY` (exit: `PLR_STELLAR_VPN_REGISTRY`), `PLR_STELLAR_KEY` (S…) | `PLR_STELLAR_RPC`, `PLR_STELLAR_PASSPHRASE`, `PLR_REGISTRY` / `PLR_VPN_REGISTRY` = `stellar:C…` |
+| Solana | `contracts/solana` (native solana-program 5.1.0; one program, one state account per registry, PDAs per item) | `solana:<state account>` | `PLR_SOLANA_RPC`, `PLR_SOLANA_PROGRAM`, `PLR_SOLANA_REGISTRY` (exit: `PLR_SOLANA_VPN_REGISTRY`), `PLR_SOLANA_KEY` (64-byte hex) | `PLR_SOLANA_RPC`, `PLR_SOLANA_PROGRAM`, `PLR_REGISTRY` / `PLR_VPN_REGISTRY` = `solana:…` |
+
+The mock TDX host forwards exactly these variables (and in a combo TD the exit never receives the LLM registry
+variable, only `PLR_<CHAIN>_VPN_REGISTRY`). The `plr` CLI also accepts the chain-specific registry variables instead
+of the `contractId` (`PLR_EVM_REGISTRY` + `PLR_EVM_CHAIN_ID`, `PLR_STELLAR_REGISTRY`, `PLR_SOLANA_REGISTRY`, and the
+`_VPN_` forms); when both are given they must agree. `plr verify` prints `tier: B`. Readers: `EvmRegistry` (viem),
+`StellarRegistry` (`simulateTransaction`, no signing), `SolanaRegistry` (`getAccountInfo` / `getMultipleAccountsInfo`),
+all exported from `@plr/client`; each RPC must be https, or http to a loopback host.
+
+**Run them locally** (all offline; the e2e harness starts one node per stack and stops it in `stop()`):
+
+```sh
+# build the contract of the chain you want (scripts/build.sh does it for PLR_CHAIN / PLR_BUILD_CHAINS=evm,stellar,solana)
+(cd contracts/evm && forge build)                     # → out/PlrRegistry.sol/PlrRegistry.json   (anvil: ANVIL_BIN, ~/.foundry/bin or PATH)
+(cd contracts/stellar && stellar contract build)      # → target/wasm32v1-none/release/plr_stellar_registry.wasm (needs Docker)
+export PATH=$HOME/.local/share/solana/install/active_release/bin:$PATH
+(cd contracts/solana && cargo-build-sbf)              # → target/deploy/plr_registry_solana.so
+
+PLR_CHAIN=evm PLR_LLM=mock scripts/dev-up.sh          # or stellar / solana: anvil :8545, quickstart :8000, test-validator :8899
+set -a; . .run/stack.env; set +a; node client/dist/cli.js verify          # "tier: B — … this client checks the registration evidence"
+node e2e/dist/stack-cli.js owner revoke_compose '{"hash":"'$PLR_COMPOSE_HASH'"}'   # an owner transaction on that chain
+scripts/dev-down.sh
+cd e2e && PLR_E2E_CHAINS=near,zcash,evm,stellar,solana npx vitest run test/chains.test.ts   # one conformance suite, every chain
+```
+
+Per chain: **EVM** — one `anvil` per stack (automine), two `PlrRegistry` deployments, accounts funded with
+`anvil_setBalance`. **Stellar** — one `stellar/quickstart` container per stack (`--protocol-version 29 --limits
+unlimited`: protocol 28 cannot run SDK-29 wasm), friendbot-funded accounts, the wasm uploaded once and deployed
+twice (`__constructor`); startup takes ~1 minute (health + friendbot warm-up). **Solana** — one
+`solana-test-validator` per stack with the program preloaded, two state accounts created by `Init`; a
+registration's transaction uses an address lookup table so the 828-byte quote fits. On every tier-B chain one
+operator account signs for all of its TDs (router, exit, both halves of a combo): the writers serialize their own
+sends and retry sequence/nonce clashes a bounded number of times.
+
+**Monad testnet.** Monad is bytecode-compatible with Ethereum, so the same `PlrRegistry` bytecode deploys
+unchanged (Monad's contract size limit is 128 KB; `PlrRegistry` is ~9.5 KB). Testnet chain id **10143**, so the
+registry id is `evm:10143:<address>`:
+
+```sh
+cd contracts/evm
+PLR_EVM_OWNER=0x… PLR_ROOT_KIND=2 PLR_ROOT_P256=0x<64-byte Intel/MOCK root> PLR_INSTANCE_TTL_MS=86400000 \
+  forge script script/Deploy.s.sol --rpc-url https://testnet-rpc.monad.xyz --private-key $DEPLOYER_KEY --broadcast
+# instance: PLR_CHAIN=evm PLR_EVM_RPC=https://testnet-rpc.monad.xyz PLR_EVM_REGISTRY=0x… PLR_EVM_KEY=<operator key>
+# client:   PLR_CHAIN=evm PLR_EVM_RPC=https://testnet-rpc.monad.xyz PLR_REGISTRY=evm:10143:0x…
+```
+
+(See `contracts/evm/README.md` for the exact `Deploy.s.sol` variables.) The writer checks once that the node reports
+the configured chain id and that the contract's own `contractId()` equals its own, before it writes anything. Not
+tested against a live Monad node here (no internet in the build environment): only anvil.
+
+**Limits (tier B).** The RPC node is trusted like the NEAR RPC (no light-client proofs; https or loopback only).
+A revocation takes effect for clients once the owner's transaction is included (immediately on anvil, after one ledger or slot on the
+Stellar and Solana nodes). Revoking an operator (`revokeOperator`) also hides its instances from tier-B readers at once
+(SPEC-CHAINS §1: records only from operators the owner currently approves). Expiry runs on chain time (block timestamp, ledger time,
+Clock sysvar).
+
+**Key squatting (tier B).** A key hash is public before its instance registers, and tier-B contracts cannot check
+the quote signature. So any *approved* operator can register someone else's key hash first, with an unsigned quote
+bound to itself. Clients never accept that record (the quote fails the evidence check), but the honest
+registration is refused with `E_UNAUTHORIZED`. The first registrant keeps the key only while the owner approves it:
+after `revokeOperator(squatter)`, another approved operator can take the key over as a fresh record (`next_seq` 0).
+The honest instance's registration retries do this without help. Expiry alone never frees a key. On Solana the
+writer passes the current holder's operator PDA as an optional sixth account so the program can check the
+revocation. **Archived state (Stellar):** if a write's simulation needs archived entries restored (for example, an
+allowlisted compose hash untouched for longer than its TTL), the writer first submits a `RestoreFootprint`
+transaction (at most 2 per write).
 
 ---
 
@@ -678,6 +763,7 @@ chain time (regtest blocks carry 2011 timestamps; readers rebase to the local cl
 | client SOCKS5 (`plr vpn`) | `127.0.0.1:18180` (the demo also uses 18181–18183: production exit, two-hop, two-hop to production) |
 | near-sandbox RPC | `127.0.0.1:3030` (dev-up), ephemeral in tests and the demo; LLM registry `registry.<root>`, VPN registry `vpnregistry.<root>` |
 | zebrad regtest RPC (`PLR_CHAIN=zcash`) | `127.0.0.1:18232` (dev-up, `PLR_RPC_PORT` overrides), ephemeral in tests and the demo; registries `zcash:regtest:<owner>` / `zcash:regtest:<vpn owner>` |
+| anvil / Stellar quickstart / solana-test-validator RPC (`PLR_CHAIN=evm` / `stellar` / `solana`) | dev-up: `127.0.0.1:8545` / `localhost:8000/rpc` / `127.0.0.1:8899` (`PLR_RPC_PORT` overrides), ephemeral in tests; one node (Stellar: one Docker container `stellar-<name>`) per stack, two registries on it |
 | run state | `.run/<id>/` (chain home under `near/` or `zcash/`), host sockets in `.run/<id>-host/`; removed on stop (`PLR_KEEP_RUN=1` keeps them). `.run` is `PLR_RUN_ROOT` if set, else `<repo>/.run`, else `<repo>/e2e/.run` when the repo root is not writable (e.g. a sandbox confined to the `e2e/` cwd) |
 
 The harness and the dev stack run every long-lived process under a "lifeline" that leads its own process

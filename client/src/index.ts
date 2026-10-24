@@ -15,6 +15,10 @@ export {
 export { NearRegistry, NearRegistryError, isNearAccountId, isLoopbackHost, checkRpcUrl, type NearRegistryOptions, type NearFinality } from "./near-registry.js";
 // PLR-CHAINS tier C (SPEC-CHAINS §5)
 export { ZcashRegistry, ZcashRegistryError, parseZcashContractId, type ZcashRegistryOptions } from "./zcash-registry.js";
+// PLR-CHAINS tier B (SPEC-CHAINS §9-§11)
+export { EvmRegistry, EvmRegistryError, EvmRevertError, parseEvmContractId, evmContractId, type EvmRegistryOptions } from "./chains/evm.js";
+export { StellarRegistry, StellarRegistryError, stellarContractAddress, type StellarRegistryOptions } from "./chains/stellar.js";
+export { SolanaRegistry, SolanaRegistryError, parseSolanaContractId, type SolanaRegistryOptions } from "./chains/solana.js";
 export { startProxy, type ProxyOptions, type ProxyHandle } from "./proxy.js";
 export { normalizeChatRequest, encodeChatPlaintext, DEFAULT_MODEL, ROLES, MAX_MESSAGES, MAX_TOKENS_LIMIT, type ChatMessage, type ChatRequest } from "./chat-request.js";
 export { SseParser, SseError, type SseLimits } from "./sse.js";

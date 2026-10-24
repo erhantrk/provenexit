@@ -1,0 +1,28 @@
+[package]
+name = "plr-registry-solana"
+version = "0.1.0"
+edition = "2021"
+description = "PLR registry, tier B (SPEC-CHAINS §11): owner policy, operator orgs, stored registration quotes, signed anchors"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+# Build the crate as a library only (no `entrypoint` symbol), e.g. when another program links it.
+no-entrypoint = []
+# Names the solana-program entrypoint macro checks (unused here).
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+solana-program = "=5.1.0"
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

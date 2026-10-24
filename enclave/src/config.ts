@@ -1,6 +1,9 @@
 /** Router configuration from the environment (set by the mock TDX host). Strictly validated; fail closed. */
 import { PlrError, isTAddress, isZcashNetwork, parseZcashSecretKey, type ZcashNetwork } from "@plr/shared";
 import { NEAR_ACCOUNT_RE, NEAR_KEY_RE } from "./near.js";
+import { loadEvm, type EvmConfig } from "./chains/evm.js";
+import { loadStellar, type StellarConfig } from "./chains/stellar.js";
+import { loadSolanaConfig, type SolanaConfig } from "./chains/solana.js";
 
 export interface NearConfig {
   rpcUrl: string;
@@ -15,7 +18,7 @@ export interface NearConfig {
   anchorDeposit: bigint;
 }
 
-/** SPEC-CHAINS §4 `PLR_CHAIN` values. Only `near` and `zcash` have writers in this build. */
+/** SPEC-CHAINS §4 `PLR_CHAIN` values (every one has a writer in this build). */
 export const CHAIN_NAMES = ["near", "evm", "stellar", "solana", "zcash"] as const;
 export type ChainName = (typeof CHAIN_NAMES)[number];
 
@@ -33,7 +36,12 @@ export interface ZcashConfig {
 }
 
 /** The registry an instance registers on, selected by `PLR_CHAIN` (default `near`). */
-export type RegistryConfig = { chain: "near"; near: NearConfig } | { chain: "zcash"; zcash: ZcashConfig };
+export type RegistryConfig =
+  | { chain: "near"; near: NearConfig }
+  | { chain: "evm"; evm: EvmConfig }
+  | { chain: "stellar"; stellar: StellarConfig }
+  | { chain: "solana"; solana: SolanaConfig }
+  | { chain: "zcash"; zcash: ZcashConfig };
 
 export interface RouterConfig {
   tdxSocket: string;
@@ -91,7 +99,13 @@ export function loadConfig(env: Env = process.env): RouterConfig {
   const llmApiKey = llmApiKeyRaw === undefined || llmApiKeyRaw === "" ? null : llmApiKeyRaw;
   if (llmApiKey !== null && !/^[0-9a-f]{64}$/.test(llmApiKey)) bad("PLR_LLM_API_KEY");
 
-  const { registry, near, nearConfigError } = loadRegistrySafe(env, { nearRegistryVar: "PLR_REGISTRY", zcashOwnerVar: "PLR_ZCASH_OWNER" });
+  const { registry, near, nearConfigError } = loadRegistrySafe(env, {
+    nearRegistryVar: "PLR_REGISTRY",
+    zcashOwnerVar: "PLR_ZCASH_OWNER",
+    evmRegistryVar: "PLR_EVM_REGISTRY",
+    stellarRegistryVar: "PLR_STELLAR_REGISTRY",
+    solanaRegistryVar: "PLR_SOLANA_REGISTRY",
+  });
   return { tdxSocket, composePath, host, port, llmPort, llmApiKey, anchorIntervalMs, near, registry, nearConfigError };
 }
 
@@ -99,6 +113,10 @@ export function loadConfig(env: Env = process.env): RouterConfig {
 export interface RegistryVars {
   nearRegistryVar: string;
   zcashOwnerVar: string;
+  /** Defaults: PLR_EVM_REGISTRY / PLR_STELLAR_REGISTRY / PLR_SOLANA_REGISTRY. */
+  evmRegistryVar?: string;
+  stellarRegistryVar?: string;
+  solanaRegistryVar?: string;
 }
 
 /**
@@ -118,7 +136,19 @@ export function loadRegistry(env: Env, vars: RegistryVars): RegistryConfig | nul
     const zcash = loadZcash(env, vars.zcashOwnerVar);
     return zcash === null ? null : { chain, zcash };
   }
-  return bad(`PLR_CHAIN ${chain} has no registry writer in this build`);
+  if (chain === "evm") {
+    const evm = loadEvm(env, vars.evmRegistryVar ?? "PLR_EVM_REGISTRY");
+    return evm === null ? null : { chain, evm };
+  }
+  if (chain === "stellar") {
+    const stellar = loadStellar(env, vars.stellarRegistryVar ?? "PLR_STELLAR_REGISTRY");
+    return stellar === null ? null : { chain, stellar };
+  }
+  if (chain === "solana") {
+    const solana = loadSolanaConfig(env, vars.solanaRegistryVar ?? "PLR_SOLANA_REGISTRY");
+    return solana === null ? null : { chain, solana };
+  }
+  return bad(`PLR_CHAIN ${String(chain)} has no registry writer in this build`);
 }
 
 /** {@link loadRegistry} that never throws: a configuration error disables registration (fail closed). */

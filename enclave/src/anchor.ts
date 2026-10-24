@@ -150,6 +150,7 @@ export class Anchorer {
     return this.#exclusive(async () => {
       if (this.#lastError === "E_OPERATOR_MISMATCH") return false; // permanent
       try {
+        await this.#o.chain.prepare?.();
         const rd = this.#o.keys.registrationReportData(this.#o.chain.contractId, this.#o.chain.operatorId);
         const { quote, eventLog } =
           this.#o.chain.reuseRegistrationQuote === true && this.#regQuote !== null ? this.#regQuote : await this.#o.attester.getQuote(rd);

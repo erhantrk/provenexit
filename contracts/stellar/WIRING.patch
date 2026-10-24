@@ -1,0 +1,138 @@
+--- a/enclave/src/config.ts
++++ b/enclave/src/config.ts
+@@ -1,6 +1,7 @@
+ /** Router configuration from the environment (set by the mock TDX host). Strictly validated; fail closed. */
+ import { PlrError, isTAddress, isZcashNetwork, parseZcashSecretKey, type ZcashNetwork } from "@plr/shared";
+ import { NEAR_ACCOUNT_RE, NEAR_KEY_RE } from "./near.js";
++import { loadStellar, type StellarConfig } from "./chains/stellar.js";
+ 
+ export interface NearConfig {
+   rpcUrl: string;
+@@ -33,7 +34,7 @@
+ }
+ 
+ /** The registry an instance registers on, selected by `PLR_CHAIN` (default `near`). */
+-export type RegistryConfig = { chain: "near"; near: NearConfig } | { chain: "zcash"; zcash: ZcashConfig };
++export type RegistryConfig = { chain: "near"; near: NearConfig } | { chain: "zcash"; zcash: ZcashConfig } | { chain: "stellar"; stellar: StellarConfig };
+ 
+ export interface RouterConfig {
+   tdxSocket: string;
+@@ -99,6 +100,7 @@
+ export interface RegistryVars {
+   nearRegistryVar: string;
+   zcashOwnerVar: string;
++  stellarRegistryVar?: string;
+ }
+ 
+ /**
+@@ -118,6 +120,10 @@
+     const zcash = loadZcash(env, vars.zcashOwnerVar);
+     return zcash === null ? null : { chain, zcash };
+   }
++  if (chain === "stellar") {
++    const stellar = loadStellar(env, vars.stellarRegistryVar ?? "PLR_STELLAR_REGISTRY");
++    return stellar === null ? null : { chain, stellar };
++  }
+   return bad(`PLR_CHAIN ${chain} has no registry writer in this build`);
+ }
+ 
+--- a/enclave/src/chains.ts
++++ b/enclave/src/chains.ts
+@@ -3,12 +3,15 @@
+ import { NearRegistryWriter } from "./near.js";
+ import type { RegistryWriter } from "./registry-writer.js";
+ import { ZcashRegistryWriter } from "./zcash.js";
++import { createStellarWriter } from "./chains/stellar.js";
+ 
+ /** @throws PlrError E_BAD_INPUT on invalid settings (already validated by the config loaders) */
+ export function createRegistryWriter(c: RegistryConfig): RegistryWriter {
+   switch (c.chain) {
+     case "near":
+       return new NearRegistryWriter(c.near);
++    case "stellar":
++      return createStellarWriter(c.stellar);
+     case "zcash":
+       return new ZcashRegistryWriter({ rpc: c.zcash.rpcUrl, network: c.zcash.network, owner: c.zcash.owner, key: c.zcash.key, startHeight: c.zcash.startHeight });
+   }
+--- a/enclave/src/vpn/config.ts
++++ b/enclave/src/vpn/config.ts
+@@ -36,6 +36,7 @@
+   const anchorIntervalMs = intVar(env, "PLR_ANCHOR_INTERVAL_MS", 3000, 100, 3_600_000);
+   const nearRegistryVar = (env.PLR_VPN_REGISTRY ?? "") !== "" ? "PLR_VPN_REGISTRY" : "PLR_REGISTRY";
+   const zcashOwnerVar = (env.PLR_ZCASH_VPN_OWNER ?? "") !== "" ? "PLR_ZCASH_VPN_OWNER" : "PLR_ZCASH_OWNER";
+-  const { registry, near, nearConfigError } = loadRegistrySafe(env, { nearRegistryVar, zcashOwnerVar });
++  const stellarRegistryVar = (env.PLR_STELLAR_VPN_REGISTRY ?? "") !== "" ? "PLR_STELLAR_VPN_REGISTRY" : "PLR_STELLAR_REGISTRY";
++  const { registry, near, nearConfigError } = loadRegistrySafe(env, { nearRegistryVar, zcashOwnerVar, stellarRegistryVar });
+   return { tdxSocket, composePath, host, port, anchorIntervalMs, near, registry, nearConfigError };
+ }
+--- a/enclave/src/mock-tdx/host.ts
++++ b/enclave/src/mock-tdx/host.ts
+@@ -418,6 +418,10 @@
+   "PLR_ZCASH_OWNER",
+   "PLR_ZCASH_KEY",
+   "PLR_ZCASH_START_HEIGHT",
++  "PLR_STELLAR_RPC",
++  "PLR_STELLAR_PASSPHRASE",
++  "PLR_STELLAR_REGISTRY",
++  "PLR_STELLAR_KEY",
+ ] as const;
+ 
+ /**
+@@ -443,6 +447,11 @@
+   "PLR_ZCASH_VPN_OWNER",
+   "PLR_ZCASH_KEY",
+   "PLR_ZCASH_START_HEIGHT",
++  "PLR_STELLAR_RPC",
++  "PLR_STELLAR_PASSPHRASE",
++  "PLR_STELLAR_REGISTRY",
++  "PLR_STELLAR_VPN_REGISTRY",
++  "PLR_STELLAR_KEY",
+ ] as const;
+ 
+ export function freePort(): Promise<number> {
+@@ -900,7 +909,7 @@
+  * there is no PLR_REGISTRY (or PLR_ZCASH_OWNER) fallback — that is the LLM registry here, and the exit must never
+  * register on it (it uses PLR_VPN_REGISTRY / PLR_ZCASH_VPN_OWNER).
+  */
+-export const COMBO_EXIT_ENV_ALLOWLIST = EXIT_ENV_ALLOWLIST.filter((k) => k !== "PLR_REGISTRY" && k !== "PLR_ZCASH_OWNER");
++export const COMBO_EXIT_ENV_ALLOWLIST = EXIT_ENV_ALLOWLIST.filter((k) => k !== "PLR_REGISTRY" && k !== "PLR_ZCASH_OWNER" && k !== "PLR_STELLAR_REGISTRY");
+ 
+ /** What the host gives each process of a combo TD. */
+ export interface ComboEnvInputs {
+--- a/client/src/index.ts
++++ b/client/src/index.ts
+@@ -31,3 +31,5 @@
+ export { TwoHopClient, entryOrgOf, exitOrgOf, type TwoHopClientOptions, type TwoHopAttestation } from "./vpn/twohop.js";
+ export { startVpn, type VpnProxyOptions, type VpnProxyHandle, type VpnConnector } from "./vpn/socks5-server.js";
+ export { TUNNEL_UPGRADE, TransportError, type Lookup, type Dialer } from "./vpn/transport.js";
++
++export { StellarRegistry, type StellarRegistryOptions } from "./chains/stellar.js";
+--- a/e2e/src/harness.ts
++++ b/e2e/src/harness.ts
+@@ -49,6 +49,8 @@
+ import { CHAINS, OPERATORS, type Chain, type ChainAdmin, type ChainDriver, type OperatorAccount, type RegistryName, type Signer } from "./chains/driver.js";
+ import { startNearDriver } from "./chains/near.js";
+ import { startZcashDriver } from "./chains/zcash.js";
++import { startStellarDriver } from "./chains/stellar.js";
++import { StellarRegistry } from "@plr/client";
+ 
+ export { CHAINS, type Chain, type ChainAdmin, type OperatorAccount, type Signer };
+ export { REGISTRY_WASM } from "./chains/near.js";
+@@ -358,7 +360,7 @@
+   if (o.llm !== "mock" && o.llm !== "llama") throw new Error(`startStack: llm must be "mock" or "llama"`);
+   const chain: Chain = o.chain ?? "near";
+   if (!CHAINS.includes(chain)) throw new Error(`startStack: unknown chain: ${String(chain)}`);
+-  if (chain !== "near" && chain !== "zcash") throw new Error(`startStack: no ${chain} chain driver in this build (near | zcash)`);
++  if (chain !== "near" && chain !== "zcash" && chain !== "stellar") throw new Error(`startStack: no ${chain} chain driver in this build (near | zcash)`);
+   const info = loadBuildInfo();
+   const llmFile = o.llm === "llama" ? (process.env.PLR_MODEL_PATH || DEFAULT_LLAMA_MODEL) : undefined;
+   if (llmFile && !existsSync(llmFile)) throw new Error(`model not found: ${llmFile}`);
+@@ -401,7 +403,7 @@
+     const dns: StackDns = { set: doh.set, hits: doh.hits, setDown: doh.setDown };
+ 
+     const driverOpts = { dir: runDir, trustedRoot, instanceTtlMs: INSTANCE_TTL_MS, ...(o.rpcPort !== undefined ? { rpcPort: o.rpcPort } : {}) };
+-    node = chain === "zcash" ? await startZcashDriver(driverOpts) : await startNearDriver(driverOpts);
++    node = chain === "zcash" ? await startZcashDriver(driverOpts) : chain === "stellar" ? await startStellarDriver(driverOpts, { reader: (r) => new StellarRegistry(r) }) : await startNearDriver(driverOpts);
+     const d: ChainDriver = node;
+     const { rpcUrl, contractId, vpnContractId, registry, vpnRegistry, admin, vpnAdmin, view, call, callVpn } = d;
+ 

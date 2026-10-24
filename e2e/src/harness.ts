@@ -17,7 +17,9 @@
  *   await S.stop();
  *
  * Chains (SPEC-CHAINS §6): `startStack({ chain })` — `near` (default: near-sandbox, both registries deployed as
- * contracts) or `zcash` (zebrad regtest, the registries are the record logs of two owner t-addresses). Owner policy
+ * contracts), the tier-B chains `evm` (anvil + two PlrRegistry deployments), `stellar` (one Stellar quickstart
+ * container, two Soroban registries) and `solana` (solana-test-validator with the program preloaded, two state
+ * accounts), or `zcash` (zebrad regtest, the registries are the record logs of two owner t-addresses). Owner policy
  * goes through `S.admin` / `S.vpnAdmin` (`ChainAdmin`) on every chain; `S.call` / `S.view` are the NEAR-native calls.
  *
  * Layout: `<root>/<id>/` is the stack's `runDir` (`<root>` = `runRoot()`: `PLR_RUN_ROOT`, else `<repo>/.run`, else
@@ -46,13 +48,20 @@ import { generateRootSecret, measureBoot, measureComboBoot, measureVpnBoot } fro
 import { isAttack, startAttackProxy, type AttackProxy } from "./attacks.js";
 import { isVpnAttack, startVpnAttackProxy } from "./vpn-attacks.js";
 import { startManaged, waitFor, type ManagedProcess } from "./procs.js";
-import { CHAINS, OPERATORS, type Chain, type ChainAdmin, type ChainDriver, type OperatorAccount, type RegistryName, type Signer } from "./chains/driver.js";
+import { CHAINS, OPERATORS, type Chain, type ChainAdmin, type ChainDriver, type DriverOptions, type OperatorAccount, type RegistryName, type Signer } from "./chains/driver.js";
 import { startNearDriver } from "./chains/near.js";
 import { startZcashDriver } from "./chains/zcash.js";
+import { startEvmDriver } from "./chains/evm.js";
+import { startStellarDriver } from "./chains/stellar.js";
+import { startSolanaDriver } from "./chains/solana.js";
+import { EvmRegistry, SolanaRegistry, StellarRegistry } from "@plr/client";
 
 export { CHAINS, type Chain, type ChainAdmin, type OperatorAccount, type Signer };
 export { REGISTRY_WASM } from "./chains/near.js";
 export { zebradBinary } from "./chains/zcash.js";
+export { anvilBinary } from "./chains/evm.js";
+export { stellarBinary } from "./chains/stellar.js";
+export { solanaBinDir } from "./chains/solana.js";
 
 // ------------------------------------------------------------------------------------------------ public types
 
@@ -354,11 +363,26 @@ export const TEST_DOH_PORT = 18253;
 /** Bound on a registered instance becoming visible to the stack's reader (tier C: blocks + reader catch-up). */
 const REGISTERED_VISIBLE_TIMEOUT_MS = 120_000;
 
+/** The chain-driver registry (SPEC-CHAINS §6): one local node per stack for every chain in {@link CHAINS}. */
+function startChainDriver(chain: Chain, o: DriverOptions): Promise<ChainDriver> {
+  switch (chain) {
+    case "near":
+      return startNearDriver(o);
+    case "evm":
+      return startEvmDriver(o, { createReader: (r) => new EvmRegistry(r) });
+    case "stellar":
+      return startStellarDriver(o, { reader: (r) => new StellarRegistry(r) });
+    case "solana":
+      return startSolanaDriver(o, (p) => new SolanaRegistry(p));
+    case "zcash":
+      return startZcashDriver(o);
+  }
+}
+
 export async function startStack(o: StackOptions): Promise<DevStack> {
   if (o.llm !== "mock" && o.llm !== "llama") throw new Error(`startStack: llm must be "mock" or "llama"`);
   const chain: Chain = o.chain ?? "near";
   if (!CHAINS.includes(chain)) throw new Error(`startStack: unknown chain: ${String(chain)}`);
-  if (chain !== "near" && chain !== "zcash") throw new Error(`startStack: no ${chain} chain driver in this build (near | zcash)`);
   const info = loadBuildInfo();
   const llmFile = o.llm === "llama" ? (process.env.PLR_MODEL_PATH || DEFAULT_LLAMA_MODEL) : undefined;
   if (llmFile && !existsSync(llmFile)) throw new Error(`model not found: ${llmFile}`);
@@ -401,7 +425,7 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
     const dns: StackDns = { set: doh.set, hits: doh.hits, setDown: doh.setDown };
 
     const driverOpts = { dir: runDir, trustedRoot, instanceTtlMs: INSTANCE_TTL_MS, ...(o.rpcPort !== undefined ? { rpcPort: o.rpcPort } : {}) };
-    node = chain === "zcash" ? await startZcashDriver(driverOpts) : await startNearDriver(driverOpts);
+    node = await startChainDriver(chain, driverOpts);
     const d: ChainDriver = node;
     const { rpcUrl, contractId, vpnContractId, registry, vpnRegistry, admin, vpnAdmin, view, call, callVpn } = d;
 

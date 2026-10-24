@@ -1,7 +1,7 @@
 /**
  * The chain-agnostic registry writer (SPEC §7, SPEC-CHAINS §4): the operations an instance (router or VPN exit)
  * performs on its registry — registration, anchoring and the reads needed to resynchronise anchoring state.
- * Implementations: NEAR (`near.ts`, tier A) and Zcash (`zcash.ts`, tier C). `PLR_CHAIN` selects one (`chains.ts`).
+ * Implementations: NEAR (`near.ts`, tier A), EVM / Stellar / Solana (`chains/*.ts`, tier B) and Zcash (`zcash.ts`, tier C). `PLR_CHAIN` selects one (`chains.ts`).
  */
 import { isHex, type TdxEvent } from "@plr/shared";
 
@@ -41,6 +41,11 @@ export interface RegistryWriter {
    * same bytes avoids a window where the served quote and the commitment disagree). Default false.
    */
   readonly reuseRegistrationQuote?: boolean;
+  /**
+   * Optional async setup run before every registration attempt (e.g. learning the EVM chain id that `contractId`
+   * contains). Until it has succeeded, `contractId` may throw. A failure is retried like a failed registration.
+   */
+  prepare?(): Promise<void>;
   registerInstance(args: RegisterArgs): Promise<void>;
   /** Returns the chain's return value (the anchor id if the chain returns one). */
   anchorReceipts(args: AnchorArgs): Promise<unknown>;

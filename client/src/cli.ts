@@ -8,14 +8,23 @@
  * optional PLR_PROXY_PORT (default 18787) and PLR_PROXY_HOST (default 127.0.0.1).
  * VPN env: PLR_VPN_URL, PLR_VPN_REGISTRY, PLR_NEAR_RPC, PLR_TRUSTED_ROOT; optional PLR_VPN_SOCKS_PORT (default 18180),
  * PLR_VPN_ATTEST_TTL_MS (default 60000), PLR_VPN_ENTRY_URL (set ⇒ two-hop, SPEC-VPN §10, with PLR_VPN_URL as the exit).
- * Chain (SPEC-CHAINS §4, §5): PLR_CHAIN = near (default) | zcash. Zcash: PLR_ZCASH_RPC, PLR_ZCASH_NETWORK,
- * PLR_ZCASH_OWNER (or PLR_REGISTRY / PLR_VPN_REGISTRY = `zcash:<network>:<owner>`), PLR_ZCASH_START_HEIGHT.
+ * Chain (SPEC-CHAINS §3-§5, §9-§11): PLR_CHAIN = near (default) | evm | stellar | solana | zcash. PLR_REGISTRY /
+ * PLR_VPN_REGISTRY carry the SPEC-CHAINS §3 contractId (`evm:<chainId>:<0x…>`, `stellar:C…`, `solana:<state>`,
+ * `zcash:<network>:<owner>`), or the chain-specific variables below locate the registry.
+ * EVM: PLR_EVM_RPC (+ PLR_EVM_REGISTRY / PLR_EVM_VPN_REGISTRY and PLR_EVM_CHAIN_ID). Stellar: PLR_STELLAR_RPC,
+ * PLR_STELLAR_PASSPHRASE (+ PLR_STELLAR_REGISTRY / PLR_STELLAR_VPN_REGISTRY). Solana: PLR_SOLANA_RPC, PLR_SOLANA_PROGRAM
+ * (+ PLR_SOLANA_REGISTRY / PLR_SOLANA_VPN_REGISTRY). Zcash: PLR_ZCASH_RPC, PLR_ZCASH_NETWORK, PLR_ZCASH_OWNER,
+ * PLR_ZCASH_START_HEIGHT.
  */
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { PlrError, isHex, isPlrError, isTAddress, isValidP256Pub, isZcashNetwork, fromHex, toHex, type RegistryReader, type ZcashNetwork } from "@plr/shared";
 import { NearRegistry, checkRpcUrl } from "./near-registry.js";
 import { ZcashRegistry, parseZcashContractId } from "./zcash-registry.js";
+import { EvmRegistry, evmContractId, isEvmChainId, parseEvmContractId } from "./chains/evm.js";
+import { StellarRegistry, isStellarPassphrase } from "./chains/stellar.js";
+import { SolanaRegistry, parseSolanaContractId, parseSolanaKey } from "./chains/solana.js";
+import { StrKey } from "@stellar/stellar-sdk";
 import { PrivateClient } from "./client.js";
 import { startProxy } from "./proxy.js";
 import { TracingRegistry, checkLines, formatCheckLine } from "./verify-report.js";
@@ -30,7 +39,15 @@ export interface CliIo {
 }
 
 /** Registry chains this client can read (SPEC-CHAINS §1); other `PLR_CHAIN` values are refused. */
-export type CliChain = "near" | "zcash";
+export type CliChain = "near" | "evm" | "stellar" | "solana" | "zcash";
+
+/** Tier-B reader extras (SPEC-CHAINS §10, §11): what the contractId alone does not say. */
+export interface StellarCliConfig {
+  networkPassphrase: string;
+}
+export interface SolanaCliConfig {
+  programId: string;
+}
 
 /** Zcash reader settings (SPEC-CHAINS §5). */
 export interface ZcashCliConfig {
@@ -48,6 +65,10 @@ export interface CliConfig {
   contractId: string;
   /** Set iff `chain` is zcash. */
   zcash?: ZcashCliConfig;
+  /** Set iff `chain` is stellar. */
+  stellar?: StellarCliConfig;
+  /** Set iff `chain` is solana. */
+  solana?: SolanaCliConfig;
   trustedRoot: Uint8Array;
   proxyPort: number;
   proxyHost: string;
@@ -62,6 +83,10 @@ export interface VpnCliConfig {
   contractId: string;
   /** Set iff `chain` is zcash. */
   zcash?: ZcashCliConfig;
+  /** Set iff `chain` is stellar. */
+  stellar?: StellarCliConfig;
+  /** Set iff `chain` is solana. */
+  solana?: SolanaCliConfig;
   trustedRoot: Uint8Array;
   socksPort: number;
   attestTtlMs: number;
@@ -72,6 +97,9 @@ const DEFAULTS = {
   rpc: "http://127.0.0.1:3030",
   /** Zebra's default RPC ports: 8232 (mainnet), 18232 (testnet / regtest). */
   zcashRpc: (n: ZcashNetwork): string => `http://127.0.0.1:${n === "mainnet" ? 8232 : 18232}`,
+  /** anvil / solana-test-validator defaults. */
+  evmRpc: "http://127.0.0.1:8545",
+  solanaRpc: "http://127.0.0.1:8899",
   proxyPort: 18787,
   proxyHost: "127.0.0.1",
   vpnExit: "http://127.0.0.1:18200",
@@ -105,7 +133,15 @@ env:   PLR_ROUTER_URL (default ${DEFAULTS.router})
        PLR_REGISTRY   registry contract account id (required)
        PLR_TRUSTED_ROOT  pinned attestation root, 128 hex (required)
        PLR_PROXY_PORT (default ${DEFAULTS.proxyPort}), PLR_PROXY_HOST (default ${DEFAULTS.proxyHost})
-chain: PLR_CHAIN      near (default) | zcash — which chain holds the registry
+chain: PLR_CHAIN      near (default) | evm | stellar | solana | zcash — which chain holds the registry
+       tier B: PLR_REGISTRY / PLR_VPN_REGISTRY = SPEC-CHAINS contractId (evm:<chainId>:<0x address> | stellar:C… |
+               solana:<state account>), or the chain-specific registry variables
+       evm:    PLR_EVM_RPC (default ${DEFAULTS.evmRpc}; also Monad testnet, chain id 10143), or
+               PLR_EVM_REGISTRY / PLR_EVM_VPN_REGISTRY (address) + PLR_EVM_CHAIN_ID
+       stellar: PLR_STELLAR_RPC (Soroban RPC, required), PLR_STELLAR_PASSPHRASE (required),
+               PLR_STELLAR_REGISTRY / PLR_STELLAR_VPN_REGISTRY (C… contract)
+       solana: PLR_SOLANA_RPC (default ${DEFAULTS.solanaRpc}), PLR_SOLANA_PROGRAM (program id, required),
+               PLR_SOLANA_REGISTRY / PLR_SOLANA_VPN_REGISTRY (state account)
        zcash:  PLR_ZCASH_RPC (Zebra JSON-RPC; https, or http to a loopback host only; default http://127.0.0.1:18232,
                8232 on mainnet), PLR_ZCASH_NETWORK (regtest | testnet | mainnet), PLR_ZCASH_OWNER (registry owner
                t-address; or PLR_REGISTRY / PLR_VPN_REGISTRY = zcash:<network>:<owner>), PLR_ZCASH_START_HEIGHT (default 0),
@@ -140,9 +176,113 @@ function portFrom(env: Record<string, string | undefined>, name: string, dflt: n
 
 function chainFrom(env: Record<string, string | undefined>): CliChain {
   const c = env.PLR_CHAIN || "near";
-  if (c === "near" || c === "zcash") return c;
-  if (c === "evm" || c === "stellar" || c === "solana") throw new ConfigError(`PLR_CHAIN=${c} is not supported by this client yet (near | zcash)`);
-  throw new ConfigError("PLR_CHAIN must be near or zcash");
+  if (c === "near" || c === "evm" || c === "stellar" || c === "solana" || c === "zcash") return c;
+  throw new ConfigError("PLR_CHAIN must be near, evm, stellar, solana or zcash");
+}
+
+type RegistryVar = "PLR_REGISTRY" | "PLR_VPN_REGISTRY";
+type RegistryLocation = { chain: CliChain; rpcUrl: string; contractId: string; zcash?: ZcashCliConfig; stellar?: StellarCliConfig; solana?: SolanaCliConfig };
+
+function chainRpcFrom(env: Record<string, string | undefined>, name: string, dflt: string | undefined): string {
+  const rpcUrl = env[name] || dflt;
+  if (rpcUrl === undefined) throw new ConfigError(`${name} is required`);
+  try {
+    checkRpcUrl(rpcUrl);
+  } catch {
+    throw new ConfigError(`${name} must be an https URL (plain http only to a loopback host: the node decides the registry checks)`);
+  }
+  return rpcUrl;
+}
+
+/**
+ * The tier-B registry id from `registryVar` (the full SPEC-CHAINS §3 contractId, parsed by `parse`) and/or the
+ * chain-specific variable (`specific`, turned into a contractId by `fromSpecific`); when both are given they must agree.
+ */
+function tierBContractId(
+  env: Record<string, string | undefined>,
+  registryVar: RegistryVar,
+  shape: string,
+  parse: (v: string) => string | null,
+  specific: string,
+  fromSpecific: (v: string) => string | null,
+): string {
+  const reg = env[registryVar] || undefined;
+  const spec = env[specific] || undefined;
+  let id: string | null = null;
+  if (reg !== undefined) {
+    id = parse(reg);
+    if (id === null) throw new ConfigError(`${registryVar} must be ${shape}`);
+  }
+  if (spec !== undefined) {
+    const s = fromSpecific(spec);
+    if (s === null) throw new ConfigError(`${specific} is not a valid registry`);
+    if (id !== null && id !== s) throw new ConfigError(`${specific} disagrees with ${registryVar}`);
+    id = s;
+  }
+  if (id === null) throw new ConfigError(`${registryVar} (${shape}) or ${specific} is required`);
+  return id;
+}
+
+/** EVM / Monad (SPEC-CHAINS §9): PLR_EVM_RPC, and `evm:<chainId>:<address>` or PLR_EVM_[VPN_]REGISTRY + PLR_EVM_CHAIN_ID. */
+function evmFrom(env: Record<string, string | undefined>, registryVar: RegistryVar): RegistryLocation {
+  const rpcUrl = chainRpcFrom(env, "PLR_EVM_RPC", DEFAULTS.evmRpc);
+  const chainStr = env.PLR_EVM_CHAIN_ID || undefined;
+  const chainId = chainStr === undefined ? null : /^\d{1,16}$/.test(chainStr) && isEvmChainId(Number(chainStr)) ? Number(chainStr) : NaN;
+  if (Number.isNaN(chainId)) throw new ConfigError("PLR_EVM_CHAIN_ID must be a chain id");
+  const contractId = tierBContractId(
+    env, registryVar, "evm:<chainId>:<0x lowercase address>",
+    (v) => {
+      const id = parseEvmContractId(v);
+      if (id === null) return null;
+      if (chainId !== null && id.chainId !== chainId) throw new ConfigError(`PLR_EVM_CHAIN_ID disagrees with ${registryVar}`);
+      return evmContractId(id.chainId, id.address);
+    },
+    registryVar === "PLR_REGISTRY" ? "PLR_EVM_REGISTRY" : "PLR_EVM_VPN_REGISTRY",
+    (v) => {
+      if (chainId === null) throw new ConfigError("PLR_EVM_CHAIN_ID is required with an EVM registry address");
+      try {
+        return evmContractId(chainId, v);
+      } catch {
+        return null;
+      }
+    },
+  );
+  return { chain: "evm", rpcUrl, contractId };
+}
+
+/** Stellar (SPEC-CHAINS §10): PLR_STELLAR_RPC, PLR_STELLAR_PASSPHRASE, `stellar:C…` or PLR_STELLAR_[VPN_]REGISTRY. */
+function stellarFrom(env: Record<string, string | undefined>, registryVar: RegistryVar): RegistryLocation {
+  const rpcUrl = chainRpcFrom(env, "PLR_STELLAR_RPC", undefined);
+  const networkPassphrase = env.PLR_STELLAR_PASSPHRASE;
+  if (!isStellarPassphrase(networkPassphrase)) throw new ConfigError("PLR_STELLAR_PASSPHRASE (network passphrase) is required");
+  const contract = (c: string): string | null => (StrKey.isValidContract(c) ? `stellar:${c}` : null);
+  const contractId = tierBContractId(
+    env, registryVar, "stellar:<C… contract>",
+    (v) => (v.startsWith("stellar:") ? contract(v.slice(8)) : null),
+    registryVar === "PLR_REGISTRY" ? "PLR_STELLAR_REGISTRY" : "PLR_STELLAR_VPN_REGISTRY",
+    contract,
+  );
+  return { chain: "stellar", rpcUrl, contractId, stellar: { networkPassphrase } };
+}
+
+/** Solana (SPEC-CHAINS §11): PLR_SOLANA_RPC, PLR_SOLANA_PROGRAM, `solana:<state>` or PLR_SOLANA_[VPN_]REGISTRY. */
+function solanaFrom(env: Record<string, string | undefined>, registryVar: RegistryVar): RegistryLocation {
+  const rpcUrl = chainRpcFrom(env, "PLR_SOLANA_RPC", DEFAULTS.solanaRpc);
+  const program = parseSolanaKey(env.PLR_SOLANA_PROGRAM);
+  if (program === null) throw new ConfigError("PLR_SOLANA_PROGRAM (registry program id, base58) is required");
+  const contractId = tierBContractId(
+    env, registryVar, "solana:<state account base58>",
+    (v) => {
+      const st = parseSolanaContractId(v);
+      return st === null ? null : `solana:${st}`;
+    },
+    registryVar === "PLR_REGISTRY" ? "PLR_SOLANA_REGISTRY" : "PLR_SOLANA_VPN_REGISTRY",
+    (v) => {
+      const k = parseSolanaKey(v);
+      return k === null ? null : `solana:${k.toBase58()}`;
+    },
+  );
+  return { chain: "solana", rpcUrl, contractId, solana: { programId: program.toBase58() } };
 }
 
 /**
@@ -189,20 +329,34 @@ function zcashFrom(
   return { rpcUrl, contractId: `zcash:${network}:${owner}`, zcash };
 }
 
-/** Registry location for the selected chain: NEAR (PLR_NEAR_RPC + `registryVar`) or Zcash (SPEC-CHAINS §5 env). */
+/** Registry location for the selected chain: NEAR (PLR_NEAR_RPC + `registryVar`) or the SPEC-CHAINS env of the others. */
 function registryFrom(
   env: Record<string, string | undefined>,
   registryVar: "PLR_REGISTRY" | "PLR_VPN_REGISTRY",
-): { chain: CliChain; rpcUrl: string; contractId: string; zcash?: ZcashCliConfig } {
+): RegistryLocation {
   const chain = chainFrom(env);
   if (chain === "zcash") return { chain, ...zcashFrom(env, registryVar) };
+  if (chain === "evm") return evmFrom(env, registryVar);
+  if (chain === "stellar") return stellarFrom(env, registryVar);
+  if (chain === "solana") return solanaFrom(env, registryVar);
   const contractId = env[registryVar];
   if (contractId === undefined || contractId === "") throw new ConfigError(`${registryVar} is required`);
   return { chain, rpcUrl: rpcUrlFrom(env), contractId };
 }
 
 /** The registry reader for a loaded config. */
-export function makeRegistry(cfg: { chain: CliChain; rpcUrl: string; contractId: string; zcash?: ZcashCliConfig }): RegistryReader {
+export function makeRegistry(cfg: RegistryLocation): RegistryReader {
+  if (cfg.chain === "evm") return new EvmRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.contractId });
+  if (cfg.chain === "stellar") {
+    if (cfg.stellar === undefined) throw new ConfigError("stellar settings missing");
+    return new StellarRegistry({ rpcUrl: cfg.rpcUrl, networkPassphrase: cfg.stellar.networkPassphrase, contract: cfg.contractId });
+  }
+  if (cfg.chain === "solana") {
+    if (cfg.solana === undefined) throw new ConfigError("solana settings missing");
+    const state = parseSolanaContractId(cfg.contractId);
+    if (state === null) throw new ConfigError("solana contractId malformed");
+    return new SolanaRegistry({ rpcUrl: cfg.rpcUrl, programId: cfg.solana.programId, registry: state });
+  }
   if (cfg.chain === "zcash") {
     const z = cfg.zcash;
     if (z === undefined) throw new ConfigError("zcash settings missing");

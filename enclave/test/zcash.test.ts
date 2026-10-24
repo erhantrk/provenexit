@@ -383,7 +383,7 @@ describe("PLR_CHAIN config and host env (SPEC-CHAINS §4, §5)", () => {
 
   it("invalid, partial or unsupported chain settings disable registration (fail closed)", () => {
     for (const bad of [
-      { PLR_CHAIN: "dogecoin" }, { PLR_CHAIN: "evm" }, { ...z, PLR_ZCASH_KEY: "" }, { ...z, PLR_ZCASH_NETWORK: "mainnet" },
+      { PLR_CHAIN: "dogecoin" }, { PLR_CHAIN: "evm", PLR_EVM_RPC: "http://127.0.0.1:8545" }, { ...z, PLR_ZCASH_KEY: "" }, { ...z, PLR_ZCASH_NETWORK: "mainnet" },
       { ...z, PLR_ZCASH_OWNER: "t1notanaddress" }, { ...z, PLR_ZCASH_RPC: "file:///etc/passwd" }, { ...z, PLR_ZCASH_KEY: "zz" },
       { ...z, PLR_ZCASH_START_HEIGHT: "-1" },
     ]) {

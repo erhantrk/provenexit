@@ -36,6 +36,14 @@ export function loadExitConfig(env: Env = process.env): ExitConfig {
   const anchorIntervalMs = intVar(env, "PLR_ANCHOR_INTERVAL_MS", 3000, 100, 3_600_000);
   const nearRegistryVar = (env.PLR_VPN_REGISTRY ?? "") !== "" ? "PLR_VPN_REGISTRY" : "PLR_REGISTRY";
   const zcashOwnerVar = (env.PLR_ZCASH_VPN_OWNER ?? "") !== "" ? "PLR_ZCASH_VPN_OWNER" : "PLR_ZCASH_OWNER";
-  const { registry, near, nearConfigError } = loadRegistrySafe(env, { nearRegistryVar, zcashOwnerVar });
+  // Each chain: the VPN registry variable if set, else the shared one (a lone exit may use the plain name).
+  const vpnVar = (vpn: string, plain: string): string => ((env[vpn] ?? "") !== "" ? vpn : plain);
+  const { registry, near, nearConfigError } = loadRegistrySafe(env, {
+    nearRegistryVar,
+    zcashOwnerVar,
+    evmRegistryVar: vpnVar("PLR_EVM_VPN_REGISTRY", "PLR_EVM_REGISTRY"),
+    stellarRegistryVar: vpnVar("PLR_STELLAR_VPN_REGISTRY", "PLR_STELLAR_REGISTRY"),
+    solanaRegistryVar: vpnVar("PLR_SOLANA_VPN_REGISTRY", "PLR_SOLANA_REGISTRY"),
+  });
   return { tdxSocket, composePath, host, port, anchorIntervalMs, near, registry, nearConfigError };
 }

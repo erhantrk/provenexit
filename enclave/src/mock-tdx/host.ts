@@ -418,6 +418,19 @@ export const ROUTER_ENV_ALLOWLIST = [
   "PLR_ZCASH_OWNER",
   "PLR_ZCASH_KEY",
   "PLR_ZCASH_START_HEIGHT",
+  // SPEC-CHAINS §9-§11: tier-B registries (EVM / Monad, Stellar, Solana)
+  "PLR_EVM_RPC",
+  "PLR_EVM_CHAIN_ID",
+  "PLR_EVM_REGISTRY",
+  "PLR_EVM_KEY",
+  "PLR_STELLAR_RPC",
+  "PLR_STELLAR_PASSPHRASE",
+  "PLR_STELLAR_REGISTRY",
+  "PLR_STELLAR_KEY",
+  "PLR_SOLANA_RPC",
+  "PLR_SOLANA_PROGRAM",
+  "PLR_SOLANA_REGISTRY",
+  "PLR_SOLANA_KEY",
 ] as const;
 
 /**
@@ -443,6 +456,22 @@ export const EXIT_ENV_ALLOWLIST = [
   "PLR_ZCASH_VPN_OWNER",
   "PLR_ZCASH_KEY",
   "PLR_ZCASH_START_HEIGHT",
+  // SPEC-CHAINS §9-§11: tier-B VPN registries (PLR_<CHAIN>_VPN_REGISTRY, else PLR_<CHAIN>_REGISTRY)
+  "PLR_EVM_RPC",
+  "PLR_EVM_CHAIN_ID",
+  "PLR_EVM_REGISTRY",
+  "PLR_EVM_VPN_REGISTRY",
+  "PLR_EVM_KEY",
+  "PLR_STELLAR_RPC",
+  "PLR_STELLAR_PASSPHRASE",
+  "PLR_STELLAR_REGISTRY",
+  "PLR_STELLAR_VPN_REGISTRY",
+  "PLR_STELLAR_KEY",
+  "PLR_SOLANA_RPC",
+  "PLR_SOLANA_PROGRAM",
+  "PLR_SOLANA_REGISTRY",
+  "PLR_SOLANA_VPN_REGISTRY",
+  "PLR_SOLANA_KEY",
 ] as const;
 
 export function freePort(): Promise<number> {
@@ -897,10 +926,17 @@ export const COMBO_ROUTER_ENV_ALLOWLIST = ROUTER_ENV_ALLOWLIST;
 
 /**
  * Exit env keys the host forwards in a combo: the VPN registry settings and listen host/port. Unlike a lone exit,
- * there is no PLR_REGISTRY (or PLR_ZCASH_OWNER) fallback — that is the LLM registry here, and the exit must never
- * register on it (it uses PLR_VPN_REGISTRY / PLR_ZCASH_VPN_OWNER).
+ * there is no PLR_REGISTRY (PLR_ZCASH_OWNER, PLR_<EVM|STELLAR|SOLANA>_REGISTRY) fallback — that is the LLM registry here,
+ * and the exit must never register on it (it uses PLR_VPN_REGISTRY / PLR_ZCASH_VPN_OWNER / PLR_<CHAIN>_VPN_REGISTRY).
  */
-export const COMBO_EXIT_ENV_ALLOWLIST = EXIT_ENV_ALLOWLIST.filter((k) => k !== "PLR_REGISTRY" && k !== "PLR_ZCASH_OWNER");
+const COMBO_EXIT_EXCLUDED: ReadonlySet<string> = new Set([
+  "PLR_REGISTRY",
+  "PLR_ZCASH_OWNER",
+  "PLR_EVM_REGISTRY",
+  "PLR_STELLAR_REGISTRY",
+  "PLR_SOLANA_REGISTRY",
+]);
+export const COMBO_EXIT_ENV_ALLOWLIST = EXIT_ENV_ALLOWLIST.filter((k) => !COMBO_EXIT_EXCLUDED.has(k));
 
 /** What the host gives each process of a combo TD. */
 export interface ComboEnvInputs {

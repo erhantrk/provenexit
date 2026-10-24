@@ -13,9 +13,13 @@
 #   PLR_VPN_ENTRY_URL= node client/dist/cli.js vpn                  # one hop (empty = unset), straight to PLR_VPN_URL
 # Stop with scripts/dev-down.sh.
 #
-# Env: PLR_CHAIN=near|zcash (default near; zcash = SPEC-CHAINS tier C: a zebrad regtest node instead of near-sandbox,
-#        the registries are the OP_RETURN record logs of two owner t-addresses; needs zebrad, see README "Multi-chain"),
-#      PLR_LLM=llama|mock (default llama: real Qwen 0.5B), PLR_RPC_PORT (default 3030; zcash: 18232),
+# Env: PLR_CHAIN=near|evm|stellar|solana|zcash (default near; see README "Multi-chain"):
+#        evm / stellar / solana = SPEC-CHAINS tier B: anvil, a Stellar quickstart container (Docker) or
+#        solana-test-validator instead of near-sandbox, with two registry deployments (build the contracts first:
+#        contracts/evm `forge build`, contracts/stellar `stellar contract build`, contracts/solana `cargo-build-sbf`);
+#        zcash = tier C: a zebrad regtest node, the registries are the OP_RETURN record logs of two owner t-addresses,
+#      PLR_LLM=llama|mock (default llama: real Qwen 0.5B),
+#      PLR_RPC_PORT (default near 3030, evm 8545, stellar 8000, solana 8899, zcash 18232),
 #      PLR_ROUTER_PORT (default 18100), PLR_EXIT_PORT (default 18200, the VPN exit),
 #      PLR_EXTRA=evil-logger,mitm-key,vpn-honest-test,vpn-evil-logger,vpn-mitm-key,… (extra routers / exits),
 #      PLR_DESTINATION=1 (also start a local HTTP test destination; port in PLR_DEST_PORT),
@@ -52,8 +56,11 @@ if [[ -n "$COMBO_ARG" && -n "${PLR_EXTRA:-}" ]]; then echo "PLR_COMBO runs one T
 CHAIN="${PLR_CHAIN:-near}"
 case "$CHAIN" in
   near) DEFAULT_RPC_PORT=3030 ;;
+  evm) DEFAULT_RPC_PORT=8545 ;;
+  stellar) DEFAULT_RPC_PORT=8000 ;;
+  solana) DEFAULT_RPC_PORT=8899 ;;
   zcash) DEFAULT_RPC_PORT=18232 ;;
-  *) echo "PLR_CHAIN must be near or zcash" >&2; exit 1 ;;
+  *) echo "PLR_CHAIN must be near, evm, stellar, solana or zcash" >&2; exit 1 ;;
 esac
 
 node e2e/dist/stack-cli.js up \

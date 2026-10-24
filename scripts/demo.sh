@@ -11,7 +11,9 @@
 #   both services verified, chat + tunnel, per-registry revocation, and the production combo's exit cannot reach
 #   the router's port → Zcash (SPEC-CHAINS tier C, only when zebrad is installed): a second stack on a zebrad regtest
 #   node whose registries are signed OP_RETURN record logs; `plr verify` (tier C: the client checks the registration
-#   evidence itself), `plr chat`, and revocation / re-approval via owner records.
+#   evidence itself), `plr chat`, and revocation / re-approval via owner records → tier B (SPEC-CHAINS §9-§11, each
+#   only when its node tools and built contract are present): EVM (anvil), Stellar (quickstart container), Solana
+#   (test validator) — verify, chat, revocation / re-approval by owner transactions.
 # Everything it starts is stopped on exit (trap), whatever happens.
 #
 # Env: PLR_LLM=llama|mock (default llama), PLR_SKIP_BUILD=1, NO_COLOR=1,
@@ -510,17 +512,84 @@ else
   stop_stack
   wait
   ZC_LOG_DIR="${PLR_STACK_LOG_DIR:-}"
+  ZC_STACK_LOG="$STACK_LOG"
 fi
+
+# =========================================================================================== PLR-CHAINS: tier B
+# One short stack per installed tier-B chain (SPEC-CHAINS §9-§11: anvil, a Stellar quickstart container, a Solana
+# test validator) whose contract artifact is built: verify (tier B), chat, revocation and re-approval by an owner
+# transaction. A chain whose tools or artifact are missing is skipped (never a failure).
+TIERB_PASSED=()
+SOLANA_DIR="${SOLANA_BIN_DIR:-$HOME/.local/share/solana/install/active_release/bin}"
+tierb_ready() {
+  case "$1" in
+    evm) [[ -f contracts/evm/out/PlrRegistry.sol/PlrRegistry.json ]] && { [[ -n "${ANVIL_BIN:-}" ]] || [[ -x "$HOME/.foundry/bin/anvil" ]] || command -v anvil >/dev/null; } ;;
+    stellar) [[ -f contracts/stellar/target/wasm32v1-none/release/plr_stellar_registry.wasm ]] && { [[ -n "${STELLAR_BIN:-}" ]] || command -v stellar >/dev/null || [[ -x /opt/homebrew/bin/stellar ]]; } && docker info >/dev/null 2>&1 ;;
+    solana) [[ -f contracts/solana/target/deploy/plr_registry_solana.so && -x "$SOLANA_DIR/solana-test-validator" ]] ;;
+  esac
+}
+for TB in evm stellar solana; do
+  if ! tierb_ready "$TB"; then step "$TB (SPEC-CHAINS tier B): skipped — node tools or the built contract are missing (README \"Tier B\")"; continue; fi
+  TB_ID="$ID-$TB"
+  ENV_FILE="$RUN/$TB_ID.env"; STACK_LOG="$RUN/$TB_ID.log"; STOP_FILE="$RUN/$TB_ID.stop"
+  step "$TB: a contract registry (tier B) — the chain stores the registration quote, the client verifies it"
+  : >"$STACK_LOG"
+  rm -f "$STOP_FILE"
+  PATH="$SOLANA_DIR:$PATH" node e2e/dist/stack-cli.js up --chain "$TB" --llm "$LLM" --id "$TB_ID" \
+    --env-out "$ENV_FILE" --stop-file "$STOP_FILE" --parent-pid "$$" </dev/null >"$STACK_LOG" 2>&1 &
+  STACK_PID=$!
+  STACK_STARTED=1
+  SHOWN=0
+  for _ in $(seq 1 1200); do
+    TOTAL=$(wc -l <"$STACK_LOG" | tr -d ' ')
+    if [[ $TOTAL -gt $SHOWN ]]; then sed -n "$((SHOWN + 1)),${TOTAL}p" "$STACK_LOG" | show; SHOWN=$TOTAL; fi
+    [[ -f "$ENV_FILE" ]] && break
+    grep -q "stack-cli: \(start failed\|stopped\)" "$STACK_LOG" && break
+    [[ -n "$(jobs -r)" ]] || break
+    sleep 0.5
+  done
+  if [[ ! -f "$ENV_FILE" ]]; then
+    sed -n "$((SHOWN + 1)),\$p" "$STACK_LOG" | show; bad "$TB stack failed to start (log: $STACK_LOG)"
+  else
+    # drop the previous stack's chain settings before loading this one
+    unset PLR_NEAR_RPC PLR_ZCASH_RPC PLR_ZCASH_NETWORK PLR_ZCASH_OWNER PLR_ZCASH_START_HEIGHT PLR_EVM_RPC PLR_EVM_CHAIN_ID
+    unset PLR_EVM_REGISTRY PLR_EVM_VPN_REGISTRY PLR_STELLAR_RPC PLR_STELLAR_PASSPHRASE PLR_STELLAR_REGISTRY
+    unset PLR_STELLAR_VPN_REGISTRY PLR_SOLANA_RPC PLR_SOLANA_PROGRAM PLR_SOLANA_REGISTRY PLR_SOLANA_VPN_REGISTRY
+    set -a; . "$ENV_FILE"; set +a
+    unset PLR_VPN_ENTRY_URL
+    ok "$TB stack ready: router $PLR_ROUTER_URL · registry $PLR_REGISTRY"
+    TB_FAIL_BEFORE=$FAILURES
+    run "PLR_CHAIN=$TB plr verify"
+    if plr verify 2>&1 | show; then ok "router verified against the $TB registry (tier B)"; else bad "honest router failed verification on $TB"; fi
+    run "plr chat \"Say hello in three words.\""
+    if plr chat "Say hello in three words." 2>&1 | show; then ok "answer received; receipt signature verified"; else bad "chat failed on $TB"; fi
+    run "owner revoke_compose $PLR_COMPOSE_HASH   # an owner transaction on $TB"
+    owner revoke_compose "{\"hash\":\"$PLR_COMPOSE_HASH\"}" 2>&1 | show
+    expect_refusal E_COMPOSE_NOT_ALLOWED node "$ROOT/client/dist/cli.js" chat "Say hello in three words."
+    run "owner allow_compose $PLR_COMPOSE_HASH"
+    owner allow_compose "{\"hash\":\"$PLR_COMPOSE_HASH\"}" 2>&1 | show
+    if plr chat "Say hello in three words." 2>&1 | show; then ok "service restored by the re-approval"; else bad "chat failed after re-approval on $TB"; fi
+    [[ $FAILURES -eq $TB_FAIL_BEFORE ]] && TIERB_PASSED+=("$TB")
+  fi
+  printf '\n%s━━ %s shutdown%s\n' "$B$C" "$TB" "$X"
+  stop_stack
+  wait
+  if [[ $FAILURES -eq 0 ]]; then rm -rf "$STACK_LOG" ${PLR_STACK_LOG_DIR:+"$PLR_STACK_LOG_DIR"}; fi
+  rm -f "$ENV_FILE" "${ENV_FILE%.env}.owner.json"
+done
 
 # ------------------------------------------------------------------------------------------- summary
 printf '\n'
 if [[ $FAILURES -eq 0 ]]; then
   rm -rf "$NEAR_LOG_DIR" "$NEAR_STACK_LOG"   # kept only when something failed
-  if [[ $ZCASH_RAN == 1 ]]; then rm -rf "$STACK_LOG" ${ZC_LOG_DIR:+"$ZC_LOG_DIR"}; fi
+  if [[ $ZCASH_RAN == 1 ]]; then rm -rf "$ZC_STACK_LOG" ${ZC_LOG_DIR:+"$ZC_LOG_DIR"}; fi
   printf '%s━━ DEMO PASSED: honest router served privately; evil build, MITM and revoked build were all refused before any prompt left the client.%s\n' "$B$G" "$X"
   printf '%s━━ VPN PASSED: attested exit tunnelled end-to-end with no logs; evil exit, MITM, revoked build and forbidden targets were all refused before any byte reached a destination.%s\n' "$B$G" "$X"
   printf '%s━━ DNS + TWO-HOP PASSED: names resolved only over DoH inside the exit (resolver down ⇒ E_DNS, no fallback); two hops of different organizations verified and chained, same organization refused, a logging entry saw only the exit.%s\n' "$B$G" "$X"
   printf '%s━━ COMBO PASSED: one TD served the attested router and the attested exit (same measurement, own keys, own registries); revoking one role left the other serving; the production exit could not reach the router.%s\n' "$B$G" "$X"
+  if [[ ${#TIERB_PASSED[@]} -gt 0 ]]; then
+    printf '%s━━ TIER B PASSED (%s): routers registered on contract registries verified (registration quote stored on-chain, checked by the client), served chats, and were refused after the owner revocation.%s\n' "$B$G" "${TIERB_PASSED[*]}" "$X"
+  fi
   if [[ $ZCASH_RAN == 1 ]]; then
     printf '%s━━ ZCASH PASSED: a router registered in a Zcash OP_RETURN record log verified (tier C: registration evidence checked by the client), served a private chat, and was refused after the owner revocation record.%s\n' "$B$G" "$X"
   fi

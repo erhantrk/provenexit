@@ -251,8 +251,12 @@ function getAnchor(uint256 id) external view returns (bytes32 keyHash, bytes32 r
 `registerInstance` rules: `msg.sender` must have a non-empty org (`E_OPERATOR_UNAPPROVED`); `keyHash = sha256("PLR-v1" ‖ x ‖ ed)`;
 `quote.length == 828`, version 4, att key type 2, tee type 0x81 (`E_QUOTE_FORMAT`); `quote[568:600] == keyHash` and
 `quote[600:632] == registrationNonce(contractId(), lowercase-hex(msg.sender))` per SPEC §5 rev 1.3 (`E_REPORT_DATA`). The first
-registrant of a key owns it (others ⇒ `E_UNAUTHORIZED`); re-registration by the owner refreshes expiry and replaces the quote,
-keeping `nextSeq`. The quote signature is NOT verified on-chain (tier B; clients verify it, SPEC-CHAINS §2).
+registrant of a key owns it while the registry owner approves that operator (others ⇒ `E_UNAUTHORIZED`; expiry alone never
+frees a key); re-registration by that operator refreshes expiry and replaces the quote, keeping `nextSeq`. If the record's operator
+is no longer approved (§1), another approved operator may take the key over as a fresh record (`registeredAtMs` = now,
+`nextSeq` = 0, new quote): the owner's remedy against an approved operator that registered someone else's (public) key hash with
+an unsigned quote (Solana: the holder's `["op", state, holder]` PDA is passed as optional account 5). Tier-B readers return null
+for an instance whose operator is unapproved (§1). The quote signature is NOT verified on-chain (tier B; clients verify it, SPEC-CHAINS §2).
 `anchorReceipts`: instance exists and unexpired, `msg.sender == operator`, compose and OS still allowed, `firstSeq == nextSeq`,
 `1 ≤ count ≤ 10 000`, `sig.length == 64` (stored, verified by clients). Events for every state change.
 Instance-side env: `PLR_CHAIN=evm`, `PLR_EVM_RPC`, `PLR_EVM_REGISTRY` (address), `PLR_EVM_KEY` (operator secp256k1 secret hex).

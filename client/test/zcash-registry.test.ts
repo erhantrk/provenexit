@@ -572,7 +572,7 @@ describe("plr CLI with PLR_CHAIN=zcash", () => {
     expect(msg({ ...base, PLR_REGISTRY: "registry.test.near" })).toMatch(/zcash:/);
     expect(msg({ ...base, PLR_REGISTRY: CONTRACT, PLR_ZCASH_RPC: "http://zebra.example.com" })).toMatch(/PLR_ZCASH_RPC/);
     expect(msg({ ...base, PLR_REGISTRY: CONTRACT, PLR_ZCASH_START_HEIGHT: "-1" })).toMatch(/START_HEIGHT/);
-    expect(msg({ ...base, PLR_CHAIN: "evm", PLR_REGISTRY: "x" })).toMatch(/not supported/);
+    expect(msg({ ...base, PLR_CHAIN: "evm", PLR_REGISTRY: "x" })).toMatch(/evm:<chainId>/); // tier B is supported: strict ids
     expect(msg({ ...base, PLR_CHAIN: "dogecoin", PLR_REGISTRY: "x" })).toMatch(/PLR_CHAIN/);
   });
 

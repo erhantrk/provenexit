@@ -2,10 +2,11 @@
 /**
  * Long-running local stack for manual use and the demo (scripts/dev-up.sh, scripts/demo.sh).
  *
- *   node e2e/dist/stack-cli.js up [--chain near|zcash] [--llm llama|mock] [--rpc-port N] [--router-port N] [--exit-port N] [--id <id>] [--combo <variant>]
+ *   node e2e/dist/stack-cli.js up [--chain near|evm|stellar|solana|zcash] [--llm llama|mock] [--rpc-port N] [--router-port N] [--exit-port N] [--id <id>] [--combo <variant>]
  *                                 [--extra evil-logger,mitm-key,vpn-honest-test,vpn-evil-logger,…] [--destination]
  *                                 [--env-out .run/stack.env] [--dns-down-file <path>]
- *       Starts the chain (near-sandbox, or with `--chain zcash` a zebrad regtest node: SPEC-CHAINS §5, tier C) + both
+ *       Starts the chain (near-sandbox; `--chain evm|stellar|solana`: anvil / a Stellar quickstart container /
+ *       solana-test-validator, SPEC-CHAINS §9-§11, tier B; `--chain zcash`: a zebrad regtest node, §5, tier C) + both
  *       registries (LLM + VPN) + the test builds' DoH resolver (127.0.0.1:18253),
  *       approves and launches the honest router and the honest PRODUCTION VPN exit (SPEC-VPN; `vpn-honest`,
  *       approved on the VPN registry, registered by `operator`) (+ extra variants: router attacks, and VPN
@@ -41,7 +42,9 @@
  *   node e2e/dist/stack-cli.js owner <method> '<json args>' [--vpn] [--env-out .run/stack.env]
  *       Calls a registry owner method (allow_compose, revoke_compose, …) with the stack's owner key, on the LLM
  *       registry or (with --vpn) on the VPN registry. On a Zcash stack this posts the owner record (OP_RETURN) and waits
- *       until it is mined (`approve_operator` / `revoke_operator` take the operator's t-address as `account_id`).
+ *       until it is mined (`approve_operator` / `revoke_operator` take the operator's t-address as `account_id`). On
+ *       EVM / Stellar / Solana it sends the owner transaction and waits until it is included (`account_id` = the
+ *       chain's operator id: 0x address, G… strkey, base58 pubkey).
  */
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
@@ -50,12 +53,22 @@ import { parseArgs } from "node:util";
 import { Account, JsonRpcProvider, KeyPairSigner, type KeyPairString } from "near-api-js";
 import { toHex } from "@plr/shared";
 import { postOwnerRecord } from "./chains/zcash.js";
+import { postEvmOwnerCall } from "./chains/evm.js";
+import { postStellarOwnerCall } from "./chains/stellar.js";
+import { postSolanaOwnerCall } from "./chains/solana.js";
 import {
-  COMBO_VARIANTS, REPO_ROOT, VARIANTS, runRoot, VPN_VARIANTS, startStack, type ComboHandle, type ComboVariant, type Destination, type DevStack, type ExitHandle,
-  type RouterHandle, type Variant, type VpnVariant,
+  CHAINS, COMBO_VARIANTS, REPO_ROOT, VARIANTS, runRoot, VPN_VARIANTS, startStack, type ComboHandle, type ComboVariant, type Destination, type DevStack, type ExitHandle,
+  type Chain, type RouterHandle, type Variant, type VpnVariant,
 } from "./harness.js";
 import { signalAllManaged } from "./procs.js";
 
+const NODE_NAMES: Record<Chain, string> = {
+  near: "near-sandbox",
+  evm: "anvil",
+  stellar: "Stellar quickstart container",
+  solana: "solana-test-validator",
+  zcash: "zebrad regtest",
+};
 const DEFAULT_ENV_FILE = join(REPO_ROOT, ".run", "stack.env");
 const GAS = 300_000_000_000_000n;
 const SHUTDOWN_DEADLINE_MS = 20_000;
@@ -101,7 +114,7 @@ async function up(values: Record<string, string | boolean | undefined>): Promise
   const llm = (values.llm as string | undefined) ?? "llama";
   if (llm !== "mock" && llm !== "llama") die("--llm must be mock or llama");
   const chain = (values.chain as string | undefined) || "near";
-  if (chain !== "near" && chain !== "zcash") die("--chain must be near or zcash");
+  if (!(CHAINS as readonly string[]).includes(chain)) die(`--chain must be one of ${CHAINS.join(", ")}`);
   const extras = ((values.extra as string | undefined) ?? "").split(",").filter(Boolean);
   const isRouterVariant = (e: string): e is Variant => (VARIANTS as readonly string[]).includes(e) && e !== "honest";
   const isExitVariant = (e: string): e is VpnVariant => (VPN_VARIANTS as readonly string[]).includes(e) && e !== "vpn-honest";
@@ -177,10 +190,10 @@ async function up(values: Record<string, string | boolean | undefined>): Promise
     for (const [what, p] of [["rpc", rpcPort], ["router", routerPort], ["exit", exitPort]] as const) {
       if (p !== undefined && p !== 0 && !(await portFree(p))) throw new Error(`${what} port ${p} is already in use`);
     }
-    process.stdout.write(`stack-cli: starting ${chain === "zcash" ? "zebrad regtest" : "near-sandbox"} + registries (llm=${llm}, id=${id})…\n`);
+    process.stdout.write(`stack-cli: starting ${NODE_NAMES[chain as Chain]} + registries (llm=${llm}, id=${id})…\n`);
     stack = await startStack({
       llm,
-      chain,
+      chain: chain as Chain,
       id,
       ...(rpcPort !== undefined ? { rpcPort } : {}),
       onRouterOutput: (v, chunk) => appendFileSync(join(logDir, `${v}.log`), chunk, { mode: 0o600 }),
@@ -296,13 +309,23 @@ async function up(values: Record<string, string | boolean | undefined>): Promise
   }
 }
 
+/**
+ * `KEY=value` with the value single-quoted when the shell would split or interpret it (e.g. the Stellar network
+ * passphrase "Standalone Network ; February 2017"), so `set -a; . stack.env` works; {@link readEnvFile} unquotes.
+ */
+function shellSafeLine(line: string): string {
+  const m = /^(PLR_[A-Z0-9_]+)=(.*)$/.exec(line);
+  if (!m || /^[A-Za-z0-9_./:@,+=%-]*$/.test(m[2]!)) return line;
+  return `${m[1]}='${m[2]!.replace(/'/g, `'\\''`)}'`;
+}
+
 /** Writes the owner key file (0600) and then, last, the env file: its existence means "ready". */
 function writeReady(stack: DevStack, envFile: string, ownerFile: string, lines: string[]): void {
   mkdirSync(dirname(envFile), { recursive: true });
   // Owner key(s) for the `owner` sub-command (demo revocation): fresh dev-chain keys, 0600, removed on stop.
   writeFileSync(ownerFile, JSON.stringify(stack.ownerFile()), { mode: 0o600 });
   chmodSync(ownerFile, 0o600);
-  writeFileSync(envFile + ".tmp", lines.join("\n") + "\n", { mode: 0o600 });
+  writeFileSync(envFile + ".tmp", lines.map(shellSafeLine).join("\n") + "\n", { mode: 0o600 });
   writeFileSync(envFile, readFileSync(envFile + ".tmp"), { mode: 0o600 });
   rmSync(envFile + ".tmp");
   process.stdout.write(`stack-cli: READY — env in ${envFile}\n`);
@@ -376,7 +399,7 @@ function readEnvFile(path: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const line of readFileSync(path, "utf8").split("\n")) {
     const m = /^(PLR_[A-Z0-9_]+)=(.*)$/.exec(line);
-    if (m) out[m[1]!] = m[2]!;
+    if (m) out[m[1]!] = /^'.*'$/s.test(m[2]!) ? m[2]!.slice(1, -1).replace(/'\\''/g, "'") : m[2]!;
   }
   return out;
 }
@@ -395,6 +418,7 @@ async function owner(method: string | undefined, argsJson: string | undefined, e
   const env = readEnvFile(envFile);
   const file = JSON.parse(readFileSync(ownerFileOf(envFile), "utf8")) as Record<string, unknown>;
   if (file.chain === "zcash") return zcashOwner(method, args as object, file, vpn);
+  if (file.chain === "evm" || file.chain === "stellar" || file.chain === "solana") return tierBOwner(method, args as object, file, vpn);
   const key = file as { account_id: string; secret_key: string };
   const contractId = vpn ? env.PLR_VPN_REGISTRY : env.PLR_REGISTRY;
   if (!contractId) die(`owner: ${vpn ? "PLR_VPN_REGISTRY" : "PLR_REGISTRY"} missing in ${envFile}`);
@@ -418,6 +442,40 @@ async function zcashOwner(method: string, args: object, file: Record<string, unk
     const r = await postOwnerRecord(file.rpc_url, who.secret_key, method, args);
     if (r.signer !== who.address) die("owner: owner file key does not match its address");
     process.stdout.write(`${method} ✔ on zcash:${file.network}:${who.address} (record tx ${r.txid}, block ${r.height})\n`);
+  } catch (e) {
+    die(`${method} failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/** `owner` on an EVM / Stellar / Solana stack: one owner transaction on the LLM or VPN registry, included. */
+async function tierBOwner(method: string, args: object, file: Record<string, unknown>, vpn: boolean): Promise<void> {
+  const str = (v: unknown): string => {
+    if (typeof v !== "string" || v === "") die(`owner: malformed ${String(file.chain)} owner file`);
+    return v;
+  };
+  const registry = str(vpn ? file.vpn_registry : file.registry);
+  try {
+    let signer: string;
+    let where: string;
+    if (file.chain === "evm") {
+      const who = file.owner as { address?: unknown; secret_key?: unknown } | undefined;
+      const chainId = file.chain_id;
+      if (typeof chainId !== "number" || !Number.isSafeInteger(chainId) || chainId < 1) die("owner: malformed evm owner file");
+      ({ signer } = await postEvmOwnerCall({ rpcUrl: str(file.rpc_url), chainId, registry, secretKey: str(who?.secret_key) }, method, args));
+      if (signer.toLowerCase() !== str(who?.address).toLowerCase()) die("owner: owner file key does not match its address");
+      where = `evm:${chainId}:${registry.toLowerCase()}`;
+    } else if (file.chain === "stellar") {
+      const who = file.owner as { account_id?: unknown; secret_key?: unknown } | undefined;
+      ({ signer } = await postStellarOwnerCall({ rpcUrl: str(file.rpc_url), networkPassphrase: str(file.network_passphrase), registry, secretKey: str(who?.secret_key) }, method, args));
+      if (signer !== str(who?.account_id)) die("owner: owner file key does not match its account");
+      where = `stellar:${registry}`;
+    } else {
+      const who = (vpn && file.vpn_owner !== undefined ? file.vpn_owner : file.owner) as { address?: unknown; secret_key?: unknown } | undefined;
+      ({ signer } = await postSolanaOwnerCall({ rpcUrl: str(file.rpc_url), programId: str(file.program_id), registry, secretKey: str(who?.secret_key) }, method, args));
+      if (signer !== str(who?.address)) die("owner: owner file key does not match its address");
+      where = `solana:${registry}`;
+    }
+    process.stdout.write(`${method} ✔ on ${where} (signed by ${signer})\n`);
   } catch (e) {
     die(`${method} failed: ${e instanceof Error ? e.message : String(e)}`);
   }
