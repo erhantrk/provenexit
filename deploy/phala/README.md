@@ -59,6 +59,12 @@ demo's "same attestation code path, real Intel quote" claim (S1-F2). Its image i
 no `exit` service, so `checkDstackComposePolicy` rejects it — correctly, it must never be approved as an exit
 compose on chain.
 
+**Known exception (disclosed):** that compose hash (`b9823a79…d05f`) *is* allowlisted on the INTEL testnet registry,
+only so checks 1–12 could be shown on the real quote (README "NEAR's role"). The client still refuses it with
+`E_COMPOSE_POLICY`, but the registry would accept a registration under it. Revoke it
+(`scripts/owner.sh revoke_compose '{"hash":"b9823a79…d05f"}'`, full hash from `fixtures/phala-spike`) after the demo
+video is recorded; this has not been done.
+
 ## `scripts/owner.sh`
 
 Owner calls against the registry, signed by `OWNER_ID` from `deploy/testnet/env.live`:

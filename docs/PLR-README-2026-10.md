@@ -768,7 +768,7 @@ transaction (at most 2 per write).
 | near-sandbox RPC | `127.0.0.1:3030` (dev-up), ephemeral in tests and the demo; LLM registry `registry.<root>`, VPN registry `vpnregistry.<root>` |
 | zebrad regtest RPC (`PLR_CHAIN=zcash`) | `127.0.0.1:18232` (dev-up, `PLR_RPC_PORT` overrides), ephemeral in tests and the demo; registries `zcash:regtest:<owner>` / `zcash:regtest:<vpn owner>` |
 | anvil / Stellar quickstart / solana-test-validator RPC (`PLR_CHAIN=evm` / `stellar` / `solana`) | dev-up: `127.0.0.1:8545` / `localhost:8000/rpc` / `127.0.0.1:8899` (`PLR_RPC_PORT` overrides), ephemeral in tests; one node (Stellar: one Docker container `stellar-<name>`) per stack, two registries on it |
-| run state | `.run/<id>/` (chain home under `near/` or `zcash/`), host sockets in `.run/<id>-host/`; removed on stop (`PLR_KEEP_RUN=1` keeps them). `.run` is `PLR_RUN_ROOT` if set, else `<repo>/.run`, else `<repo>/e2e/.run` when the repo root is not writable (e.g. a sandbox confined to the `e2e/` cwd) |
+| run state | `.run/<id>/` (chain home under `near/` or `zcash/`), host sockets in `.run/<id>-host/` (or a short `plr-<hash>` dir in `.run`, or under the OS temp dir, when that path would exceed the 104-byte socket limit); removed on stop (`PLR_KEEP_RUN=1` keeps them). `.run` is `PLR_RUN_ROOT` if set, else `<repo>/.run`, else `<repo>/e2e/.run` when the repo root is not writable (e.g. a sandbox confined to the `e2e/` cwd) |
 
 The harness and the dev stack run every long-lived process under a "lifeline" that leads its own process
 group: stop = SIGTERM to the group, SIGKILL after 10 s; and if the controlling process dies in any way, the

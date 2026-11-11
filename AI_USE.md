@@ -15,6 +15,9 @@ an account, a key or a payment.
 | Testnet / cloud operations | **Claude** sessions acting as the "operator" | testnet account setup and the contract deploy/allowlist/signed calls (T04, T16, T17), and the harmless Phala Cloud quote-dump test CVM on 2026-11-09. Every owner transaction was signed from Erhan's near-cli-rs keychain; no key was ever printed or given to an AI |
 | Review | **Claude** | the strict review passes recorded as `fix: day1 review`, `fix: day2 review`, `fix: day3 review` in `git log` |
 
+"Pre-hackathon" / "October baseline" in this file means commits `58c5ea9`..`4fb2f08` (2026-10-23/24), the disclosed
+baseline described in the README's "Prior code" section; the judged work is `4fb2f08` onward.
+
 Humans: **Erhan Türker** — name, design decisions, threat model, review, accounts, keys, Phala account and billing,
 the submission form. The plan's §14 guardrails
 kept keys, mainnet and the submission out of the AI's hands.

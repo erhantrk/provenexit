@@ -26,7 +26,8 @@
  * `<repo>/e2e/.run` when the repo root is not writable — e.g. a sandbox that only allows writes under the e2e cwd) (near-sandbox home under `near/`, zebrad state under
  * `zcash/`); the mock host's
  * private socket directories live in the sibling `<root>/<id>-host/` (a Unix socket cannot be read as a
- * file, and macOS limits socket paths to 104 bytes). Both are removed by `stop()` unless `PLR_KEEP_RUN=1`.
+ * file) — or, when that would push a socket path over the 104-byte macOS `sun_path` limit (a long clone path), in a
+ * short `<root>/plr-<hash>/` or `<tmpdir>/plr-<hash>/` (see `hostDirCandidates`). Both are removed by `stop()` unless `PLR_KEEP_RUN=1`.
  * Registration (SPEC §5 rev 1.3) is operator-bound: every launch gets the operator's credentials for its chain (NEAR:
  * `PLR_OPERATOR_ID` + a fresh key of that account; Zcash: `PLR_ZCASH_KEY` of the operator t-address), and the
  * enclave binds exactly that account into its registration quote. A registering launch resolves only once the
@@ -39,10 +40,10 @@ import { accessSync, constants as fsConstants, existsSync, mkdirSync, readFileSy
 import http from "node:http";
 import net, { type AddressInfo } from "node:net";
 import { mkdir, rm } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomBytes as nodeRandomBytes } from "node:crypto";
+import { createHash, randomBytes as nodeRandomBytes } from "node:crypto";
 import { parseIpv4, parseIpv6, type RegistryReader, type TdxEvent } from "@plr/shared";
 import { generateRootSecret, measureBoot, measureComboBoot, measureVpnBoot } from "@plr/enclave/mock-tdx";
 import { isAttack, startAttackProxy, type AttackProxy } from "./attacks.js";
@@ -250,11 +251,49 @@ const HOST_CLI = join(ENCLAVE_DIST, "mock-tdx", "cli.js");
 const BUILD_INFO = join(ENCLAVE_DIST, "build-info.json");
 const E2E_ROOT = join(REPO_ROOT, "e2e");
 
+/** macOS `sun_path` is 104 bytes including the terminator (the mock host enforces the same bound). */
+const MAX_SOCKET_PATH = 103;
+/** What the mock host appends to its run dir for the quote socket: `/tdx-XXXXXX/q.sock`. */
+const SOCKET_SUFFIX_LEN = "/tdx-XXXXXX/q.sock".length;
+
 /**
- * Longest run root accepted: the host's socket paths (`<root>/<id>-host/tdx-XXXXXX/q.sock`) must stay under 104
- * bytes (macOS `sun_path`), and the 19-byte run id plus the 10-byte private dir leave 60 bytes for the root.
+ * Directories the mock host may use as `--run-dir` (it creates `tdx-XXXXXX/q.sock` inside), best first, keeping only
+ * those whose socket path fits `sun_path`: `<root>/<id>-host`, then a short `<root>/plr-<hash of root+id>`, then
+ * `plr-<hash>` under each of `bases` (default `os.tmpdir()`, `/tmp`). The root and id may therefore be arbitrarily
+ * long. Pure: nothing is created.
  */
-const MAX_RUN_ROOT_LEN = 60;
+export function hostDirCandidates(root: string, id: string, bases: readonly string[] = [tmpdir(), "/tmp"]): string[] {
+  const name = `plr-${createHash("sha256").update(`${root}\0${id}`).digest("hex").slice(0, 12)}`;
+  const all = [join(root, `${id}-host`), join(root, name), ...bases.filter((b) => b.startsWith("/")).map((b) => join(b, name))];
+  return [...new Set(all)].filter((dir) => Buffer.byteLength(dir) + SOCKET_SUFFIX_LEN <= MAX_SOCKET_PATH);
+}
+
+/** The preferred host directory (`hostDirCandidates()[0]`); throws if none is short enough. */
+export function hostDirFor(root: string, id: string, bases?: readonly string[]): string {
+  const dir = hostDirCandidates(root, id, bases)[0];
+  if (dir === undefined) throw new Error(`no short directory for host sockets (${join(root, `${id}-host`)} is too long for a Unix socket)`);
+  return dir;
+}
+
+/**
+ * Creates the first usable candidate (0700, non-recursive: an existing directory — e.g. a planted one under a shared
+ * tmp base — fails closed) and returns it. Throws the collected errors if none can be created.
+ */
+async function makeHostDir(root: string, id: string): Promise<string> {
+  const candidates = hostDirCandidates(root, id);
+  const errors: string[] = [];
+  for (const dir of candidates) {
+    if (existsSync(dir)) throw new Error(`run directory already exists: ${dir}`);
+    try {
+      await mkdir(dir, { mode: 0o700 });
+      return dir;
+    } catch (e) {
+      errors.push(`${dir}: ${(e as NodeJS.ErrnoException).code ?? String(e)}`);
+    }
+  }
+  throw new Error(`no usable directory for host sockets (${errors.join("; ") || "none short enough"})`);
+}
+
 let runRootCache: string | undefined;
 
 /**
@@ -269,7 +308,6 @@ export function runRoot(): string {
   const errors: string[] = [];
   for (const dir of candidates) {
     if (!dir.startsWith("/")) { errors.push(`${dir}: not absolute`); continue; }
-    if (dir.length > MAX_RUN_ROOT_LEN) { errors.push(`${dir}: longer than ${MAX_RUN_ROOT_LEN} bytes (socket paths)`); continue; }
     try {
       mkdirSync(dir, { recursive: true, mode: 0o700 });
       accessSync(dir, fsConstants.W_OK);
@@ -394,10 +432,12 @@ export async function startStack(o: StackOptions): Promise<DevStack> {
   if (!RUN_ID_RE.test(id)) throw new Error("startStack: bad run id");
   const root = runRoot();
   const runDir = join(root, id);
-  const hostDir = join(root, `${id}-host`);
-  if (existsSync(runDir) || existsSync(hostDir)) throw new Error(`run directory already exists: ${runDir}`);
+  if (existsSync(runDir)) throw new Error(`run directory already exists: ${runDir}`);
   await mkdir(runDir, { recursive: true, mode: 0o700 });
-  await mkdir(hostDir, { recursive: true, mode: 0o700 });
+  const hostDir = await makeHostDir(root, id).catch(async (e: unknown) => {
+    await rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+    throw e;
+  });
 
   /** Teardown of everything started so far, registered the moment it starts (incl. launches in progress). */
   const teardowns = new Set<() => Promise<void>>();

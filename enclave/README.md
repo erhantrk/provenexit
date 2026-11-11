@@ -117,7 +117,7 @@ plr-router: request route=/v1/private/chat status=200 ms=N
   `registration_failed code=…`). Use `--router-port 0` / `routerPort: 0` to avoid fixed ports.
 - ⚠️ The host's private dir `<run-dir>/tdx-XXXXXX/` contains a Unix socket. e2e test 10 walks `S.runDir` and
   `readFileSync`s every file, which throws on a socket — give the host a run dir **outside** `S.runDir`
-  (e.g. `<ROOT>/.run/<id>-host/`). Keep it short: macOS limits socket paths to 104 bytes (`E_SOCKET_PATH`).
+  (e.g. `<ROOT>/.run/<id>-host/`). Keep it short: macOS limits socket paths to 104 bytes (`E_SOCKET_PATH`); the e2e harness (`hostDirFor`) moves it to a short `plr-<hash>` directory when the run root is too long.
 - Inside agent Bash sandboxes Unix sockets are refused (EPERM): run host-based tests via `$CONDUCTOR_BIN spawn`.
   `test/host.test.ts` skips its live-launch block (with a warning) when sockets are not permitted.
 - Opt-in chain test: `PLR_NEAR_IT=1 npx vitest run test/near.integration.test.ts` (near-sandbox + the built
