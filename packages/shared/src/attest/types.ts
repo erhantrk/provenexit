@@ -6,6 +6,14 @@ export interface Attester {
   getQuote(reportData: Uint8Array): Promise<{ quote: Uint8Array; eventLog: TdxEvent[] }>;
 }
 
+/** Optional per-verification inputs (INTERFACES §3.1). MOCK mode ignores them. */
+export interface VerifyContext {
+  /** INTEL mode: canonical or raw collateral JSON (INTERFACES §1.2). */
+  collateral?: unknown;
+  /** INTEL mode: verification time in Unix seconds (default: `floor(clock() / 1000)`). */
+  nowSecs?: number;
+}
+
 /**
  * Verifies a quote's signature chain up to a fixed root.
  *
@@ -16,6 +24,6 @@ export interface Attester {
 export interface QuoteVerifier {
   readonly rootKind: RootKind;
   readonly rootPublicKey: Uint8Array;
-  /** @throws PlrError E_QUOTE_FORMAT / E_TEE_TYPE / E_QUOTE_SIG */
-  verify(quote: Uint8Array): ParsedQuote;
+  /** @throws PlrError E_QUOTE_FORMAT / E_TEE_TYPE / E_QUOTE_SIG / E_TCB_STATUS / E_COLLATERAL */
+  verify(quote: Uint8Array, ctx?: VerifyContext): ParsedQuote;
 }

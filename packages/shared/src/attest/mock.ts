@@ -9,7 +9,7 @@ import { PlrError } from "../errors.js";
 import { concatBytes, isBytes, utf8 } from "../bytes.js";
 import { MOCK_QE_VENDOR_ID, QUOTE, encodeQuote, mockOsReport, osMeasurement, parseQuote, type ParsedQuote } from "../tdx/quote.js";
 import { bootEvents, replayRtmr3, type TdxEvent } from "../tdx/eventlog.js";
-import type { Attester, QuoteVerifier } from "./types.js";
+import type { Attester, QuoteVerifier, VerifyContext } from "./types.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 
 /** Domain prefix of the AK certificate message. */
@@ -177,7 +177,7 @@ export class MockVerifier implements QuoteVerifier {
   }
 
   /** @throws PlrError E_QUOTE_FORMAT / E_TEE_TYPE / E_QUOTE_SIG */
-  verify(quote: Uint8Array): ParsedQuote {
+  verify(quote: Uint8Array, _ctx?: VerifyContext): ParsedQuote {
     const parsed = parseQuote(quote, "MOCK");
     const sd = parsed.sigData;
     const quoteSig = sd.subarray(0, 64);

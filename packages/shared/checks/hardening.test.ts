@@ -158,11 +158,12 @@ describe("quote extra", () => {
 });
 
 describe("stubs", () => {
-  it("fail closed with E_NOT_IMPLEMENTED", async () => {
+  it("DstackAttester fails closed; DcapQvlVerifier only trusts the Intel root", async () => {
     expect(await code(() => new DstackAttester().getQuote(new Uint8Array(64)))).toBe("E_NOT_IMPLEMENTED");
-    const v = new DcapQvlVerifier(MockRoot.generate().publicKey);
+    expect(await code(() => new DcapQvlVerifier(MockRoot.generate().publicKey))).toBe("E_ROOT_UNTRUSTED");
+    const v = new DcapQvlVerifier();
     expect(v.rootKind).toBe("INTEL");
-    expect(await code(() => v.verify(new Uint8Array(828)))).toBe("E_NOT_IMPLEMENTED");
+    expect(await code(() => v.verify(new Uint8Array(828)))).toBe("E_QUOTE_FORMAT");
   });
 });
 

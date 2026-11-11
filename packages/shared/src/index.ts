@@ -20,12 +20,14 @@ export {
   SESSION_NONCE_DOMAIN, REGISTRATION_NONCE_DOMAIN, MAX_ACCOUNT_ID_BYTES,
 } from "./tdx/measure.js";
 
-export type { Attester, QuoteVerifier } from "./attest/types.js";
+export type { Attester, QuoteVerifier, VerifyContext } from "./attest/types.js";
 export {
   MockRoot, MockTdxAttester, MockVerifier, MOCK_AK_CERT_PREFIX, p256VerifyLowS, isValidP256Pub,
   type MockTdxAttesterOptions,
 } from "./attest/mock.js";
-export { DstackAttester, DcapQvlVerifier } from "./attest/stubs.js";
+export { DstackAttester } from "./attest/stubs.js";
+export { DcapQvlVerifier, INTEL_ROOT_P256, ACCEPTED_TCB_STATUSES, isIntelRoot } from "./attest/intel.js";
+export { canonicalCollateral, isCollateralJson, type CollateralJson } from "./attest/collateral.js";
 
 export { deriveSession, clientSeal, serverOpen, TAG_LEN, type SessionKeys } from "./crypto/session.js";
 export { sealFrame, openFrame, FrameReader } from "./crypto/frames.js";
