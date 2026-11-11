@@ -38,8 +38,12 @@ try {
   const collateral = readFileSync(join(here, "../../../packages/shared/test/vectors/dcap/tdx_quote_collateral.json"), "utf8");
   const tx = await call("debug_verify_tdx", { quote_hex: quoteHex, collateral });
   if (!("SuccessValue" in tx.status)) throw new Error("debug_verify_tdx failed: " + JSON.stringify(tx.status));
-  const status = Buffer.from(tx.status.SuccessValue, "base64").toString();
-  console.log("status", status, "gas_tgas", Number(gasOf(tx)) / 1e12, "wasm_bytes", wasm.length);
+  const status = JSON.parse(Buffer.from(tx.status.SuccessValue, "base64").toString());
+  const gasTgas = Number(gasOf(tx)) / 1e12;
+  if (status !== "UpToDate") throw new Error(`status ${JSON.stringify(status)} !== UpToDate`);
+  if (gasTgas > 280) throw new Error(`gas ${gasTgas} Tgas > 280`);
+  if (wasm.length >= 4194304) throw new Error(`wasm ${wasm.length} bytes >= 4194304`);
+  console.log("status", JSON.stringify(status), "gas_tgas", gasTgas, "wasm_bytes", wasm.length);
 } finally {
   await sandbox.tearDown(true);
 }
