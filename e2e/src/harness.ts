@@ -250,11 +250,8 @@ const HOST_CLI = join(ENCLAVE_DIST, "mock-tdx", "cli.js");
 const BUILD_INFO = join(ENCLAVE_DIST, "build-info.json");
 const E2E_ROOT = join(REPO_ROOT, "e2e");
 
-/**
- * Longest run root accepted: the host's socket paths (`<root>/<id>-host/tdx-XXXXXX/q.sock`) must stay under 104
- * bytes (macOS `sun_path`), and the 19-byte run id plus the 10-byte private dir leave 60 bytes for the root.
- */
-const MAX_RUN_ROOT_LEN = 60;
+/** Longest run root accepted: the host's socket paths (`<root>/<id>-host/<dir>/q.sock`) must stay under 104 bytes. */
+const MAX_RUN_ROOT_LEN = 56;
 let runRootCache: string | undefined;
 
 /**
