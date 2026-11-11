@@ -586,6 +586,15 @@ impl Registry {
         id
     }
 
+    /// TEMPORARY (spike S2; deleted in T11): verifies TV-Q1 with dcap-qvl at the fixed test clock.
+    #[cfg(feature = "tdx-test-clock")]
+    pub fn debug_verify_tdx(&self, quote_hex: String, collateral: String) -> String {
+        let quote = crate::bytes::decode_hex(&quote_hex).unwrap_or_else(|| near_sdk::env::panic_str("hex"));
+        let c: dcap_qvl::QuoteCollateralV3 = near_sdk::serde_json::from_str(&collateral).unwrap_or_else(|_| near_sdk::env::panic_str("collateral"));
+        let r = dcap_qvl::verify::QuoteVerifier::new_prod().verify(&quote, &c, 1_750_377_600).unwrap_or_else(|_| near_sdk::env::panic_str("E_QUOTE_SIG"));
+        r.status
+    }
+
     // ---------- views ----------
 
     pub fn is_allowed(&self, compose_hash: String, os_measurement: String) -> bool {

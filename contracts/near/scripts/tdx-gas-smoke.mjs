@@ -1,17 +1,31 @@
 #!/usr/bin/env node
 // Spike S2: measures `debug_verify_tdx` (dcap-qvl 0.7.1 inside the contract) on a real near-sandbox.
 //
-// Usage (repo root, after the build with the test clock feature):
-//   (cd contracts/near && cargo near build non-reproducible-wasm --no-abi --features tdx-test-clock)
-//   node contracts/near/scripts/tdx-gas-smoke.mjs
-import { readFileSync } from "node:fs";
+// Usage (repo root): node contracts/near/scripts/tdx-gas-smoke.mjs
+// Builds target/near/plr_registry.wasm with --features tdx-test-clock unless that artifact is already present.
+import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { Sandbox, DEFAULT_ACCOUNT_ID, DEFAULT_PRIVATE_KEY, DEFAULT_PUBLIC_KEY } from "near-sandbox";
 import { Account, JsonRpcProvider } from "near-api-js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const wasm = readFileSync(join(here, "../target/near/plr_registry.wasm"));
+const contractDir = join(here, "..");
+const wasmPath = join(contractDir, "target/near/plr_registry.wasm");
+// `target/` is not committed and a deploy build (cargo near build WITHOUT the feature) overwrites the same file,
+// so never trust whatever build ran last: build the test-clock wasm unless that exact artifact is already there.
+const hasDebugVerify = (p) => existsSync(p) && readFileSync(p).includes(Buffer.from("debug_verify_tdx"));
+if (!hasDebugVerify(wasmPath)) {
+  console.log("building plr_registry.wasm with --features tdx-test-clock ...");
+  const build = spawnSync("cargo", ["near", "build", "non-reproducible-wasm", "--no-abi", "--features", "tdx-test-clock"], {
+    cwd: contractDir,
+    stdio: "inherit",
+  });
+  if (build.status !== 0) throw new Error(`cargo near build failed (${build.status ?? build.signal})`);
+  if (!hasDebugVerify(wasmPath)) throw new Error(`${wasmPath} does not export debug_verify_tdx`);
+}
+const wasm = readFileSync(wasmPath);
 const GAS = 300_000_000_000_000n;
 const NEAR = 10n ** 24n;
 // P-256 base point (a valid point): MOCK mode never verifies against this root.
