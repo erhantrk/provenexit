@@ -1,0 +1,79 @@
+[
+  {
+    "imr": 3,
+    "event_type": 134217729,
+    "digest": "f9974020ef507068183313d0ca808e0d1ca9b2d1ad0c61f5784e7157c362c06536f5ddacdad4451693f48fcc72fff624",
+    "event": "system-preparing",
+    "event_payload": ""
+  },
+  {
+    "imr": 3,
+    "event_type": 134217729,
+    "digest": "ce6bafa430903db448f4164ff6eb193fd758a4c3450e7b12d080fb70c3f0b801ebd86922e53e836e353e7522afec6ff9",
+    "event": "app-id",
+    "event_payload": "e0f49ba8b66f9b11d99ed78b538ad51d401a3fd7"
+  },
+  {
+    "imr": 3,
+    "event_type": 134217729,
+    "digest": "917eec9b355c00c4ebc6c2e1347127c60ad4c3dea9ac744b32140ff223c7981dbb785010201b9a502f9c94af460cd5bf",
+    "event": "compose-hash",
+    "event_payload": "b9823a796f86b61b4fae123f912d98f25914326f5789ab2f964b66d5f086d05f"
+  },
+  {
+    "imr": 3,
+    "event_type": 134217729,
+    "digest": "aa25b837d81098d56e726cdfd4664eae9a1269362479753d04bdfd239a45388a056f245841910931ea09ff8278b9d482",
+    "event": "gpu-policy-hash",
+    "event_payload": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+    "imr": 3,
+    "event_type": 134217729,
+    "digest": "14eddbefc63b1ed85d7d1e2acf5f6299caaab18958acd65cad45ed1b58adbfb511febfb65546e5ba72b4951936772a85",
+    "event": "instance-id",
+    "event_payload": "dde53c002b1b8bbc141e0eff052c15010a1395b2"
+  },
+  {
+    "imr": 3,
+    "event_type": 134217729,
+    "digest": "98bd7e6bd3952720b65027fd494834045d06b4a714bf737a06b874638b3ea00ff402f7f583e3e3b05e921c8570433ac6",
+    "event": "boot-mr-done",
+    "event_payload": ""
+  },
+  {
+    "imr": 3,
+    "event_type": 134217729,
+    "digest": "c5952ba76a4f11fed46c38f1dd41f931b1c4aebe2b0dde4d0cd603bd4c090bfcae689abc1632f238a5d23e3a1924db49",
+    "event": "os-image-hash",
+    "event_payload": "ec43cb8c5e04b6bb6c53b33b16076a01d83d01f7f4b703f2f78a0d947d6247e6"
+  },
+  {
+    "imr": 3,
+    "event_type": 134217729,
+    "digest": "1de9cfa982eab350c1c6719fed6f35f9be554d202c26d354e498b0b9e6ad2e6e1e02df3abfa85bd8113c9ea219c16deb",
+    "event": "key-provider",
+    "event_payload": "7b226e616d65223a226b6d73222c226964223a223330353933303133303630373261383634386365336430323031303630383261383634386365336430333031303730333432303030346538653332356134373762306266323238303064633932376134366336383633383933386432383366653733643166393032386565616337303238313933663334373031323231393338373566353938623761646463353033653533343731326162343337623431323037373662626163333264646638383937663834346565227d"
+  },
+  {
+    "imr": 3,
+    "event_type": 134217729,
+    "digest": "ba51104636900268b0e059fa3d266419d079d1e94aea26fb9fcbb8d764bf4c89a67ac271b8a0d1a3989945132a111fc7",
+    "event": "storage-fs",
+    "event_payload": "7a6673"
+  },
+  {
+    "imr": 3,
+    "event_type": 134217729,
+    "digest": "3b1e7da22d75034156e6e6b01e33651b3cbd38ed875ab01da05f033e0b4b043004c0b6692abbef7e2dc366fffb0e5e5e",
+    "event": "storage-encrypted",
+    "event_payload": "31"
+  },
+  {
+    "imr": 3,
+    "event_type": 134217729,
+    "digest": "1a76b2a80a0be71eae59f80945d876351a7a3fb8e9fd1ff1cede5734aa84ea11fd72b4edfbb6f04e5a85edd114c751bd",
+    "event": "system-ready",
+    "event_payload": ""
+  }
+]

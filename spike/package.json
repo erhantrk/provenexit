@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@phala/dcap-qvl": "0.7.1"
+  }
+}

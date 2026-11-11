@@ -1,0 +1,27 @@
+# ProvenExit Day-0 spike S1-b: a harmless attestation dump. NOT a proxy, NOT a VPN, no tunnel/echo.
+# GET /dump returns the TDX quote (report_data = 64 x 0x42), the event log and the CVM info from the dstack guest agent.
+services:
+  spike:
+    image: node:22-bookworm-slim
+    restart: always
+    ports: ["18300:18300"]
+    volumes: ["/var/run/dstack.sock:/var/run/dstack.sock"]
+    command:
+      - node
+      - -e
+      - |
+        const http = require("http");
+        const rpc = (path, body) => new Promise((ok, no) => {
+          const r = http.request({ socketPath: "/var/run/dstack.sock", path, method: "POST",
+            headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) } }, (res) => {
+            let d = ""; res.on("data", (c) => d += c); res.on("end", () => ok(d)); });
+          r.on("error", no); r.end(body); });
+        http.createServer(async (req, res) => {
+          if (req.url !== "/dump") { res.writeHead(404); return res.end(); }
+          try {
+            const q = JSON.parse(await rpc("/GetQuote", JSON.stringify({ report_data: "42".repeat(64) })));
+            const info = JSON.parse(await rpc("/Info", "{}"));
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(JSON.stringify({ quote: q.quote, event_log: q.event_log, info }));
+          } catch (e) { res.writeHead(500); res.end(String(e)); }
+        }).listen(18300, "0.0.0.0");
