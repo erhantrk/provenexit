@@ -13,6 +13,9 @@ export {
   type TdxEvent,
 } from "./tdx/eventlog.js";
 export {
+  DSTACK_MAX_EVENT_PAYLOAD, dstackDigestV1, verifyEventLogDstack,
+} from "./tdx/eventlog-dstack.js";
+export {
   keyHash, reportData, registrationNonce, registrationReportData, sessionNonceDigest,
   SESSION_NONCE_DOMAIN, REGISTRATION_NONCE_DOMAIN, MAX_ACCOUNT_ID_BYTES,
 } from "./tdx/measure.js";
