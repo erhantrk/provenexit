@@ -123,6 +123,15 @@ export function readFixture(dir: string): Fixture {
 }
 
 /**
+ * The verifier {@link verifyFixture} uses by default: the real DCAP verifier pinned to the Intel root and clocked
+ * at the capture time (INTERFACES §3.3), so a recorded bundle verifies forever. Exported so a test can pin the
+ * clock hook itself: `verify` without `ctx.nowSecs` must use `captured_at_ms`.
+ */
+export function fixtureVerifier(meta: FixtureMeta): DcapQvlVerifier {
+  return new DcapQvlVerifier(INTEL_ROOT_P256, { clock: () => meta.captured_at_ms });
+}
+
+/**
  * INTERFACES §3.3: `verifyAttestation` over the recorded bundle, with the DCAP check at `captured_at_ms` and the
  * registry snapshot read through {@link MemoryRegistry} (`verifiesOnChain: true`, clock = `captured_at_ms`).
  * `verifier` exists for tests only: a synthetic fixture has no real Intel signature, so it needs a stub verifier.
@@ -130,11 +139,10 @@ export function readFixture(dir: string): Fixture {
  */
 export async function verifyFixture(dir: string, verifier?: QuoteVerifier): Promise<VerifiedRouter> {
   const f = readFixture(dir);
-  const clock = (): number => f.meta.captured_at_ms;
   return verifyAttestation({
     bundle: f.bundle,
     nonce: f.nonce,
-    verifier: verifier ?? new DcapQvlVerifier(INTEL_ROOT_P256, { clock }),
+    verifier: verifier ?? fixtureVerifier(f.meta),
     registry: new MemoryRegistry(f.registry),
     trustedRoot: INTEL_ROOT_P256,
     now: f.meta.captured_at_ms,

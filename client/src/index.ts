@@ -26,7 +26,8 @@ export { base64Encode, base64DecodeStrict } from "./base64.js";
 export { TracingRegistry, checkLines, formatCheckLine, REGISTRATION_EVIDENCE_LABEL, type CheckLine, type CheckStatus } from "./verify-report.js";
 export {
   runCli, loadConfig, loadVpnConfig, makeRegistry, registryTier, readStdinText, MAX_STDIN_PROMPT, ConfigError,
-  type CliConfig, type VpnCliConfig, type CliIo, type CliChain, type ZcashCliConfig,
+  inspectIntelBundle,
+  type CliConfig, type VpnCliConfig, type CliIo, type CliChain, type ZcashCliConfig, type IntelInspection,
 } from "./cli.js";
 export { AttestationCache, recheckRegistry, type AttestationSession, type AttestationCacheOptions } from "./attestation.js";
 // PLR-VPN-v1 (SPEC-VPN §9.2)

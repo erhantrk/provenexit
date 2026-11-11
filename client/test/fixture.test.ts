@@ -10,12 +10,12 @@ import { afterAll, describe, expect, it } from "vitest";
 import { x25519, ed25519 } from "@noble/curves/ed25519.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import {
-  CHECKS, INTEL_QE_VENDOR_ID, INTEL_ROOT_P256, PlrError, encodeQuote, keyHash, makeEvent, mockOsReport,
+  CHECKS, DcapQvlVerifier, INTEL_QE_VENDOR_ID, INTEL_ROOT_P256, PlrError, encodeQuote, keyHash, makeEvent, mockOsReport,
   osMeasurement, parseQuote, reportData, replayRtmr3, toHex,
   type AttestationBundle, type InstanceRecord, type QuoteVerifier, type TdxEvent, type TdReport,
 } from "@plr/shared";
 import { runCli } from "../src/index.js";
-import { fixtureReplayLine, readFixture, verifyFixture } from "../src/fixture.js";
+import { fixtureReplayLine, fixtureVerifier, readFixture, verifyFixture } from "../src/fixture.js";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
 const FIXTURES = fileURLToPath(new URL("../../fixtures/", import.meta.url));
@@ -279,5 +279,92 @@ describe.skipIf(real === null)("recorded capture replay (T19)", () => {
     expect(v.images?.length).toBeGreaterThan(0);
     expect(v.checks).toContain(CHECKS.TCB);
     expect(v.checks).toContain(CHECKS.COMPOSE_POLICY);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// The default (real) verifier of verifyFixture. Every test above injects a stub, so the production path —
+// `new DcapQvlVerifier(INTEL_ROOT_P256, { clock: () => captured_at_ms })` — was never executed. These tests use
+// the real TV-Q1 quote and its real Intel collateral (INTERFACES §1.1): the DCAP call really happens.
+// ---------------------------------------------------------------------------------------------------------------
+
+const TVQ1_QUOTE = new Uint8Array(readFileSync(new URL("../../packages/shared/test/vectors/dcap/tdx_quote.bin", import.meta.url)));
+const TVQ1_COLLATERAL = JSON.parse(
+  readFileSync(new URL("../../packages/shared/test/vectors/dcap/tdx_quote_collateral.json", import.meta.url), "utf8"),
+) as Record<string, unknown>;
+/** TV-Q1 collateral is valid 2025-06-19..2025-07-19 and expired at 2026-11-08 (INTERFACES §1.1). */
+const TVQ1_CAPTURED_AT = 1_750_377_600_000;
+const TVQ1_EXPIRED_AT = 1_794_096_000_000;
+const TVQ1_MRTD = "91eb2b44d141d4ece09f0c75c2c53d247a3c68edd7fafe8a3520c942a604a407de03ae6dc5f87f27428b2538873118b7";
+
+/**
+ * A fixture whose bundle carries the real TV-Q1 quote and collateral. Its `report_data` is not our key hash (it is
+ * Intel's sample), so verification necessarily stops at E_REPORT_DATA_KEYS — after the DCAP signature and TCB steps.
+ */
+function tvq1Fixture(capturedAt: number): string {
+  const compose = appCompose();
+  const composeHash = new Uint8Array(sha256(enc(compose)));
+  const xp = x25519.getPublicKey(x25519.utils.randomSecretKey());
+  const ep = ed25519.getPublicKey(ed25519.utils.randomSecretKey());
+  const log: TdxEvent[] = [
+    makeEvent("system-preparing", EMPTY),
+    makeEvent("app-id", new Uint8Array(20).fill(0x11)),
+    makeEvent("compose-hash", composeHash),
+    makeEvent("instance-id", new Uint8Array(20).fill(0x22)),
+    makeEvent("boot-mr-done", EMPTY),
+  ];
+  const bundle: AttestationBundle = {
+    v: "PLR-v1",
+    root_kind: "INTEL",
+    quote: toHex(TVQ1_QUOTE),
+    event_log: log,
+    app_compose: compose,
+    x25519: toHex(xp),
+    ed25519: toHex(ep),
+    collateral: TVQ1_COLLATERAL,
+  };
+  const dir = mkdtempSync(join(HERE, "fixture-tvq1-"));
+  dirs.push(dir);
+  writeFileSync(join(dir, "meta.json"), JSON.stringify({
+    captured_at_ms: capturedAt,
+    exit_url: "https://abc123-18200.dstack-prod5.phala.network",
+    network: "testnet",
+    registry: REGISTRY,
+    registration_tx: "regtx123",
+    revocation_tx: null,
+  }));
+  writeFileSync(join(dir, "nonce.hex"), toHex(new Uint8Array(randomBytes(32))));
+  writeFileSync(join(dir, "bundle.json"), JSON.stringify(bundle));
+  writeFileSync(join(dir, "registry.json"), JSON.stringify({
+    root: { kind: "INTEL", p256: toHex(INTEL_ROOT_P256) },
+    compose: [toHex(composeHash)],
+    os: [],
+    instances: {},
+  }));
+  return dir;
+}
+
+describe("verifyFixture's default verifier is the real DCAP verifier at the capture clock", () => {
+  it("reaches past the quote-signature step with TV-Q1 at its capture time (no stub)", async () => {
+    // UpToDate at 2025-06-20 ⇒ DCAP verified the real Intel signature; the next failing check is ours.
+    expect(await codeOf(verifyFixture(tvq1Fixture(TVQ1_CAPTURED_AT)))).toBe("E_REPORT_DATA_KEYS");
+  });
+
+  it("fails at the quote-signature step with the same fixture once the collateral expired", async () => {
+    expect(await codeOf(verifyFixture(tvq1Fixture(TVQ1_EXPIRED_AT)))).toBe("E_QUOTE_SIG");
+  });
+
+  it("fixtureVerifier passes captured_at_ms to DCAP (not the wall clock)", () => {
+    const v = fixtureVerifier(readFixture(tvq1Fixture(TVQ1_CAPTURED_AT)).meta);
+    expect(v).toBeInstanceOf(DcapQvlVerifier);
+    expect(v.rootKind).toBe("INTEL");
+    // No `nowSecs`: the verifier must use its own clock, i.e. the capture time. Today the collateral is expired,
+    // so a verifier built without `{ clock }` would throw here.
+    const parsed = v.verify(TVQ1_QUOTE, { collateral: TVQ1_COLLATERAL });
+    expect(toHex(parsed.report.mrTd)).toBe(TVQ1_MRTD);
+    expect(v.lastStatus).toBe("UpToDate");
+
+    const expired = fixtureVerifier(readFixture(tvq1Fixture(TVQ1_EXPIRED_AT)).meta);
+    expect(() => expired.verify(TVQ1_QUOTE, { collateral: TVQ1_COLLATERAL })).toThrow(PlrError);
   });
 });

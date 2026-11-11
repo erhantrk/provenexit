@@ -1,6 +1,6 @@
 services:
   exit:
-    image: ghcr.io/erhantrk/provenexit-exit@sha256:5e8c74ff72b68b80fef52e219fb94c56d4e02a65d5a00c12cd302674d7167ce3
+    image: ghcr.io/erhantrk/provenexit-exit@sha256:5e8c74ff72b68b80fef52e219fb94c56d4e02a65d5a00c12cd302674d7167ce3 # PLACEHOLDER digest, no image published (S1-F2); do NOT allow_compose this file
     restart: always
     read_only: true
     cap_drop: [ALL]

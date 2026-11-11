@@ -43,6 +43,7 @@ import {
   utf8,
   verifyEventLogDstack,
   type AttestationBundle,
+  type QuoteVerifier,
   type RegistryReader,
   type RootKind,
   type VerifiedRouter,
@@ -712,7 +713,7 @@ async function cmdTwoHopVerify(cfg: VpnCliConfig, registry: TracingRegistry, cli
 }
 
 /** Values `plr vpn inspect` prints (the owner approves compose / OS with them, TASKS T15 step 4). */
-interface IntelInspection {
+export interface IntelInspection {
   composeHash: Uint8Array;
   osMeasurement: Uint8Array;
   keyHash: Uint8Array;
@@ -723,9 +724,14 @@ interface IntelInspection {
 /**
  * INTEL checks 1–7b of `verifyAttestation` without the registry: response shape, quote structure + DCAP
  * signature (Intel root), DEBUG, report_data keys + nonce, dstack event log, compose hash, dstack compose policy.
+ * `verifier` exists for tests only: a synthetic bundle has no Intel signature (same seam as `verifyFixture`).
  * @throws PlrError — the first failing check's code
  */
-function inspectIntelBundle(bundle: AttestationBundle, nonce: Uint8Array): IntelInspection {
+export function inspectIntelBundle(
+  bundle: AttestationBundle,
+  nonce: Uint8Array,
+  verifier: QuoteVerifier & { lastStatus?: string } = new DcapQvlVerifier(INTEL_ROOT_P256),
+): IntelInspection {
   if (bundle.v !== "PLR-v1" || bundle.root_kind !== "INTEL") throw new PlrError("E_ROOT_UNTRUSTED", "inspect needs an INTEL exit");
   if (!isHex(bundle.quote) || bundle.quote.length === 0) throw new PlrError("E_BAD_RESPONSE", "quote");
   if (!isCollateralJson(bundle.collateral)) throw new PlrError("E_BAD_RESPONSE", "collateral");
@@ -737,7 +743,6 @@ function inspectIntelBundle(bundle: AttestationBundle, nonce: Uint8Array): Intel
 
   const quote = fromHex(bundle.quote);
   const parsed = parseQuote(quote, "INTEL");
-  const verifier = new DcapQvlVerifier(INTEL_ROOT_P256);
   verifier.verify(quote, {
     collateral: bundle.collateral,
     nowSecs: Math.floor(Date.now() / 1000),
@@ -757,7 +762,7 @@ function inspectIntelBundle(bundle: AttestationBundle, nonce: Uint8Array): Intel
 }
 
 /** `plr vpn inspect`: INTEL checks 1–7b with a fresh nonce, no registry (TASKS T15 step 4). */
-async function cmdVpnInspect(env: Record<string, string | undefined>, io: CliIo): Promise<number> {
+async function cmdVpnInspect(env: Record<string, string | undefined>, io: CliIo, verifier?: QuoteVerifier): Promise<number> {
   const exitUrl = env.PLR_VPN_URL || DEFAULTS.vpnExit;
   if (!isHttpUrl(exitUrl)) {
     io.err("config error: PLR_VPN_URL must be an http(s) URL");
@@ -771,7 +776,7 @@ async function cmdVpnInspect(env: Record<string, string | undefined>, io: CliIo)
   const nonce = new Uint8Array(randomBytes(32));
   let r: IntelInspection;
   try {
-    r = inspectIntelBundle(await fetchAttestationDirect(normalizeExitUrl(exitUrl), nonce), nonce);
+    r = inspectIntelBundle(await fetchAttestationDirect(normalizeExitUrl(exitUrl), nonce), nonce, verifier);
   } catch (e) {
     io.out(`✘ ${errCode(e)}`);
     return 1;
@@ -874,14 +879,20 @@ function untilSignal(): Promise<void> {
 }
 
 /** `plr vpn [verify [--fixture <dir>]] | inspect`. */
-async function runVpn(rest: string[], env: Record<string, string | undefined>, io: CliIo, untilStopped: () => Promise<void>): Promise<number> {
+async function runVpn(
+  rest: string[],
+  env: Record<string, string | undefined>,
+  io: CliIo,
+  untilStopped: () => Promise<void>,
+  inspectVerifier?: QuoteVerifier,
+): Promise<number> {
   const sub = rest[0];
   if (sub === "inspect") {
     if (rest.length > 1) {
       io.err(VPN_USAGE);
       return 2;
     }
-    return cmdVpnInspect(env, io);
+    return cmdVpnInspect(env, io, inspectVerifier);
   }
   if (sub === "verify" && rest[1] === "--fixture") {
     const dir = rest[2];
@@ -965,13 +976,15 @@ export async function runCli(
   writeDelta: (s: string) => void = (s) => void process.stdout.write(s),
   readStdin: () => Promise<string> = () => readStdinText(),
   untilStopped: () => Promise<void> = untilSignal,
+  /** Tests only: replaces the DCAP verifier of `vpn inspect` (a synthetic bundle has no Intel signature). */
+  vpnInspectVerifier?: QuoteVerifier,
 ): Promise<number> {
   const [cmd, ...rest] = argv;
   if (cmd === undefined || cmd === "-h" || cmd === "--help" || !["verify", "chat", "proxy", "vpn"].includes(cmd)) {
     io.err(USAGE);
     return 2;
   }
-  if (cmd === "vpn") return runVpn(rest, env, io, untilStopped);
+  if (cmd === "vpn") return runVpn(rest, env, io, untilStopped, vpnInspectVerifier);
   if (cmd === "chat" && (rest.length > 1 || rest[0] === "-h" || rest[0] === "--help" || rest[0] === "")) {
     io.err(CHAT_USAGE);
     return 2;
