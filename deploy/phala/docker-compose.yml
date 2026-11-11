@@ -1,0 +1,26 @@
+services:
+  exit:
+    image: ghcr.io/erhantrk/provenexit-exit@sha256:5e8c74ff72b68b80fef52e219fb94c56d4e02a65d5a00c12cd302674d7167ce3
+    restart: always
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      driver: none
+    ports:
+      - "18200:18200"
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+    environment:
+      PLR_ATTESTER: dstack
+      PLR_VPN_POLICY_PATH: /app/vpn-policy.json
+      PLR_VPN_HOST: 0.0.0.0
+      PLR_VPN_PORT: "18200"
+      PLR_CHAIN: near
+      PLR_NEAR_RPC: https://test.rpc.fastnear.com
+      PLR_VPN_REGISTRY: pe-vpnreg-erhan.testnet
+      PLR_OPERATOR_ID: pe-op-erhan.testnet
+      PLR_OPERATOR_KEY: ${PLR_OPERATOR_KEY}
+      PLR_ANCHOR_INTERVAL_MS: "60000"
+      PLR_REGISTER_DEPOSIT: "100000000000000000000000"
+      PLR_PCCS_URL: https://pccs.phala.network
