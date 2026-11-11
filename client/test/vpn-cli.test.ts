@@ -108,6 +108,8 @@ describe("plr vpn", () => {
     const text = t.out.join("\n");
     expect(text).toContain(`socks5h://127.0.0.1:${free}`);
     expect(text).toContain("VPN exit verified");
+    expect(text).toMatch(new RegExp(`^✔ SOCKS5 proxy on socks5h://127\\.0\\.0\\.1:${free}$`, "m"));
+    expect(text).toContain("remote DNS, CONNECT only");
     // One request through the proxy.
     const got = await new Promise<string>((ok, fail) => {
       const sock = tcpConnect(free, "127.0.0.1");
@@ -266,6 +268,8 @@ describe("plr vpn — two-hop", () => {
     expect(text).toContain("two-hop VPN verified");
     expect(text).toContain("entry (org-a) → exit (org-b)");
     expect(text).toContain(`socks5h://127.0.0.1:${free}`);
+    expect(text).toMatch(new RegExp(`^✔ SOCKS5 proxy on socks5h://127\\.0\\.0\\.1:${free}$`, "m"));
+    expect(text).toContain("remote DNS, CONNECT only");
     const got = await new Promise<string>((ok, fail) => {
       const sock = tcpConnect(free, "127.0.0.1");
       let buf = Buffer.alloc(0);

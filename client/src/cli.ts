@@ -860,7 +860,8 @@ async function cmdVpn(cfg: VpnCliConfig, client: VpnClient, io: CliIo, untilStop
   if (p === undefined) return 1;
   io.out(`✔ VPN exit verified (${session.verified.checks.length} checks against registry ${cfg.contractId}); every new connection re-checks the registry`);
   printVpnSummary(io, session);
-  io.out(`✔ SOCKS5 proxy (remote DNS, CONNECT only) on ${p.url}`);
+  io.out(`✔ SOCKS5 proxy on ${p.url}`);
+  io.out("  remote DNS, CONNECT only");
   io.out(`  e.g.  curl --proxy ${p.url} https://example.com`);
   await untilStopped();
   await p.close();
@@ -881,7 +882,8 @@ async function cmdTwoHop(cfg: VpnCliConfig, client: TwoHopClient, io: CliIo, unt
   io.out(`  entry: ${client.entryUrl}  compose ${toHex(a.entry.composeHash)}`);
   io.out(`  exit:  ${client.exitUrl}  compose ${toHex(a.exit.composeHash)}  (reached only through the entry)`);
   io.out(`  every new connection re-checks both hops and the operator rules`);
-  io.out(`✔ SOCKS5 proxy (remote DNS, CONNECT only) on ${p.url}`);
+  io.out(`✔ SOCKS5 proxy on ${p.url}`);
+  io.out("  remote DNS, CONNECT only");
   io.out(`  e.g.  curl --proxy ${p.url} https://example.com`);
   await untilStopped();
   await p.close();
