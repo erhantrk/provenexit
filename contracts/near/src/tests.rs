@@ -1477,3 +1477,128 @@ fn verify_event_log_dstack_accepts_the_real_phala_spike_log() {
     let app_compose = include_str!("../../../fixtures/phala-spike/app_compose.json");
     assert_eq!(encode_hex(&boot.compose_hash), encode_hex(&sha256(app_compose.as_bytes())), "compose-hash event");
 }
+
+// ---------------- INTEL mode: `register_instance_tdx` / `get_tdx_policy` (INTERFACES §2.3, §2.4) ----------------
+//
+// TV-Q1's collateral is only valid from 2025-06-19 to 2025-07-19, so these tests need the test-only fixed clock
+// (`--features tdx-test-clock`) and are compiled only with it. dcap-qvl verifies with pure-Rust crypto: the
+// native test host needs no extra host functions.
+
+/// TV-Q1's collateral: `dcap-qvl` 0.7.1 `sample/tdx_quote_collateral.json` (16 072 bytes).
+#[cfg(feature = "tdx-test-clock")]
+fn tdx_collateral() -> String {
+    include_str!("../../../packages/shared/test/vectors/dcap/tdx_quote_collateral.json").to_string()
+}
+
+/// The keys these tests submit: any non-zero 32-byte hex passes check 4.
+#[cfg(feature = "tdx-test-clock")]
+const TDX_X25519: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+#[cfg(feature = "tdx-test-clock")]
+const TDX_ED25519: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+
+/// `key_hash` of those two keys: the id a successful TDX registration would record.
+#[cfg(feature = "tdx-test-clock")]
+fn tdx_key_hash() -> String {
+    encode_hex(&key_hash(&[0x11; 32], &[0x22; 32]))
+}
+
+/// A registry initialised with the Intel root; compose and OS allowlists stay empty.
+#[cfg(feature = "tdx-test-clock")]
+fn intel_bare() -> Registry {
+    test_host::reset();
+    caller("registry.test.near", 0);
+    let c = Registry::new(OWNER.parse().unwrap(), "INTEL".into(), INTEL_ROOT_P256_HEX.into(), None);
+    take_logs();
+    c
+}
+
+#[cfg(feature = "tdx-test-clock")]
+fn register_tdx(c: &mut Registry, quote: &str, collateral: &str, event_log: Value, app_compose: &str) -> String {
+    c.register_instance_tdx(quote.into(), collateral.into(), event_log, app_compose.into(), TDX_X25519.into(), TDX_ED25519.into())
+}
+
+#[cfg(feature = "tdx-test-clock")]
+#[test]
+fn register_instance_tdx_verifies_a_real_intel_quote_up_to_the_empty_event_log() {
+    let mut c = intel_bare();
+    caller(OPERATOR, DEPOSIT);
+    let quote = encode_hex(&tdx_quote());
+    assert_eq!(decode_hex(&quote).unwrap(), tdx_quote());
+    // Checks 1-9 all pass on TV-Q1 under the fixed 2025-06-20 clock (Intel signature chain, TCB "UpToDate",
+    // DEBUG clear); check 10 refuses the empty dstack log. Reaching it proves the DCAP path ran, since the
+    // compose/OS allowlists are empty (check 12) and TV-Q1's report_data binds other keys (check 13).
+    fails_with(E_EVENT_LOG, || register_tdx(&mut c, &quote, &tdx_collateral(), json!([]), "x"));
+    assert_eq!(c.get_instance(tdx_key_hash()), None, "nothing was recorded");
+    assert!(take_logs().is_empty(), "no event");
+    assert!(take_transfers().is_empty(), "no refund");
+}
+
+#[cfg(feature = "tdx-test-clock")]
+#[test]
+fn register_instance_tdx_requires_the_intel_root() {
+    // Check 5: a MOCK registry cannot verify INTEL-mode quotes.
+    let mut c = fresh();
+    caller(OPERATOR, DEPOSIT);
+    fails_with(E_QUOTE_SIG, || register_tdx(&mut c, &encode_hex(&tdx_quote()), &tdx_collateral(), json!([]), "x"));
+    // ... and neither can an INTEL registry whose root is some other P-256 key (the generator here).
+    let g = "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5";
+    test_host::reset();
+    caller("registry.test.near", 0);
+    let mut c = Registry::new(OWNER.parse().unwrap(), "INTEL".into(), g.into(), None);
+    caller(OPERATOR, DEPOSIT);
+    fails_with(E_QUOTE_SIG, || register_tdx(&mut c, &encode_hex(&tdx_quote()), &tdx_collateral(), json!([]), "x"));
+    assert_eq!(c.get_instance(tdx_key_hash()), None);
+}
+
+#[cfg(feature = "tdx-test-clock")]
+#[test]
+fn register_instance_tdx_argument_bounds_and_collateral_parse() {
+    let mut c = intel_bare();
+    caller(OPERATOR, DEPOSIT);
+    let quote = encode_hex(&tdx_quote());
+    let coll = tdx_collateral();
+    // Check 2: size first, then the QuoteCollateralV3 parse.
+    fails_with(E_COLLATERAL, || register_tdx(&mut c, &quote, &" ".repeat(MAX_COLLATERAL_LEN + 1), json!([]), "x"));
+    fails_with(E_COLLATERAL, || register_tdx(&mut c, &quote, "{}", json!([]), "x"));
+    fails_with(E_COLLATERAL, || register_tdx(&mut c, &quote, "not json", json!([]), "x"));
+    // Check 1: size first (16 384 hex chars), then lowercase even-length hex.
+    fails_with(E_QUOTE_FORMAT, || register_tdx(&mut c, &"00".repeat(MAX_TDX_QUOTE_HEX_LEN / 2 + 1), &coll, json!([]), "x"));
+    fails_with(E_QUOTE_FORMAT, || register_tdx(&mut c, &quote.to_uppercase(), &coll, json!([]), "x"));
+    fails_with(E_QUOTE_FORMAT, || register_tdx(&mut c, &quote[..quote.len() - 1], &coll, json!([]), "x"));
+    // Check 3: 1..=32 768 bytes of app-compose text.
+    fails_with(E_BAD_INPUT, || register_tdx(&mut c, &quote, &coll, json!([]), ""));
+    fails_with(E_BAD_INPUT, || register_tdx(&mut c, &quote, &coll, json!([]), &" ".repeat(MAX_DSTACK_COMPOSE_LEN + 1)));
+    // Check 4: the keys.
+    let call = |c: &mut Registry, x: &str, e: &str| {
+        c.register_instance_tdx(quote.clone(), coll.clone(), json!([]), "x".into(), x.into(), e.into())
+    };
+    fails_with(E_BAD_HEX, || call(&mut c, &"ab".repeat(32).to_uppercase(), TDX_ED25519));
+    fails_with(E_BAD_HEX, || call(&mut c, TDX_X25519, &TDX_ED25519[..62]));
+    fails_with(E_BAD_INPUT, || call(&mut c, &"00".repeat(32), TDX_ED25519));
+    fails_with(E_BAD_INPUT, || call(&mut c, TDX_X25519, &"00".repeat(32)));
+    // Nothing above changed state: the same arguments still pass 1-9 and stop at the event log.
+    assert_eq!(c.get_instance(tdx_key_hash()), None);
+    assert!(take_logs().is_empty() && take_transfers().is_empty());
+    fails_with(E_EVENT_LOG, || register_tdx(&mut c, &quote, &coll, json!([]), "x"));
+}
+
+#[cfg(feature = "tdx-test-clock")]
+#[test]
+fn get_tdx_policy_reports_the_frozen_intel_policy() {
+    let c = intel_bare();
+    let p = c.get_tdx_policy();
+    assert_eq!(
+        serde_json::to_value(&p).unwrap(),
+        json!({
+            "intel_root_p256": "0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f567918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394",
+            "accepted_tcb_statuses": ["UpToDate", "SWHardeningNeeded"],
+            "dcap_qvl_version": "0.7.1",
+        })
+    );
+    assert_eq!(p.intel_root_p256, INTEL_ROOT_P256_HEX);
+    assert_eq!(p.intel_root_p256.len(), 128);
+    assert_eq!(p.accepted_tcb_statuses, ACCEPTED_TCB_STATUSES.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    // A view: whatever the registry root is, and without ever panicking.
+    let m = fresh();
+    assert_eq!(m.get_tdx_policy(), p);
+}

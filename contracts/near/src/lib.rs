@@ -13,12 +13,14 @@ pub mod eventlog;
 pub mod hash;
 pub mod quote;
 pub mod verify;
+mod verify_tdx;
 
 #[cfg(test)]
 mod test_host;
 #[cfg(test)]
 mod tests;
 
+use dcap_qvl::QuoteCollateralV3;
 use near_sdk::serde_json::{json, Value};
 use near_sdk::store::{LookupMap, LookupSet, Vector};
 use near_sdk::{env, near, AccountId, BorshStorageKey, NearToken, PanicOnDefault, Promise};
@@ -26,7 +28,8 @@ use near_sdk::{env, near, AccountId, BorshStorageKey, NearToken, PanicOnDefault,
 use crate::binding::anchor_message;
 use crate::bytes::{decode_hex, decode_hex_array, encode_hex, is_all_zero};
 use crate::errors::*;
-use crate::verify::{verify_registration, Policy, Registration, RootKind};
+use crate::verify::{verify_registration, Policy, Registration, RootKind, Verified};
+use crate::verify_tdx::{now_secs, verify_registration_tdx, TdxRegistration};
 
 /// Default instance TTL: 24 h.
 pub const DEFAULT_INSTANCE_TTL_MS: u64 = 86_400_000;
@@ -43,6 +46,16 @@ pub const MAX_ANCHOR_COUNT: u64 = 10_000;
 pub const MAX_ANCHOR_CREDIT_YOCTO: u128 = 50_000_000_000_000_000_000_000;
 /// Maximum `org_id` length (SPEC §7 rev 1.2: `^[a-z0-9][a-z0-9._-]{0,63}$`).
 pub const MAX_ORG_ID_LEN: usize = 64;
+/// Intel SGX Root CA public key, x‖y (INTERFACES §0). A registry with root_kind INTEL must store exactly this.
+pub const INTEL_ROOT_P256_HEX: &str = "0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f567918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394";
+/// `quote` argument bound of `register_instance_tdx`, in hex chars (INTERFACES §1.1: 8 192 bytes).
+pub const MAX_TDX_QUOTE_HEX_LEN: usize = 16_384;
+/// `collateral` argument bound of `register_instance_tdx`, in bytes of JSON text (INTERFACES §1.2).
+pub const MAX_COLLATERAL_LEN: usize = 32_768;
+/// `app_compose` argument bound of `register_instance_tdx`: the dstack app-compose text (INTERFACES §1.4).
+pub const MAX_DSTACK_COMPOSE_LEN: usize = 32_768;
+/// Intel TCB statuses `register_instance_tdx` accepts (INTERFACES §0).
+pub const ACCEPTED_TCB_STATUSES: [&str; 2] = ["UpToDate", "SWHardeningNeeded"];
 
 #[derive(BorshStorageKey)]
 #[near(serializers = [borsh])]
@@ -110,6 +123,15 @@ pub struct Anchor {
 pub struct RootView {
     pub kind: String,
     pub p256: String,
+}
+
+/// `get_tdx_policy` view (INTERFACES §2.4): what `register_instance_tdx` enforces, whatever the stored root is.
+#[near(serializers = [json])]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TdxPolicyView {
+    pub intel_root_p256: String,
+    pub accepted_tcb_statuses: Vec<String>,
+    pub dcap_qvl_version: String,
 }
 
 /// `get_instance` view (SPEC §10 `InstanceRecord`; u64 fields as JSON numbers).
@@ -437,68 +459,7 @@ impl Registry {
         let reg = Registration { quote: &quote, event_log: &event_log, app_compose: app_compose.as_bytes(), x25519: &xp, ed25519: &ep };
         let v = verify_registration(&reg, &*self, contract_id.as_str(), operator.as_str()).or_fail();
 
-        let now = ctx::block_timestamp_ms();
-        let expires_at_ms = now.checked_add(self.instance_ttl_ms).unwrap_or_else(|| fail_with(E_BAD_INPUT, "time overflow"));
-        let storage_before = env::storage_usage();
-        let refreshed = match self.instances.get_mut(&v.key_hash) {
-            Some(rec) => {
-                // Same keys ⇒ same enclave boot, and step 7 bound the quote to its submitter, so only the operator
-                // that enclave chose can refresh. Keep operator, registered_at_ms and next_seq; refresh the rest.
-                rec.compose_hash = v.compose_hash;
-                rec.os_measurement = v.os_measurement;
-                rec.expires_at_ms = expires_at_ms;
-                true
-            }
-            None => {
-                self.instances.insert(
-                    v.key_hash,
-                    Instance {
-                        compose_hash: v.compose_hash,
-                        os_measurement: v.os_measurement,
-                        x25519: xp,
-                        ed25519: ep,
-                        operator: operator.clone(),
-                        registered_at_ms: now,
-                        expires_at_ms,
-                        next_seq: 0,
-                    },
-                );
-                false
-            }
-        };
-        self.instances.flush();
-        let added = env::storage_usage().saturating_sub(storage_before);
-        let deposit = ctx::attached_deposit().as_yoctonear();
-        let cost = storage_cost(added);
-        if deposit < cost {
-            fail_with(E_DEPOSIT, "attached deposit does not cover storage");
-        }
-        let mut excess = deposit - cost;
-        if excess > 0 {
-            // Top up the anchor credit. Its own map entry costs storage too, paid from the same excess.
-            let existing = self.anchor_credit.get(&v.key_hash).copied();
-            let credit = existing.unwrap_or(0);
-            let room = MAX_ANCHOR_CREDIT_YOCTO.saturating_sub(credit);
-            if room > 0 {
-                let before = env::storage_usage();
-                self.anchor_credit.insert(v.key_hash, credit);
-                self.anchor_credit.flush();
-                let entry_cost = storage_cost(env::storage_usage().saturating_sub(before));
-                if excess > entry_cost {
-                    let add = (excess - entry_cost).min(room);
-                    self.anchor_credit.insert(v.key_hash, credit + add);
-                    self.anchor_credit.flush();
-                    excess -= entry_cost + add;
-                } else if existing.is_none() {
-                    // Not enough to pay for a credit entry: undo it and refund everything.
-                    self.anchor_credit.remove(&v.key_hash);
-                    self.anchor_credit.flush();
-                }
-            }
-        }
-        if excess > 0 {
-            Promise::new(operator.clone()).transfer(NearToken::from_yoctonear(excess)).detach();
-        }
+        let (expires_at_ms, refreshed) = self.record_instance(&v, xp, ep, &operator);
 
         events::emit(
             events::INSTANCE_REGISTERED,
@@ -511,6 +472,68 @@ impl Registry {
                 "operator": operator,
                 "expires_at_ms": expires_at_ms,
                 "refreshed": refreshed,
+            }),
+        );
+        encode_hex(&v.key_hash)
+    }
+
+    /// Verifies an Intel DCAP (TDX) registration quote and records/refreshes the instance (INTERFACES §2.3).
+    /// Checks 1-4 run here on the arguments, 5-13 in [`verify_registration_tdx`]. Same deposit and refund rules
+    /// as [`Registry::register_instance`]. Returns the key hash (hex).
+    #[payable]
+    #[deny_unknown_arguments]
+    pub fn register_instance_tdx(
+        &mut self,
+        quote: String,
+        collateral: String,
+        event_log: Value,
+        app_compose: String,
+        x25519: String,
+        ed25519: String,
+    ) -> String {
+        if quote.len() > MAX_TDX_QUOTE_HEX_LEN {
+            fail_with(E_QUOTE_FORMAT, "quote too large");
+        }
+        let quote = decode_hex(&quote).unwrap_or_else(|| fail_with(E_QUOTE_FORMAT, "quote is not lowercase hex"));
+        if collateral.len() > MAX_COLLATERAL_LEN {
+            fail_with(E_COLLATERAL, "collateral too large");
+        }
+        let collateral: QuoteCollateralV3 = near_sdk::serde_json::from_str(&collateral).unwrap_or_else(|_| fail_with(E_COLLATERAL, "parse"));
+        if app_compose.is_empty() || app_compose.len() > MAX_DSTACK_COMPOSE_LEN {
+            fail_with(E_BAD_INPUT, "app_compose size");
+        }
+        let xp = key32_arg(&x25519);
+        let ep = key32_arg(&ed25519);
+        let contract_id = ctx::current_account_id();
+        // The enclave bound its registration quote to this operator account (SPEC §5/§7 rev 1.3).
+        let operator = ctx::predecessor_account_id();
+
+        let reg = TdxRegistration {
+            quote: &quote,
+            collateral: &collateral,
+            event_log: &event_log,
+            app_compose: app_compose.as_bytes(),
+            x25519: &xp,
+            ed25519: &ep,
+        };
+        let (v, tcb_status) =
+            verify_registration_tdx(&reg, &*self, contract_id.as_str(), operator.as_str(), now_secs()).or_fail();
+
+        let (expires_at_ms, refreshed) = self.record_instance(&v, xp, ep, &operator);
+
+        events::emit(
+            events::INSTANCE_REGISTERED,
+            json!({
+                "key_hash": encode_hex(&v.key_hash),
+                "compose_hash": encode_hex(&v.compose_hash),
+                "os_measurement": encode_hex(&v.os_measurement),
+                "x25519": encode_hex(&xp),
+                "ed25519": encode_hex(&ep),
+                "operator": operator,
+                "expires_at_ms": expires_at_ms,
+                "refreshed": refreshed,
+                "root_kind": RootKind::Intel.as_str(),
+                "tcb_status": tcb_status,
             }),
         );
         encode_hex(&v.key_hash)
@@ -580,15 +603,6 @@ impl Registry {
         id
     }
 
-    /// TEMPORARY (spike S2; deleted in T11): verifies TV-Q1 with dcap-qvl at the fixed test clock.
-    #[cfg(feature = "tdx-test-clock")]
-    pub fn debug_verify_tdx(&self, quote_hex: String, collateral: String) -> String {
-        let quote = crate::bytes::decode_hex(&quote_hex).unwrap_or_else(|| near_sdk::env::panic_str("hex"));
-        let c: dcap_qvl::QuoteCollateralV3 = near_sdk::serde_json::from_str(&collateral).unwrap_or_else(|_| near_sdk::env::panic_str("collateral"));
-        let r = dcap_qvl::verify::QuoteVerifier::new_prod().verify(&quote, &c, 1_750_377_600).unwrap_or_else(|_| near_sdk::env::panic_str("E_QUOTE_SIG"));
-        r.status
-    }
-
     // ---------- views ----------
 
     pub fn is_allowed(&self, compose_hash: String, os_measurement: String) -> bool {
@@ -617,6 +631,15 @@ impl Registry {
 
     pub fn get_root(&self) -> RootView {
         RootView { kind: self.root_kind.as_str().to_string(), p256: encode_hex(&self.root_p256) }
+    }
+
+    /// The INTEL-mode policy this code enforces (INTERFACES §2.4). Never panics.
+    pub fn get_tdx_policy(&self) -> TdxPolicyView {
+        TdxPolicyView {
+            intel_root_p256: INTEL_ROOT_P256_HEX.to_string(),
+            accepted_tcb_statuses: ACCEPTED_TCB_STATUSES.iter().map(|s| s.to_string()).collect(),
+            dcap_qvl_version: "0.7.1".to_string(),
+        }
     }
 
     pub fn get_anchor(&self, id: u64) -> Option<AnchorView> {
@@ -671,6 +694,75 @@ impl Registry {
         if ctx::predecessor_account_id() != self.owner {
             fail_with(E_UNAUTHORIZED, "only the owner");
         }
+    }
+
+    /// Records or refreshes `v`'s instance: storage, deposit and refund. Shared by [`Registry::register_instance`]
+    /// (MOCK) and [`Registry::register_instance_tdx`] (INTEL), so both have identical economics.
+    /// Returns `(expires_at_ms, refreshed)`.
+    fn record_instance(&mut self, v: &Verified, xp: [u8; 32], ep: [u8; 32], operator: &AccountId) -> (u64, bool) {
+        let now = ctx::block_timestamp_ms();
+        let expires_at_ms = now.checked_add(self.instance_ttl_ms).unwrap_or_else(|| fail_with(E_BAD_INPUT, "time overflow"));
+        let storage_before = env::storage_usage();
+        let refreshed = match self.instances.get_mut(&v.key_hash) {
+            Some(rec) => {
+                // Same keys ⇒ same enclave boot, and step 7 bound the quote to its submitter, so only the operator
+                // that enclave chose can refresh. Keep operator, registered_at_ms and next_seq; refresh the rest.
+                rec.compose_hash = v.compose_hash;
+                rec.os_measurement = v.os_measurement;
+                rec.expires_at_ms = expires_at_ms;
+                true
+            }
+            None => {
+                self.instances.insert(
+                    v.key_hash,
+                    Instance {
+                        compose_hash: v.compose_hash,
+                        os_measurement: v.os_measurement,
+                        x25519: xp,
+                        ed25519: ep,
+                        operator: operator.clone(),
+                        registered_at_ms: now,
+                        expires_at_ms,
+                        next_seq: 0,
+                    },
+                );
+                false
+            }
+        };
+        self.instances.flush();
+        let added = env::storage_usage().saturating_sub(storage_before);
+        let deposit = ctx::attached_deposit().as_yoctonear();
+        let cost = storage_cost(added);
+        if deposit < cost {
+            fail_with(E_DEPOSIT, "attached deposit does not cover storage");
+        }
+        let mut excess = deposit - cost;
+        if excess > 0 {
+            // Top up the anchor credit. Its own map entry costs storage too, paid from the same excess.
+            let existing = self.anchor_credit.get(&v.key_hash).copied();
+            let credit = existing.unwrap_or(0);
+            let room = MAX_ANCHOR_CREDIT_YOCTO.saturating_sub(credit);
+            if room > 0 {
+                let before = env::storage_usage();
+                self.anchor_credit.insert(v.key_hash, credit);
+                self.anchor_credit.flush();
+                let entry_cost = storage_cost(env::storage_usage().saturating_sub(before));
+                if excess > entry_cost {
+                    let add = (excess - entry_cost).min(room);
+                    self.anchor_credit.insert(v.key_hash, credit + add);
+                    self.anchor_credit.flush();
+                    excess -= entry_cost + add;
+                } else if existing.is_none() {
+                    // Not enough to pay for a credit entry: undo it and refund everything.
+                    self.anchor_credit.remove(&v.key_hash);
+                    self.anchor_credit.flush();
+                }
+            }
+        }
+        if excess > 0 {
+            Promise::new(operator.clone()).transfer(NearToken::from_yoctonear(excess)).detach();
+        }
+        (expires_at_ms, refreshed)
     }
 
     /// Pays `cost` yoctoNEAR of anchor storage: attached deposit first (excess refunded to the caller), then

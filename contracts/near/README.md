@@ -1,15 +1,20 @@
 # plr-registry — PLR-v1 NEAR registry contract (SPEC §7)
 
 Owner-governed allowlist of compose hashes and OS measurements, **on-chain verification of MOCK TDX
-registration quotes**, and Ed25519-authorised Merkle anchoring of receipts.
+registration quotes**, **on-chain Intel DCAP verification of real TDX quotes** (`register_instance_tdx`, INTEL mode,
+INTERFACES §2.3), and Ed25519-authorised Merkle anchoring of receipts.
 
 ## Build and test (the gate)
 
 ```sh
 cd contracts/near
-cargo near build non-reproducible-wasm --no-abi   # → target/near/plr_registry.wasm (~230 KB)
-cargo test --release                              # 49 tests, incl. the TS-generated registration vectors
+cargo near build non-reproducible-wasm --no-abi   # → target/near/plr_registry.wasm (~230 KB, no dcap-qvl)
+cargo test --release                              # 54 tests, incl. the TS-generated registration vectors
+cargo test --release --features tdx-test-clock    # 58 tests: + the 4 INTEL tests on TV-Q1 (fixed clock)
 ```
+
+`tdx-test-clock` pins the verification clock to `1_750_377_600` (2025-06-20T00:00:00Z) so TV-Q1's collateral
+(valid 2025-06-19 … 2025-07-19) verifies forever. **Never deploy a build with it.**
 
 Without network, add `CARGO_NET_OFFLINE=true`.
 
@@ -32,6 +37,8 @@ Without network, add `CARGO_NET_OFFLINE=true`.
 | `approve_operator(account_id, org_id)` / `revoke_operator(account_id)` | owner | SPEC §7 rev 1.2 operator organizations. `org_id` must match `^[a-z0-9][a-z0-9._-]{0,63}$` (ASCII), else `E_BAD_INPUT`. Re-approving changes the org. Revoking an unapproved account is a no-op. Events `operator_approved` `{account_id, org_id, previous_org_id}` / `operator_revoked` `{account_id, previous_org_id}`. Not payable: like the other owner methods, the entry's storage (≈ 110-240 bytes, ≤ 0.0024 NEAR) is paid from the contract balance and released on revoke. Owner-only, so it is not a drain vector |
 | `get_operator(account_id) → org_id \| null` | view | `null` if not approved or `account_id` is malformed |
 | `register_instance(quote, event_log, app_compose, x25519, ed25519) → key_hash` | anyone, `#[payable]` | SPEC §7 steps 1-7; storage deposit required (≈0.0035 NEAR used; ≈6.5 Tgas); excess becomes anchor credit (≤ 0.05 NEAR), the rest is refunded |
+| `register_instance_tdx(quote, collateral, event_log, app_compose, x25519, ed25519) → key_hash` | anyone, `#[payable]` | INTEL mode (INTERFACES §2.3): on-chain Intel DCAP + dstack event log; 13 ordered checks below; same deposit/refund rules as `register_instance` (attach 0.1 NEAR, 300 Tgas) |
+| `get_tdx_policy() → {intel_root_p256, accepted_tcb_statuses, dcap_qvl_version}` | view | INTERFACES §2.4; never panics |
 | `anchor_receipts(key_hash, root, first_seq, count, sig) → anchor_id` | anyone, `#[payable]` | storage paid by the attached deposit (excess refunded) or the instance's prepaid anchor credit, else `E_DEPOSIT`; event `receipts_anchored` |
 | `migrate()` | contract account (`#[private]`) | rev 1.3 one-time upgrade of a rev 1.2 state; **empties the compose allowlist** (see below); event `compose_allowlist_reset` `{state_rev}` |
 | `get_state_rev() → u8` | view | `3` for the rev 1.3 layout |
@@ -79,12 +86,72 @@ enforces this:
 the borsh state would not deserialize. Redeploy it fresh, or add a migration. There is no migration method, since no
 pre-rev-1.2 deployment exists outside local sandboxes.
 
+## INTEL mode (`register_instance_tdx`)
+
+`register_instance` only accepts MOCK quotes and fails closed (`E_QUOTE_SIG`) under an `INTEL` root.
+`register_instance_tdx` is the real-TDX path: the quote's Intel signature chain is verified **on chain** by
+`dcap-qvl` 0.7.1 (the same pure-Rust verifier the enclave and client use off chain, so the wasm carries no
+crypto host-function dependency), the dstack RTMR3 event log is replayed, and the result is recorded exactly like a
+MOCK registration (same storage deposit, anchor credit and refund rules; attach `0.1 NEAR` and `300 Tgas`, expect
+120-250 Tgas burnt). A registry with root kind `INTEL` whose `root_p256` is not the Intel SGX Root CA below rejects
+every TDX quote (`E_QUOTE_SIG`), so pinning the root is what enables the mode.
+
+Arguments (checks 1-4 concern them):
+
+| argument | type | rule |
+|---|---|---|
+| `quote` | lowercase hex string | TDX quote v4, ≤ 16 384 hex chars (8 192 bytes; real quotes ≈ 5 006) |
+| `collateral` | string | canonical collateral JSON (INTERFACES §1.2), ≤ 32 768 bytes |
+| `event_log` | JSON array | dstack IMR3 events, 5-64 entries (INTERFACES §1.3, V1 digests only) |
+| `app_compose` | string | the measured dstack app-compose text, 1-32 768 bytes |
+| `x25519`, `ed25519` | 32-byte lowercase hex | non-zero |
+
+Checks, in this order (the first failure panics with the code, as everywhere else):
+
+| # | check | code |
+|---|---|---|
+| 1 | `quote.len() ≤ 16384`, lowercase hex | `E_QUOTE_FORMAT` |
+| 2 | `collateral.len() ≤ 32768`, parses as `dcap_qvl::QuoteCollateralV3` via `near_sdk::serde_json::from_str` | `E_COLLATERAL` |
+| 3 | `1 ≤ app_compose.len() ≤ 32768` | `E_BAD_INPUT` |
+| 4 | keys: 32-byte hex, not all-zero (existing `key32_arg`) | `E_BAD_HEX` / `E_BAD_INPUT` |
+| 5 | stored root kind is `INTEL` **and** stored `root_p256 == INTEL_ROOT_P256` | `E_QUOTE_SIG` |
+| 6 | INTEL structural parse (§1.1 table: version, tee, vendor id, sig_data_len, zero padding, `mr_signer_seam`). There is no `E_TEE_TYPE` on chain: like `parse_mock`, a wrong TEE type is `E_QUOTE_FORMAT` (the TS client keeps `E_TEE_TYPE`) | `E_QUOTE_FORMAT` |
+| 7 | `QuoteVerifier::new_prod().verify(&quote, &collateral, now_secs)` is `Ok(report)`; `now_secs = env::block_timestamp_ms() / 1000` (or `1_750_377_600` under `tdx-test-clock`) | `E_QUOTE_SIG` |
+| 8 | `report.status` ∈ `ACCEPTED_TCB_STATUSES` (`UpToDate`, `SWHardeningNeeded`) | `E_TCB_STATUS` |
+| 9 | DEBUG bit clear (byte 168) | `E_DEBUG_TD` |
+| 10 | `verify_event_log_dstack(event_log, rtmr3)` (INTERFACES §1.3) | `E_EVENT_LOG` / `E_RTMR3` |
+| 11 | `sha256(app_compose) == compose-hash payload` | `E_COMPOSE_MISMATCH` |
+| 12 | compose allowed, then OS measurement allowed (`os_measurement = SHA256(mr_td ‖ rtmr0 ‖ rtmr1 ‖ rtmr2)`) | `E_COMPOSE_NOT_ALLOWED` / `E_OS_NOT_ALLOWED` |
+| 13 | `report_data == key_hash(x25519, ed25519) ‖ registration_nonce(current_account_id, predecessor_account_id)` (the rev 1.3 binding: only the operator the enclave named can register) | `E_REPORT_DATA` |
+
+It then does the same record/refresh/deposit/refund work as `register_instance` (`record_instance`) and emits
+`instance_registered` with the MOCK data fields **plus** `"root_kind":"INTEL"` and `"tcb_status":"<status>"`:
+
+```
+EVENT_JSON:{"standard":"plr","version":"1.0.0","event":"instance_registered","data":[{"key_hash":"5f…","compose_hash":"8f…","os_measurement":"34…","x25519":"…","ed25519":"…","operator":"pe-op-erhan.testnet","expires_at_ms":1794182400000,"refreshed":false,"root_kind":"INTEL","tcb_status":"UpToDate"}]}
+```
+
+`get_tdx_policy()` reports what the code enforces, whatever the stored root is:
+
+```json
+{"intel_root_p256":"0ba9c4c0…ae7394","accepted_tcb_statuses":["UpToDate","SWHardeningNeeded"],"dcap_qvl_version":"0.7.1"}
+```
+
+`INTEL_ROOT_P256` is the public key of `CN=Intel SGX Root CA` (x‖y, extracted from `dcap-qvl`'s `TrustedRootCA.der`),
+`ACCEPTED_TCB_STATUSES` is `["UpToDate","SWHardeningNeeded"]`, and `dcap_qvl` is pinned to `=0.7.1`.
+
+Tests: `cargo test --release --features tdx-test-clock` runs four INTEL tests. TV-Q1 (the `dcap-qvl` sample quote,
+5 006 bytes) is pushed through the real pipeline under the fixed 2025-06-20 clock: with the Intel root and empty
+allowlists it gets past dcap (status `UpToDate`), the TCB and DEBUG checks and stops at check 10 with `E_EVENT_LOG`
+on an empty log; a MOCK root (or any non-Intel P-256 key) fails at check 5 with `E_QUOTE_SIG`; `"{}"` collateral is
+`E_COLLATERAL` and a 16 386-char quote is `E_QUOTE_FORMAT`; `get_tdx_policy` returns the three fields.
+
 ## Error codes (panic message = `CODE` or `CODE: static detail`; caller input is never echoed)
 
 `E_BAD_HEX`, `E_ZERO_HASH`, `E_BAD_INPUT`, `E_UNAUTHORIZED`, `E_DEPOSIT`, `E_QUOTE_FORMAT` (any structural quote
-problem incl. TEE type, bad hex, > 4096 hex chars), `E_QUOTE_SIG`, `E_DEBUG_TD`, `E_EVENT_LOG`, `E_RTMR3`,
-`E_COMPOSE_MISMATCH`, `E_COMPOSE_NOT_ALLOWED`, `E_OS_NOT_ALLOWED`, `E_REPORT_DATA`, `E_INSTANCE_NOT_REGISTERED`,
-`E_SEQ`, `E_ANCHOR_SIG`.
+problem incl. TEE type, bad hex, > 4096 hex chars in MOCK mode / > 16 384 in INTEL mode), `E_QUOTE_SIG`, `E_DEBUG_TD`,
+`E_EVENT_LOG`, `E_RTMR3`, `E_COMPOSE_MISMATCH`, `E_COMPOSE_NOT_ALLOWED`, `E_OS_NOT_ALLOWED`, `E_REPORT_DATA`,
+`E_TCB_STATUS`, `E_COLLATERAL`, `E_INSTANCE_NOT_REGISTERED`, `E_SEQ`, `E_ANCHOR_SIG`.
 
 ## Layout
 
@@ -92,7 +159,8 @@ problem incl. TEE type, bad hex, > 4096 hex chars), `E_QUOTE_SIG`, `E_DEBUG_TD`,
 |---|---|
 | `src/lib.rs` | contract state, methods, argument validation, storage deposit/refund |
 | `src/verify.rs` | `register_instance` pipeline (SPEC §7 steps 1-7, in order) |
-| `src/quote.rs` | MOCK quote parsing (SPEC §2) |
+| `src/verify_tdx.rs` | `register_instance_tdx` pipeline (INTERFACES §2.3 checks 5-13, in order) |
+| `src/quote.rs` | MOCK quote parsing (SPEC §2) and INTEL quote parsing (INTERFACES §1.1) |
 | `src/ecdsa.rs` | P-256: low-S + range checks, on-curve check, compression, host `p256_verify` |
 | `src/eventlog.rs` | event-log verification and RTMR3 replay (SPEC §3), same rules as `@plr/shared` |
 | `src/binding.rs` | key hash, operator-bound registration nonce (rev 1.3), AK-cert and anchor message layouts |
