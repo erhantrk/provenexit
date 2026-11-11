@@ -9,8 +9,8 @@ INTERFACES §2.3), and Ed25519-authorised Merkle anchoring of receipts.
 ```sh
 cd contracts/near
 cargo near build non-reproducible-wasm --no-abi   # → target/near/plr_registry.wasm (~230 KB, no dcap-qvl)
-cargo test --release                              # 54 tests, incl. the TS-generated registration vectors
-cargo test --release --features tdx-test-clock    # 58 tests: + the 4 INTEL tests on TV-Q1 (fixed clock)
+cargo test --release                              # 60 tests, incl. the TS-generated vectors and the INTEL checks 1-4/8-13
+cargo test --release --features tdx-test-clock    # 61 tests: + TV-Q1 through the real dcap pipeline (fixed clock)
 ```
 
 `tdx-test-clock` pins the verification clock to `1_750_377_600` (2025-06-20T00:00:00Z) so TV-Q1's collateral
@@ -140,11 +140,14 @@ EVENT_JSON:{"standard":"plr","version":"1.0.0","event":"instance_registered","da
 `INTEL_ROOT_P256` is the public key of `CN=Intel SGX Root CA` (x‖y, extracted from `dcap-qvl`'s `TrustedRootCA.der`),
 `ACCEPTED_TCB_STATUSES` is `["UpToDate","SWHardeningNeeded"]`, and `dcap_qvl` is pinned to `=0.7.1`.
 
-Tests: `cargo test --release --features tdx-test-clock` runs four INTEL tests. TV-Q1 (the `dcap-qvl` sample quote,
-5 006 bytes) is pushed through the real pipeline under the fixed 2025-06-20 clock: with the Intel root and empty
-allowlists it gets past dcap (status `UpToDate`), the TCB and DEBUG checks and stops at check 10 with `E_EVENT_LOG`
-on an empty log; a MOCK root (or any non-Intel P-256 key) fails at check 5 with `E_QUOTE_SIG`; `"{}"` collateral is
-`E_COLLATERAL` and a 16 386-char quote is `E_QUOTE_FORMAT`; `get_tdx_policy` returns the three fields.
+Tests: the default `cargo test --release` covers the INTEL argument checks (1-4), checks 8-13 on a hand-built
+INTEL-format quote (TCB, DEBUG, event log, compose hash, both allowlists, and report_data bound to the keys, the registry
+and the predecessor), the accepted TCB status list, and the INTEL deposit/refund/`instance_registered` path.
+`--features tdx-test-clock` adds TV-Q1 (the `dcap-qvl` sample quote, 5 006 bytes) pushed through the real dcap
+pipeline under the fixed 2025-06-20 clock: with the Intel root and empty allowlists it gets past dcap (status
+`UpToDate`), the TCB and DEBUG checks and stops at check 10 with `E_EVENT_LOG` on an empty log. A MOCK root (or any
+non-Intel P-256 key) fails at check 5 with `E_QUOTE_SIG`; `"{}"`/oversized collateral is `E_COLLATERAL`, a
+16 386-char quote is `E_QUOTE_FORMAT`, and `get_tdx_policy` returns the three fields.
 
 ## Error codes (panic message = `CODE` or `CODE: static detail`; caller input is never echoed)
 

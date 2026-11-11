@@ -519,24 +519,7 @@ impl Registry {
         let (v, tcb_status) =
             verify_registration_tdx(&reg, &*self, contract_id.as_str(), operator.as_str(), now_secs()).or_fail();
 
-        let (expires_at_ms, refreshed) = self.record_instance(&v, xp, ep, &operator);
-
-        events::emit(
-            events::INSTANCE_REGISTERED,
-            json!({
-                "key_hash": encode_hex(&v.key_hash),
-                "compose_hash": encode_hex(&v.compose_hash),
-                "os_measurement": encode_hex(&v.os_measurement),
-                "x25519": encode_hex(&xp),
-                "ed25519": encode_hex(&ep),
-                "operator": operator,
-                "expires_at_ms": expires_at_ms,
-                "refreshed": refreshed,
-                "root_kind": RootKind::Intel.as_str(),
-                "tcb_status": tcb_status,
-            }),
-        );
-        encode_hex(&v.key_hash)
+        self.finish_tdx_registration(v, &tcb_status, xp, ep, &operator)
     }
 
     // ---------- receipts ----------
@@ -694,6 +677,36 @@ impl Registry {
         if ctx::predecessor_account_id() != self.owner {
             fail_with(E_UNAUTHORIZED, "only the owner");
         }
+    }
+
+    /// Records a verified INTEL-mode registration exactly as [`Registry::register_instance_tdx`] does after
+    /// verification: the shared storage/deposit/refund path of [`Registry::record_instance`], then the
+    /// `instance_registered` event carrying the two INTEL keys. Returns the key hash hex.
+    fn finish_tdx_registration(
+        &mut self,
+        v: Verified,
+        tcb_status: &str,
+        xp: [u8; 32],
+        ep: [u8; 32],
+        operator: &AccountId,
+    ) -> String {
+        let (expires_at_ms, refreshed) = self.record_instance(&v, xp, ep, operator);
+        events::emit(
+            events::INSTANCE_REGISTERED,
+            json!({
+                "key_hash": encode_hex(&v.key_hash),
+                "compose_hash": encode_hex(&v.compose_hash),
+                "os_measurement": encode_hex(&v.os_measurement),
+                "x25519": encode_hex(&xp),
+                "ed25519": encode_hex(&ep),
+                "operator": operator,
+                "expires_at_ms": expires_at_ms,
+                "refreshed": refreshed,
+                "root_kind": RootKind::Intel.as_str(),
+                "tcb_status": tcb_status,
+            }),
+        );
+        encode_hex(&v.key_hash)
     }
 
     /// Records or refreshes `v`'s instance: storage, deposit and refund. Shared by [`Registry::register_instance`]

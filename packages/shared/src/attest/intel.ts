@@ -7,9 +7,21 @@ import { canonicalCollateral } from "./collateral.js";
 import type { QuoteVerifier, VerifyContext } from "./types.js";
 
 const require = createRequire(import.meta.url);
-const dcap = require("@phala/dcap-qvl") as {
+type Dcap = {
   verify(q: Uint8Array, c: unknown, nowSecs: number): { status: string; advisory_ids: string[] };
 };
+let dcap: Dcap | undefined;
+
+/**
+ * Loads `@phala/dcap-qvl` on first INTEL verification, not at import time. Bundlers cannot inline the dynamic
+ * `require` that `createRequire` produces, so an eager load would make every bundle that imports `@plr/shared`
+ * (the VPN exit's `vpn.bundle.mjs`, which ships without `node_modules`) throw at start-up — even in MOCK mode.
+ * INTEL-mode deployments must therefore ship the package next to the bundle (T12/T13); MOCK mode never loads it.
+ */
+function getDcap(): Dcap {
+  dcap ??= require("@phala/dcap-qvl") as Dcap;
+  return dcap;
+}
 
 /** Public key (`x‖y`) of `CN=Intel SGX Root CA` (INTERFACES §0). */
 export const INTEL_ROOT_P256 = fromHex(
@@ -52,7 +64,7 @@ export class DcapQvlVerifier implements QuoteVerifier {
     const now = ctx.nowSecs ?? Math.floor(this.#clock() / 1000);
     let status: string;
     try {
-      status = dcap.verify(Buffer.from(quote), collateral, now).status;
+      status = getDcap().verify(Buffer.from(quote), collateral, now).status;
     } catch {
       throw new PlrError("E_QUOTE_SIG", "dcap");
     }

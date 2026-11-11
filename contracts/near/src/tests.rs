@@ -17,8 +17,11 @@ use crate::eventlog::{
 };
 use crate::hash::{sha256, sha384_concat};
 use crate::quote::{
-    off, parse_intel, parse_mock, MAX_INTEL_LEN, MOCK_LEN, MOCK_QE_VENDOR_ID, MR_SIGNER_SEAM, SIG_DATA_OFF, SIG_LEN_OFF,
+    off, parse_intel, parse_mock, INTEL_QE_VENDOR_ID, MAX_INTEL_LEN, MOCK_LEN, MOCK_QE_VENDOR_ID, MR_SIGNER_SEAM,
+    SIG_DATA_OFF, SIG_LEN_OFF,
 };
+use crate::verify::{Policy, RootKind, Verified};
+use crate::verify_tdx::{check_tcb_status, verify_quote_tdx};
 use crate::test_host::{self, set_ctx, take_logs, take_transfers};
 use crate::*;
 
@@ -1480,30 +1483,25 @@ fn verify_event_log_dstack_accepts_the_real_phala_spike_log() {
 
 // ---------------- INTEL mode: `register_instance_tdx` / `get_tdx_policy` (INTERFACES §2.3, §2.4) ----------------
 //
-// TV-Q1's collateral is only valid from 2025-06-19 to 2025-07-19, so these tests need the test-only fixed clock
-// (`--features tdx-test-clock`) and are compiled only with it. dcap-qvl verifies with pure-Rust crypto: the
-// native test host needs no extra host functions.
+// Only check 7 (the Intel signature chain) needs real collateral and TV-Q1's validity instant, so only that test
+// is compiled with the test-only fixed clock (`--features tdx-test-clock`). The argument checks and the
+// post-DCAP checks 9-13 run in the default `cargo test --release` too, so the gate always exercises them.
 
 /// TV-Q1's collateral: `dcap-qvl` 0.7.1 `sample/tdx_quote_collateral.json` (16 072 bytes).
-#[cfg(feature = "tdx-test-clock")]
 fn tdx_collateral() -> String {
     include_str!("../../../packages/shared/test/vectors/dcap/tdx_quote_collateral.json").to_string()
 }
 
 /// The keys these tests submit: any non-zero 32-byte hex passes check 4.
-#[cfg(feature = "tdx-test-clock")]
 const TDX_X25519: &str = "1111111111111111111111111111111111111111111111111111111111111111";
-#[cfg(feature = "tdx-test-clock")]
 const TDX_ED25519: &str = "2222222222222222222222222222222222222222222222222222222222222222";
 
 /// `key_hash` of those two keys: the id a successful TDX registration would record.
-#[cfg(feature = "tdx-test-clock")]
 fn tdx_key_hash() -> String {
     encode_hex(&key_hash(&[0x11; 32], &[0x22; 32]))
 }
 
 /// A registry initialised with the Intel root; compose and OS allowlists stay empty.
-#[cfg(feature = "tdx-test-clock")]
 fn intel_bare() -> Registry {
     test_host::reset();
     caller("registry.test.near", 0);
@@ -1512,9 +1510,151 @@ fn intel_bare() -> Registry {
     c
 }
 
-#[cfg(feature = "tdx-test-clock")]
 fn register_tdx(c: &mut Registry, quote: &str, collateral: &str, event_log: Value, app_compose: &str) -> String {
     c.register_instance_tdx(quote.into(), collateral.into(), event_log, app_compose.into(), TDX_X25519.into(), TDX_ED25519.into())
+}
+
+/// `encodeQuote` (packages/shared/src/tdx/quote.ts) ported for INTEL mode: a structurally valid v4 quote whose
+/// `report_data`, RTMR3 and DEBUG bit the caller chooses, with 64 bytes of arbitrary `sig_data` (no signature).
+fn encode_intel_quote(report_data: &[u8; 64], rtmr3: &[u8; 48], debug: bool) -> Vec<u8> {
+    let mut q = vec![0u8; SIG_DATA_OFF + 64];
+    q[off::VERSION..off::VERSION + 2].copy_from_slice(&4u16.to_le_bytes());
+    q[off::ATT_KEY_TYPE..off::ATT_KEY_TYPE + 2].copy_from_slice(&2u16.to_le_bytes());
+    q[off::TEE_TYPE..off::TEE_TYPE + 4].copy_from_slice(&0x81u32.to_le_bytes());
+    q[off::QE_VENDOR_ID..off::QE_VENDOR_ID + 16].copy_from_slice(&INTEL_QE_VENDOR_ID);
+    if debug {
+        q[off::TD_ATTRIBUTES] = 1;
+    }
+    q[off::RTMR3..off::RTMR3 + 48].copy_from_slice(rtmr3);
+    q[off::REPORT_DATA..off::REPORT_DATA + 64].copy_from_slice(report_data);
+    q[SIG_LEN_OFF..SIG_LEN_OFF + 4].copy_from_slice(&64u32.to_le_bytes());
+    q
+}
+
+/// The compose the hand-built quotes measure.
+const TDX_COMPOSE: &[u8] = br#"{"manifest_version":2,"name":"provenexit-exit","runner":"docker-compose"}"#;
+const TDX_CONTRACT: &str = "registry.test.near";
+
+/// A policy for the checks 9-13 tests: only the allowlists are consulted there (check 5 is in the caller).
+struct TdxTestPolicy {
+    compose: Vec<[u8; 32]>,
+    os: Vec<[u8; 32]>,
+}
+
+impl Policy for TdxTestPolicy {
+    fn root(&self) -> (RootKind, [u8; 64]) {
+        (RootKind::Intel, [0u8; 64])
+    }
+    fn compose_allowed(&self, h: &[u8; 32]) -> bool {
+        self.compose.contains(h)
+    }
+    fn os_allowed(&self, h: &[u8; 32]) -> bool {
+        self.os.contains(h)
+    }
+}
+
+/// A structurally valid INTEL quote bound to the test keys/registry/operator, the dstack log measuring
+/// [`TDX_COMPOSE`], and the replay RTMR3 that log produces (stored in the quote).
+fn intel_fixture() -> (Vec<u8>, Value, [u8; 32]) {
+    let rd = registration_report_data(&[0x11; 32], &[0x22; 32], TDX_CONTRACT, OPERATOR).expect("report_data");
+    let log = dstack_boot_log(&sha256(TDX_COMPOSE));
+    let quote = encode_intel_quote(&rd, &dstack_rtmr3(&log), false);
+    let os = parse_intel(&quote).unwrap().os_measurement();
+    (quote, log, os)
+}
+
+fn tdx_err(r: Result<Verified, Error>) -> &'static str {
+    r.err().expect("expected a failure").code
+}
+
+/// Checks 8-13 on a hand-built INTEL quote: the success path and every rule that must bite.
+#[test]
+fn verify_quote_tdx_accepts_the_bound_quote_and_rejects_each_rule() {
+    let (quote, log, os) = intel_fixture();
+    let xp = [0x11u8; 32];
+    let ep = [0x22u8; 32];
+    let compose_hash = sha256(TDX_COMPOSE);
+    let allow = TdxTestPolicy { compose: vec![compose_hash], os: vec![os] };
+    let q = parse_intel(&quote).expect("the hand-built quote parses in INTEL mode");
+    let v = verify_quote_tdx(&q, "UpToDate", &log, TDX_COMPOSE, &xp, &ep, &allow, TDX_CONTRACT, OPERATOR).expect("success");
+    assert_eq!(v, Verified { key_hash: key_hash(&xp, &ep), compose_hash, os_measurement: os });
+
+    // 8. a TCB status outside ACCEPTED_TCB_STATUSES is refused before any later check.
+    assert_eq!(tdx_err(verify_quote_tdx(&q, "OutOfDate", &log, TDX_COMPOSE, &xp, &ep, &allow, TDX_CONTRACT, OPERATOR)), E_TCB_STATUS);
+
+    // 9. DEBUG bit set (byte 168 bit 0).
+    let debug_quote = encode_intel_quote(&q.report_data(), &q.rtmr(3), true);
+    let debug = parse_intel(&debug_quote).unwrap();
+    assert_eq!(tdx_err(verify_quote_tdx(&debug, "UpToDate", &log, TDX_COMPOSE, &xp, &ep, &allow, TDX_CONTRACT, OPERATOR)), E_DEBUG_TD);
+
+    // 13. report_data must bind these keys, this registry and this predecessor. A quote for another key set ...
+    let mut other = quote.clone();
+    other[off::REPORT_DATA] ^= 1;
+    let other = parse_intel(&other).unwrap();
+    assert_eq!(tdx_err(verify_quote_tdx(&other, "UpToDate", &log, TDX_COMPOSE, &xp, &ep, &allow, TDX_CONTRACT, OPERATOR)), E_REPORT_DATA);
+    // ... another registry ...
+    assert_eq!(tdx_err(verify_quote_tdx(&q, "UpToDate", &log, TDX_COMPOSE, &xp, &ep, &allow, "other.test.near", OPERATOR)), E_REPORT_DATA);
+    // ... and another predecessor (the operator-binding property: only the account in the quote may register).
+    assert_eq!(tdx_err(verify_quote_tdx(&q, "UpToDate", &log, TDX_COMPOSE, &xp, &ep, &allow, TDX_CONTRACT, STRANGER)), E_REPORT_DATA);
+
+    // 11. the published app-compose must be the measured one.
+    assert_eq!(tdx_err(verify_quote_tdx(&q, "UpToDate", &log, b"other compose", &xp, &ep, &allow, TDX_CONTRACT, OPERATOR)), E_COMPOSE_MISMATCH);
+    // 12. both allowlists.
+    let no_compose = TdxTestPolicy { compose: vec![], os: vec![os] };
+    assert_eq!(tdx_err(verify_quote_tdx(&q, "UpToDate", &log, TDX_COMPOSE, &xp, &ep, &no_compose, TDX_CONTRACT, OPERATOR)), E_COMPOSE_NOT_ALLOWED);
+    let no_os = TdxTestPolicy { compose: vec![compose_hash], os: vec![] };
+    assert_eq!(tdx_err(verify_quote_tdx(&q, "UpToDate", &log, TDX_COMPOSE, &xp, &ep, &no_os, TDX_CONTRACT, OPERATOR)), E_OS_NOT_ALLOWED);
+}
+
+/// Check 8: exactly the frozen `ACCEPTED_TCB_STATUSES` pass, everything else is `E_TCB_STATUS`.
+#[test]
+fn check_tcb_status_accepts_exactly_the_frozen_list() {
+    for status in ACCEPTED_TCB_STATUSES {
+        assert_eq!(check_tcb_status(status), Ok(()), "{status}");
+    }
+    for status in ["OutOfDate", "Revoked", "ConfigurationNeeded", "UnderConfiguration", "", "uptodate"] {
+        assert_eq!(check_tcb_status(status), Err(Error::new(E_TCB_STATUS, "")), "{status}");
+    }
+}
+
+/// The post-verification half of `register_instance_tdx`: stored instance, event keys (`root_kind`, `tcb_status`)
+/// and the deposit/refund arithmetic, on the INTEL path.
+#[test]
+fn finish_tdx_registration_records_the_instance_emits_both_keys_and_refunds() {
+    let mut c = intel_bare();
+    let xp = [0x11u8; 32];
+    let ep = [0x22u8; 32];
+    let v = Verified { key_hash: key_hash(&xp, &ep), compose_hash: sha256(TDX_COMPOSE), os_measurement: [0x33; 32] };
+    let kh = encode_hex(&v.key_hash);
+    caller(OPERATOR, DEPOSIT);
+    let before = test_host::storage_usage_now();
+    let now = now_ms();
+    assert_eq!(c.finish_tdx_registration(v, "UpToDate", xp, ep, &OPERATOR.parse().unwrap()), kh);
+    let added = test_host::storage_usage_now() - before;
+    assert!(added > 100, "instance record stored");
+
+    let rec = c.get_instance(kh.clone()).expect("the instance was recorded");
+    assert_eq!(
+        serde_json::to_value(&rec).unwrap(),
+        json!({
+            "compose_hash": encode_hex(&v.compose_hash), "os_measurement": encode_hex(&v.os_measurement),
+            "x25519": TDX_X25519, "ed25519": TDX_ED25519, "operator": OPERATOR, "org_id": null,
+            "registered_at_ms": now, "expires_at_ms": now + DEFAULT_INSTANCE_TTL_MS, "next_seq": 0,
+        })
+    );
+
+    let ev = assert_single_event(&take_logs(), events::INSTANCE_REGISTERED);
+    assert_eq!(
+        ev,
+        json!({
+            "key_hash": kh, "compose_hash": encode_hex(&v.compose_hash),
+            "os_measurement": encode_hex(&v.os_measurement), "x25519": TDX_X25519, "ed25519": TDX_ED25519,
+            "operator": OPERATOR, "expires_at_ms": now + DEFAULT_INSTANCE_TTL_MS, "refreshed": false,
+            "root_kind": "INTEL", "tcb_status": "UpToDate",
+        })
+    );
+    assert_eq!(c.get_anchor_credit(kh), MAX_ANCHOR_CREDIT_YOCTO.to_string());
+    assert_eq!(take_transfers(), vec![(OPERATOR.to_string(), DEPOSIT - u128::from(added) * BYTE_COST - MAX_ANCHOR_CREDIT_YOCTO)]);
 }
 
 #[cfg(feature = "tdx-test-clock")]
@@ -1533,7 +1673,6 @@ fn register_instance_tdx_verifies_a_real_intel_quote_up_to_the_empty_event_log()
     assert!(take_transfers().is_empty(), "no refund");
 }
 
-#[cfg(feature = "tdx-test-clock")]
 #[test]
 fn register_instance_tdx_requires_the_intel_root() {
     // Check 5: a MOCK registry cannot verify INTEL-mode quotes.
@@ -1550,7 +1689,6 @@ fn register_instance_tdx_requires_the_intel_root() {
     assert_eq!(c.get_instance(tdx_key_hash()), None);
 }
 
-#[cfg(feature = "tdx-test-clock")]
 #[test]
 fn register_instance_tdx_argument_bounds_and_collateral_parse() {
     let mut c = intel_bare();
@@ -1576,13 +1714,11 @@ fn register_instance_tdx_argument_bounds_and_collateral_parse() {
     fails_with(E_BAD_HEX, || call(&mut c, TDX_X25519, &TDX_ED25519[..62]));
     fails_with(E_BAD_INPUT, || call(&mut c, &"00".repeat(32), TDX_ED25519));
     fails_with(E_BAD_INPUT, || call(&mut c, TDX_X25519, &"00".repeat(32)));
-    // Nothing above changed state: the same arguments still pass 1-9 and stop at the event log.
+    // Nothing above changed state: every call was refused by checks 1-4, before any verification or storage.
     assert_eq!(c.get_instance(tdx_key_hash()), None);
     assert!(take_logs().is_empty() && take_transfers().is_empty());
-    fails_with(E_EVENT_LOG, || register_tdx(&mut c, &quote, &coll, json!([]), "x"));
 }
 
-#[cfg(feature = "tdx-test-clock")]
 #[test]
 fn get_tdx_policy_reports_the_frozen_intel_policy() {
     let c = intel_bare();

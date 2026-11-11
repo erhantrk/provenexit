@@ -7,7 +7,7 @@ use crate::binding::{key_hash, registration_report_data};
 use crate::bytes::ct_eq;
 use crate::errors::*;
 use crate::eventlog::{compose_matches, verify_event_log_dstack};
-use crate::quote::parse_intel;
+use crate::quote::{parse_intel, MockQuote};
 use crate::verify::{Policy, RootKind, Verified};
 
 /// Everything `register_instance_tdx` hands to the verifier (the arguments are already size- and hex-checked).
@@ -29,13 +29,20 @@ pub fn now_secs() -> u64 {
     }
     #[cfg(not(feature = "tdx-test-clock"))]
     {
-        near_sdk::env::block_timestamp_ms() / 1_000
+        crate::ctx::block_timestamp_ms() / 1_000
     }
 }
 
-/// Runs INTERFACES §2.3 checks 5-13, in order: registry root, INTEL structural parse, Intel DCAP signature,
-/// TCB status, DEBUG, dstack event log + RTMR3 replay, compose hash, allowlists, report_data binding.
-/// Returns the facts to record and the Intel TCB status of the quote.
+/// Check 8 (INTERFACES §2.3): the Intel TCB status of the verified quote must be accepted.
+pub fn check_tcb_status(status: &str) -> Result<(), Error> {
+    if crate::ACCEPTED_TCB_STATUSES.contains(&status) {
+        Ok(())
+    } else {
+        Err(Error::new(E_TCB_STATUS, ""))
+    }
+}
+
+/// Runs INTERFACES §2.3 checks 5-7: registry root, INTEL structural parse, Intel DCAP signature.
 pub fn verify_registration_tdx(
     reg: &TdxRegistration<'_>,
     policy: &impl Policy,
@@ -54,18 +61,45 @@ pub fn verify_registration_tdx(
     let report = QuoteVerifier::new_prod()
         .verify(reg.quote, reg.collateral, now)
         .map_err(|_| Error::new(E_QUOTE_SIG, "dcap"))?;
+    // 8-13. everything after the DCAP call.
+    let v = verify_quote_tdx(
+        &q,
+        &report.status,
+        reg.event_log,
+        reg.app_compose,
+        reg.x25519,
+        reg.ed25519,
+        policy,
+        contract_id,
+        operator_id,
+    )?;
+    Ok((v, report.status))
+}
+
+/// Runs INTERFACES §2.3 checks 8-13 on a structurally parsed quote whose Intel signature was already verified
+/// (checks 6-7): TCB status, DEBUG, dstack event log + RTMR3, compose hash, allowlists, report_data binding.
+/// No DCAP call, so it is unit-testable with a hand-built quote.
+pub fn verify_quote_tdx(
+    q: &MockQuote<'_>,
+    tcb_status: &str,
+    event_log: &Value,
+    app_compose: &[u8],
+    x25519: &[u8; 32],
+    ed25519: &[u8; 32],
+    policy: &impl Policy,
+    contract_id: &str,
+    operator_id: &str,
+) -> Result<Verified, Error> {
     // 8. accepted TCB status.
-    if !crate::ACCEPTED_TCB_STATUSES.contains(&report.status.as_str()) {
-        return Err(Error::new(E_TCB_STATUS, ""));
-    }
+    check_tcb_status(tcb_status)?;
     // 9. production TD only.
     if q.is_debug() {
         return Err(Error::new(E_DEBUG_TD, ""));
     }
     // 10. dstack boot sequence, payloads and RTMR3 replay.
-    let boot = verify_event_log_dstack(reg.event_log, &q.rtmr(3))?;
+    let boot = verify_event_log_dstack(event_log, &q.rtmr(3))?;
     // 11. the published app-compose is the measured one.
-    if !compose_matches(reg.app_compose, &boot.compose_hash) {
+    if !compose_matches(app_compose, &boot.compose_hash) {
         return Err(Error::new(E_COMPOSE_MISMATCH, ""));
     }
     // 12. owner policy.
@@ -77,13 +111,10 @@ pub fn verify_registration_tdx(
         return Err(Error::new(E_OS_NOT_ALLOWED, ""));
     }
     // 13. report_data binds exactly these keys, this registry and this operator (SPEC §5 rev 1.3).
-    let expected = registration_report_data(reg.x25519, reg.ed25519, contract_id, operator_id)
+    let expected = registration_report_data(x25519, ed25519, contract_id, operator_id)
         .ok_or_else(|| Error::new(E_REPORT_DATA, "account id length"))?;
     if !ct_eq(&q.report_data(), &expected) {
         return Err(Error::new(E_REPORT_DATA, ""));
     }
-    Ok((
-        Verified { key_hash: key_hash(reg.x25519, reg.ed25519), compose_hash: boot.compose_hash, os_measurement },
-        report.status,
-    ))
+    Ok(Verified { key_hash: key_hash(x25519, ed25519), compose_hash: boot.compose_hash, os_measurement })
 }
