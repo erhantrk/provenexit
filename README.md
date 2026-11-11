@@ -21,11 +21,11 @@ You see a real Intel TDX quote from a Phala test VM checked offline: `✔ quote 
 - **186.03 Tgas:** one NEAR transaction verified Intel's DCAP signature inside the contract ([tx `9AUTujEQ…`](https://testnet.nearblocks.io/txns/9AUTujEQv8p1R1z7SKEpNa5BYFw3a9ZZerkKmpQb5NRB)).
 - **Checks 1-12 of 13 passed on chain** for a real Phala TDX quote. Check 13 refuses it by design: it is a test VM, not an exit.
 - **298 client tests (1 skipped) and 60 contract tests** pass (see [`NOTES-DECISIONS.md`](NOTES-DECISIONS.md), [`contracts/near/README.md`](contracts/near/README.md)).
-- **Revoke and re-allow** both ran on NEAR testnet ([revoke tx](https://testnet.nearblocks.io/txns/3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz), [re-allow tx](https://testnet.nearblocks.io/txns/642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV)).
+- **Owner revoke and re-allow** transactions ran on the NEAR testnet registry (on the test compose; a client refusing right after a revocation is shown on the local demo stack) ([revoke tx](https://testnet.nearblocks.io/txns/3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz), [re-allow tx](https://testnet.nearblocks.io/txns/642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV)).
 
 ## Tracks
 
-**Privacy & Private AI** (primary) · Open Innovation · AI Security & Defense
+Proposed (Erhan confirms at submission): **Privacy & Private AI** (primary) · Open Innovation · AI Security & Defense
 
 ## What NEAR does here
 
