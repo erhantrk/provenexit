@@ -422,7 +422,9 @@ describe("client on a tier-C registry: registration evidence (SPEC-CHAINS §2)",
     const R = routerFor(inst);
     const c = new PrivateClient({ routerUrl: "http://router.test", registry: reader(z), trustedRoot: inst.root.publicKey, fetch: R.fetch });
     const v = await c.attest();
-    expect(v.checks).toEqual([...Object.values(CHECKS), REGISTRATION_EVIDENCE_CHECK]);
+    // TCB and COMPOSE_POLICY are INTEL-only (INTERFACES §3.1), so a MOCK verification never reports them.
+    const mockChecks = Object.entries(CHECKS).filter(([k]) => k !== "TCB" && k !== "COMPOSE_POLICY").map(([, name]) => name);
+    expect(v.checks).toEqual([...mockChecks, REGISTRATION_EVIDENCE_CHECK]);
   });
 
   for (const mode of ["absent", "malformed", "tampered"] as const) {
@@ -602,8 +604,16 @@ describe("plr CLI with PLR_CHAIN=zcash", () => {
   });
 
   it("checkLines: the evidence step only for non-verifying registries; registry failures there are attributed to it", () => {
-    expect(checkLines(undefined).length).toBe(Object.keys(CHECKS).length);
-    expect(checkLines(undefined, undefined, { evidence: true }).length).toBe(Object.keys(CHECKS).length + 1);
+    // MOCK report = SPEC §9 list: the two INTEL-only checks (INTERFACES §3.1) are never printed.
+    const mockChecks = Object.keys(CHECKS).length - 2;
+    expect(checkLines(undefined).length).toBe(mockChecks);
+    expect(checkLines(undefined, undefined, { evidence: true }).length).toBe(mockChecks + 1);
+    // INTEL adds TCB right after the quote signature and COMPOSE_POLICY right after the compose check.
+    const intel = checkLines(undefined, undefined, { intel: true }).map((l) => l.name);
+    expect(intel).toHaveLength(mockChecks + 2);
+    expect(intel[intel.indexOf(CHECKS.QUOTE_SIG) + 1]).toBe(CHECKS.TCB);
+    expect(intel[intel.indexOf(CHECKS.COMPOSE) + 1]).toBe(CHECKS.COMPOSE_POLICY);
+    expect(checkLines(new PlrError("E_TCB_STATUS"), undefined, { intel: true }).find((l) => l.status === "fail")!.code).toBe("E_TCB_STATUS");
     const lines = checkLines(new PlrError("E_REGISTRY_UNAVAILABLE"), "getRegistrationQuote", { evidence: true });
     expect(lines.at(-1)!.status).toBe("fail");
     expect(lines.slice(0, -1).every((l) => l.status === "pass")).toBe(true);

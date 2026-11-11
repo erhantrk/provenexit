@@ -44,7 +44,7 @@ export {
 } from "./registry.js";
 
 export {
-  verifyAttestation, CHECKS, REGISTRATION_EVIDENCE_CHECK, MAX_APP_COMPOSE_BYTES,
+  verifyAttestation, CHECKS, REGISTRATION_EVIDENCE_CHECK, MAX_APP_COMPOSE_BYTES, MAX_DSTACK_COMPOSE_BYTES,
   type AttestationBundle, type VerifiedRouter, type VerifyAttestationParams,
 } from "./policy.js";
 

@@ -87,7 +87,9 @@ describe("verifyAttestation extra", () => {
   it("reports every check in order", async () => {
     const s = setup(); const n = randomBytes(32);
     const v = await s.run(await s.bundle(n), n);
-    expect(v.checks).toEqual(Object.values(CHECKS));
+    // TCB and COMPOSE_POLICY are INTEL-only (INTERFACES §3.1): a MOCK verification never pushes them.
+    const mockChecks = Object.entries(CHECKS).filter(([k]) => k !== "TCB" && k !== "COMPOSE_POLICY").map(([, v2]) => v2);
+    expect(v.checks).toEqual(mockChecks);
   });
 
   it("rejects an expired registration even if the registry still returns it", async () => {

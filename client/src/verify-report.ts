@@ -59,8 +59,24 @@ export class TracingRegistry implements RegistryReader {
   }
 }
 
-const ORDER = Object.keys(CHECKS) as CheckKey[];
-const ORDER_WITH_EVIDENCE: StepKey[] = [...ORDER, "REGISTRATION_EVIDENCE"];
+/**
+ * Checks that only an INTEL verification reports (INTERFACES §3.1): MOCK never pushes them, so the MOCK report
+ * keeps exactly the SPEC §9 list. INTEL pushes TCB right after QUOTE_SIG and COMPOSE_POLICY right after COMPOSE.
+ */
+const INTEL_ONLY: ReadonlySet<CheckKey> = new Set<CheckKey>(["TCB", "COMPOSE_POLICY"]);
+
+const ALL_CHECKS = Object.keys(CHECKS) as CheckKey[];
+const MOCK_ORDER = ALL_CHECKS.filter((k) => !INTEL_ONLY.has(k));
+const INTEL_ORDER: CheckKey[] = MOCK_ORDER.flatMap((k) =>
+  k === "QUOTE_SIG" ? [k, "TCB" as const] : k === "COMPOSE" ? [k, "COMPOSE_POLICY" as const] : [k],
+);
+
+/** SPEC §9 order for MOCK, plus the two INTEL-only steps at their INTERFACES §3.1 positions. */
+function orderFor(o: { evidence?: boolean; intel?: boolean }): StepKey[] {
+  const order: StepKey[] = [...(o.intel === true ? INTEL_ORDER : MOCK_ORDER)];
+  if (o.evidence === true) order.push("REGISTRATION_EVIDENCE");
+  return order;
+}
 
 /**
  * CLI wording where it says more than the `CHECKS` name. SPEC §5 rev 1.3: a session quote carries
@@ -90,6 +106,9 @@ const CODE_TO_CHECK: Partial<Record<PlrErrorCode, StepKey>> = {
   E_OS_NOT_ALLOWED: "OS_ALLOWED",
   E_INSTANCE_NOT_REGISTERED: "INSTANCE",
   E_REGISTRATION_EVIDENCE: "REGISTRATION_EVIDENCE",
+  E_TCB_STATUS: "TCB",
+  E_COLLATERAL: "QUOTE_SIG",
+  E_COMPOSE_POLICY: "COMPOSE_POLICY",
 };
 
 const REGISTRY_STEP: Record<RegistryMethod, StepKey> = {
@@ -112,10 +131,14 @@ export interface CheckLine {
  * Per-check status. On success every check passed. On failure, `verifyAttestation` runs checks in the fixed
  * SPEC §9 order and stops at the first failure, so every earlier check passed and later ones did not run.
  * `o.evidence` (registries with `verifiesOnChain` false, SPEC-CHAINS §2) adds the registration-evidence step
- * after the instance check.
+ * after the instance check; `o.intel` (INTERFACES §3.1) adds the TCB and dstack-compose steps.
  */
-export function checkLines(err: unknown, lastRegistryCall?: RegistryMethod, o: { evidence?: boolean } = {}): CheckLine[] {
-  const order: StepKey[] = o.evidence === true ? ORDER_WITH_EVIDENCE : ORDER;
+export function checkLines(
+  err: unknown,
+  lastRegistryCall?: RegistryMethod,
+  o: { evidence?: boolean; intel?: boolean } = {},
+): CheckLine[] {
+  const order = orderFor(o);
   if (err === undefined) return order.map((k) => ({ name: label(k), status: "pass" }));
   const code: PlrErrorCode = err instanceof PlrError ? err.code : "E_BAD_RESPONSE";
   let failing: StepKey | undefined = CODE_TO_CHECK[code];

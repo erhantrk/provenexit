@@ -5,8 +5,11 @@ import { PlrError, type PlrErrorCode } from "./errors.js";
 import { equalBytes, fromHex, isAllZero, isBytes, isHex, isPlainObject, isWellFormedString, toHex, utf8 } from "./bytes.js";
 import { QUOTE, isDebug, osMeasurement, parseQuote, type ParsedQuote, type RootKind, type TdReport } from "./tdx/quote.js";
 import { verifyEventLog, type TdxEvent } from "./tdx/eventlog.js";
+import { verifyEventLogDstack } from "./tdx/eventlog-dstack.js";
 import { keyHash, registrationReportData, sessionNonceDigest } from "./tdx/measure.js";
-import type { QuoteVerifier } from "./attest/types.js";
+import type { QuoteVerifier, VerifyContext } from "./attest/types.js";
+import { isCollateralJson } from "./attest/collateral.js";
+import { checkDstackComposePolicy } from "./attest/compose-policy.js";
 import { isInstanceRecord, isRegistryRoot, type InstanceRecord, type RegistryReader } from "./registry.js";
 
 /** `GET /v1/attestation` response body (SPEC §6.2). */
@@ -23,6 +26,12 @@ export interface AttestationBundle {
    * tier-C registries, which accept it only if it matches the on-chain commitment. Malformed ⇒ treated as absent.
    */
   registration_quote?: string;
+  /**
+   * INTEL mode only (INTERFACES §1.5): the canonical collateral JSON of the quote (§1.2). Required in INTEL mode,
+   * ignored or absent in MOCK mode. Intel signs it and the client freshness-checks it, so taking it from the
+   * (untrusted) exit is safe.
+   */
+  collateral?: Record<string, unknown>;
 }
 
 export interface VerifiedRouter {
@@ -39,6 +48,10 @@ export interface VerifiedRouter {
    * tier-C reader keeps selecting the registration this evidence binds.
    */
   registrationQuote?: Uint8Array;
+  /** INTEL mode only: the DCAP TCB status the verifier accepted (INTERFACES §3.1). */
+  tcbStatus?: string;
+  /** INTEL mode only: the image references checkDstackComposePolicy extracted (§1.4). */
+  images?: string[];
 }
 
 export interface VerifyAttestationParams {
@@ -56,6 +69,9 @@ export interface VerifyAttestationParams {
 /** Max UTF-8 size of `app_compose` (matches the contract bound, SPEC §7). */
 export const MAX_APP_COMPOSE_BYTES = 8 * 1024;
 
+/** Max UTF-8 size of the dstack app-compose in INTEL mode (INTERFACES §0, §1.4). */
+export const MAX_DSTACK_COMPOSE_BYTES = 32 * 1024;
+
 /** Names of the checks reported in {@link VerifiedRouter.checks}, in SPEC §9 order. */
 export const CHECKS = Object.freeze({
   RESPONSE: "response well-formed, fresh 32-byte nonce",
@@ -72,6 +88,8 @@ export const CHECKS = Object.freeze({
   COMPOSE_ALLOWED: "compose hash allowed by registry",
   OS_ALLOWED: "OS measurement allowed by registry",
   INSTANCE: "instance registered with matching keys",
+  TCB: "Intel TCB status accepted",
+  COMPOSE_POLICY: "dstack compose: images pinned by digest, exit logging disabled",
 } as const);
 
 /**
@@ -117,11 +135,13 @@ interface ParsedBundle {
   ed25519: Uint8Array;
   /** The bundle's well-formed `registration_quote`, else undefined. */
   registrationQuote: Uint8Array | undefined;
+  /** INTEL mode: the canonical collateral JSON (§1.2); undefined in MOCK mode. */
+  collateral: Record<string, unknown> | undefined;
 }
 
 /** Step 1: shape of the response (E_BAD_RESPONSE). Content of event entries is checked in step 6. */
 function parseBundle(b: unknown, expectedKind: RootKind): ParsedBundle {
-  const bad = (d: string) => fail("E_BAD_RESPONSE", d);
+  const bad = (d: string): never => fail("E_BAD_RESPONSE", d);
   if (!isPlainObject(b)) return bad("bundle is not an object");
   if (b.v !== "PLR-v1") bad("v");
   if (b.root_kind !== expectedKind) bad("root_kind");
@@ -131,7 +151,15 @@ function parseBundle(b: unknown, expectedKind: RootKind): ParsedBundle {
   if (!isHex(b.x25519, 32)) bad("x25519");
   if (!isHex(b.ed25519, 32)) bad("ed25519");
   const composeBytes = utf8(b.app_compose as string);
-  if (composeBytes.length === 0 || composeBytes.length > MAX_APP_COMPOSE_BYTES) bad("app_compose size");
+  const maxCompose = expectedKind === "INTEL" ? MAX_DSTACK_COMPOSE_BYTES : MAX_APP_COMPOSE_BYTES;
+  if (composeBytes.length === 0 || composeBytes.length > maxCompose) bad("app_compose size");
+  // INTERFACES §1.5: collateral is required in INTEL mode (ignored or absent in MOCK mode).
+  let collateral: Record<string, unknown> | undefined;
+  if (expectedKind === "INTEL") {
+    const c = b.collateral;
+    if (isCollateralJson(c)) collateral = c;
+    else bad("collateral");
+  }
   const x = fromHex(b.x25519 as string, 32);
   const e = fromHex(b.ed25519 as string, 32);
   if (isAllZero(x)) bad("x25519");
@@ -147,6 +175,7 @@ function parseBundle(b: unknown, expectedKind: RootKind): ParsedBundle {
   return {
     rootKind: expectedKind,
     registrationQuote,
+    collateral,
     quote: fromHex(b.quote as string),
     eventLog: b.event_log as TdxEvent[],
     composeBytes,
@@ -163,6 +192,7 @@ export async function verifyAttestation(p: VerifyAttestationParams): Promise<Ver
   const checks: string[] = [];
   if (!isPlainObject(p)) fail("E_BAD_RESPONSE", "params");
   const { bundle, nonce, verifier, registry, trustedRoot } = p;
+  const nowSecs = Math.floor((p.now ?? Date.now()) / 1000);
 
   // Configuration sanity (not attacker-controlled; fail closed).
   if (typeof verifier !== "object" || verifier === null || typeof verifier.verify !== "function" ||
@@ -190,11 +220,22 @@ export async function verifyAttestation(p: VerifyAttestationParams): Promise<Ver
     fail("E_ROOT_UNTRUSTED", "verifier root differs from pinned root");
   }
   checks.push(CHECKS.ROOT);
-  const verified = guard(() => verifier.verify(b.quote), ["E_QUOTE_FORMAT", "E_TEE_TYPE", "E_QUOTE_SIG"], "E_QUOTE_SIG");
+  const ctx: VerifyContext = { collateral: b.collateral, nowSecs };
+  const verified = guard(
+    () => verifier.verify(b.quote, ctx),
+    ["E_QUOTE_FORMAT", "E_TEE_TYPE", "E_QUOTE_SIG", "E_TCB_STATUS", "E_COLLATERAL"],
+    "E_QUOTE_SIG",
+  );
   if (!isPlainObject(verified) || !isBytes(verified.signedBytes) || !equalBytes(verified.signedBytes, parsed.signedBytes)) {
     fail("E_QUOTE_SIG", "verifier result");
   }
   checks.push(CHECKS.QUOTE_SIG);
+  // INTEL only (§3.1): the DCAP verifier reports the accepted TCB status after a successful verify.
+  let tcbStatus: string | undefined;
+  if (b.rootKind === "INTEL") {
+    tcbStatus = (verifier as { lastStatus?: string }).lastStatus;
+    checks.push(CHECKS.TCB);
+  }
   const report = parsed.report;
 
   // 4. debug
@@ -208,13 +249,24 @@ export async function verifyAttestation(p: VerifyAttestationParams): Promise<Ver
   if (!equalBytes(report.reportData.subarray(32, 64), sessionNonceDigest(nonce))) fail("E_NONCE");
   checks.push(CHECKS.NONCE);
 
-  // 6. event log, RTMR3
-  const ids = guard(() => verifyEventLog(b.eventLog, report.rtmr[3]), ["E_EVENT_LOG", "E_RTMR3"], "E_EVENT_LOG");
+  // 6. event log, RTMR3 (INTEL mode: the dstack V1 log of INTERFACES §1.3)
+  const ids = guard(
+    () => (b.rootKind === "INTEL" ? verifyEventLogDstack : verifyEventLog)(b.eventLog, report.rtmr[3]),
+    ["E_EVENT_LOG", "E_RTMR3"],
+    "E_EVENT_LOG",
+  );
   checks.push(CHECKS.EVENT_LOG, CHECKS.RTMR3);
 
   // 7. published compose == measured compose
   if (!equalBytes(sha256(b.composeBytes), ids.composeHash)) fail("E_COMPOSE_MISMATCH");
   checks.push(CHECKS.COMPOSE);
+
+  // 7b. INTEL only: the measured compose is a dstack app-compose whose images are pinned and whose exit is silent.
+  let pol: { images: string[] } | undefined;
+  if (b.rootKind === "INTEL") {
+    pol = guard(() => checkDstackComposePolicy(bundle.app_compose as string), ["E_COMPOSE_POLICY"], "E_COMPOSE_POLICY");
+    checks.push(CHECKS.COMPOSE_POLICY);
+  }
 
   // 8. on-chain allowlists (checked separately)
   const composeHex = toHex(ids.composeHash);
@@ -250,12 +302,14 @@ export async function verifyAttestation(p: VerifyAttestationParams): Promise<Ver
   }
   let evidence: Uint8Array | undefined;
   if (onChain !== true) {
-    evidence = await verifyRegistrationEvidence({ registry, verifier, keyHashHex: toHex(kh), offered: b.registrationQuote, session: report, inst, x25519: b.x25519, ed25519: b.ed25519, rootKind: b.rootKind });
+    evidence = await verifyRegistrationEvidence({ registry, verifier, keyHashHex: toHex(kh), offered: b.registrationQuote, session: report, inst, x25519: b.x25519, ed25519: b.ed25519, rootKind: b.rootKind, ctx });
     checks.push(REGISTRATION_EVIDENCE_CHECK);
   }
 
   return {
     ...(evidence !== undefined ? { registrationQuote: evidence } : {}),
+    ...(tcbStatus !== undefined ? { tcbStatus } : {}),
+    ...(pol !== undefined ? { images: pol.images } : {}),
     x25519: b.x25519.slice(),
     ed25519: b.ed25519.slice(),
     keyHash: kh,
@@ -284,6 +338,8 @@ async function verifyRegistrationEvidence(p: {
   x25519: Uint8Array;
   ed25519: Uint8Array;
   rootKind: RootKind;
+  /** INTEL mode: same `{ collateral, nowSecs }` as the session quote (INTERFACES §3.1 step 7). */
+  ctx: VerifyContext;
 }): Promise<Uint8Array> {
   const E = "E_REGISTRATION_EVIDENCE" as const;
   const offered = p.offered === undefined ? undefined : p.offered.slice();
@@ -291,7 +347,7 @@ async function verifyRegistrationEvidence(p: {
   if (rq === null || rq.length === 0 || rq.length > QUOTE.MAX_LEN) return fail(E, "no registration quote");
   const quote = rq.slice();
   const parsed = guard(() => parseQuote(quote, p.rootKind), [], E);
-  const verified: unknown = guard(() => p.verifier.verify(quote), [], E);
+  const verified: unknown = guard(() => p.verifier.verify(quote, p.ctx), [], E);
   if (!isPlainObject(verified) || !isBytes(verified.signedBytes) || !equalBytes(verified.signedBytes, parsed.signedBytes)) {
     fail(E, "registration quote signature");
   }
