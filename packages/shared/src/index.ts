@@ -28,6 +28,7 @@ export {
 export { DstackAttester } from "./attest/stubs.js";
 export { DcapQvlVerifier, INTEL_ROOT_P256, ACCEPTED_TCB_STATUSES, isIntelRoot } from "./attest/intel.js";
 export { canonicalCollateral, isCollateralJson, type CollateralJson } from "./attest/collateral.js";
+export { checkDstackComposePolicy } from "./attest/compose-policy.js";
 
 export { deriveSession, clientSeal, serverOpen, TAG_LEN, type SessionKeys } from "./crypto/session.js";
 export { sealFrame, openFrame, FrameReader } from "./crypto/frames.js";
