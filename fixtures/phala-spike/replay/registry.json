@@ -1,0 +1,13 @@
+{
+  "root": {
+    "kind": "INTEL",
+    "p256": "0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f567918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394"
+  },
+  "compose": [
+    "b9823a796f86b61b4fae123f912d98f25914326f5789ab2f964b66d5f086d05f"
+  ],
+  "os": [
+    "821d442f07d638c696f4c5e1e4962bf4e28515ba5d790f5cf502b1c0d4dd323d"
+  ],
+  "instances": {}
+}

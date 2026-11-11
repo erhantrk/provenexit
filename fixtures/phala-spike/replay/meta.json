@@ -1,0 +1,9 @@
+{
+  "captured_at_ms": 1794405700000,
+  "exit_url": "no live exit (S1-F2): Phala Cloud tdx.small test CVM 2026-11-09, /dump of a TDX quote only — the VPN exit is not deployed on Phala",
+  "network": "testnet",
+  "registry": "pe-vpnreg-erhan.testnet",
+  "registration_tx": "9AUTujEQv8p1R1z7SKEpNa5BYFw3a9ZZerkKmpQb5NRB",
+  "revocation_tx": null,
+  "note": "T18 INTEL path (INTERFACES §3.3 shape). The spike CVM requested report_data = 64x0x42, so this replay stops at E_REPORT_DATA_KEYS by design; the on-chain run of the same quote (T17 tx above) passed checks 1-12 and failed at check 13 = E_REPORT_DATA. Not the T19 live capture."
+}
