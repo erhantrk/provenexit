@@ -8,8 +8,10 @@
 import type http from "node:http";
 import type { AddressInfo } from "node:net";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { toHex } from "@plr/shared";
+import { toHex, utf8, type Attester, type RootKind } from "@plr/shared";
 import { Anchorer } from "../anchor.js";
+import { CollateralCache } from "../attest/collateral-cache.js";
+import { DstackAttester } from "../attest/dstack-attester.js";
 import { selfCheckQuote } from "../boot.js";
 import { readCompose, vpnPolicyOf } from "../compose.js";
 import { Logger, code, hex, url } from "../log.js";
@@ -40,19 +42,48 @@ export async function bootExit(
   o: { dial?: Dialer; log?: Logger; /** Called after the exit stopped serving for good (the caller exits non-zero). */ onFatal?: () => void } = {},
 ): Promise<RunningExit> {
   const log = o.log ?? new Logger("plr-vpn");
-  const composeBytes = readCompose(cfg.composePath);
-  // Strict + canonical: a `plr-vpn` compose or the `vpn` part of a `plr-combo` (SPEC-COMBO §1).
-  const lookup = createDohLookup(vpnPolicyOf(composeBytes).dns.doh);
+  // `PLR_ATTESTER` picks the quote source and with it the signature root the bundle publishes (INTERFACES §4.4).
+  const rootKind: RootKind = cfg.attester === "dstack" ? "INTEL" : "MOCK";
+  let attester: Attester;
+  let composeBytes: Uint8Array;
+  if (cfg.attester === "dstack") {
+    const a = new DstackAttester();
+    composeBytes = utf8(await a.appCompose());
+    attester = a;
+  } else {
+    const { tdxSocket, composePath } = cfg;
+    if (tdxSocket === null || composePath === null) throw new Error("E_CONFIG"); // loadExitConfig requires both in mock mode
+    composeBytes = readCompose(composePath);
+    attester = new SocketAttester(tdxSocket);
+  }
+  // Strict + canonical: a `plr-vpn` compose or the `vpn` part of a `plr-combo` (SPEC-COMBO §1). In dstack mode the
+  // measured document is the dstack app-compose, so the enforced policy is the SPEC-VPN §2 compose baked into the image.
+  const policyBytes = cfg.attester === "dstack" ? readCompose(cfg.policyPath!) : composeBytes;
+  const vpnPolicy = vpnPolicyOf(policyBytes);
+  const lookup = createDohLookup(vpnPolicy.dns.doh);
   const composeHash = sha256(composeBytes);
   const keys = VpnKeys.generate();
-  const attester = new SocketAttester(cfg.tdxSocket);
-  await selfCheckQuote(attester, keys, composeHash);
+  await selfCheckQuote(attester, keys, composeHash, rootKind);
+  // One platform has one FMSPC: a single collateral value per process (INTERFACES §4.3).
+  const collateralCache = cfg.attester === "dstack" ? new CollateralCache(cfg.pccsUrl) : null;
+  const collateral = collateralCache === null ? undefined : (q: Uint8Array) => collateralCache.get(q);
 
   const receipts = new VpnReceiptLog();
   let anchorer: Anchorer | null = null;
   let chain: RegistryWriter | null = null;
   const registrationQuote = (): Uint8Array | null => anchorer?.registrationQuote ?? null;
-  const exit = createExit({ attester, keys, composeBytes, receipts, lookup, registrationQuote, ...(o.dial ? { dial: o.dial } : {}) });
+  const exit = createExit({
+    attester,
+    keys,
+    composeBytes,
+    policy: vpnPolicy,
+    receipts,
+    lookup,
+    rootKind,
+    ...(collateral ? { collateral } : {}),
+    registrationQuote,
+    ...(o.dial ? { dial: o.dial } : {}),
+  });
   const server = exit.server;
   await new Promise<void>((ok, fail) => {
     server.once("error", fail);
@@ -84,7 +115,17 @@ export async function bootExit(
     const onOperatorMismatch = (): void => {
       void close().finally(() => o.onFatal?.());
     };
-    anchorer = new Anchorer({ chain, attester, keys, receipts, composeBytes, log, intervalMs: cfg.anchorIntervalMs, onOperatorMismatch });
+    anchorer = new Anchorer({
+      chain,
+      attester,
+      keys,
+      receipts,
+      composeBytes,
+      log,
+      intervalMs: cfg.anchorIntervalMs,
+      onOperatorMismatch,
+      ...(collateralCache ? { collateral: collateralCache } : {}),
+    });
     anchorer.start();
   } else {
     log.info("registration_disabled", cfg.nearConfigError ? { code: code("E_CONFIG") } : {});

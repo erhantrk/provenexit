@@ -3,10 +3,20 @@ import { HOST_RE, bad, intVar, loadRegistrySafe, type Env, type NearConfig, type
 
 /** SPEC-VPN §3 default exit port. */
 export const DEFAULT_EXIT_PORT = 18200;
+/** INTERFACES §0 `PCCS_URL`: dcap-qvl's default PCCS. */
+export const DEFAULT_PCCS_URL = "https://pccs.phala.network";
 
 export interface ExitConfig {
-  tdxSocket: string;
-  composePath: string;
+  /** `PLR_ATTESTER`: `mock` (the mock TDX host, default) or `dstack` (a real TDX CVM). */
+  attester: "mock" | "dstack";
+  /** MOCK mode: the mock host's quote socket. Null in dstack mode (not required). */
+  tdxSocket: string | null;
+  /** MOCK mode: the measured compose path given by the host. Null in dstack mode (not required). */
+  composePath: string | null;
+  /** `PLR_VPN_POLICY_PATH`: the SPEC-VPN §2 compose baked into the image. Required in dstack mode, null otherwise. */
+  policyPath: string | null;
+  /** `PLR_PCCS_URL`: the PCCS the exit fetches Intel collateral from (dstack mode). */
+  pccsUrl: string;
   host: string;
   port: number;
   anchorIntervalMs: number;
@@ -26,10 +36,30 @@ export interface ExitConfig {
  * PLR_ZCASH_KEY, PLR_ZCASH_START_HEIGHT and the VPN registry owner in PLR_ZCASH_VPN_OWNER, or else PLR_ZCASH_OWNER.
  */
 export function loadExitConfig(env: Env = process.env): ExitConfig {
-  const tdxSocket = env.PLR_TDX_SOCKET;
-  if (!tdxSocket || tdxSocket.length > 1024) bad("PLR_TDX_SOCKET");
-  const composePath = env.PLR_APP_COMPOSE_PATH;
-  if (!composePath || composePath.length > 4096) bad("PLR_APP_COMPOSE_PATH");
+  const attesterRaw = env.PLR_ATTESTER === undefined || env.PLR_ATTESTER === "" ? "mock" : env.PLR_ATTESTER;
+  if (attesterRaw !== "mock" && attesterRaw !== "dstack") bad("PLR_ATTESTER");
+  const attester = attesterRaw;
+  const tdxSocket = env.PLR_TDX_SOCKET === undefined || env.PLR_TDX_SOCKET === "" ? null : env.PLR_TDX_SOCKET;
+  const composePath = env.PLR_APP_COMPOSE_PATH === undefined || env.PLR_APP_COMPOSE_PATH === "" ? null : env.PLR_APP_COMPOSE_PATH;
+  if (attester === "mock") {
+    // The mock TDX host names its quote socket and the compose it launches (unchanged MOCK path).
+    if (tdxSocket === null || tdxSocket.length > 1024) bad("PLR_TDX_SOCKET");
+    if (composePath === null || composePath.length > 4096) bad("PLR_APP_COMPOSE_PATH");
+  }
+  const policyPathRaw = env.PLR_VPN_POLICY_PATH;
+  const policyPath = policyPathRaw === undefined || policyPathRaw === "" ? null : policyPathRaw;
+  if (policyPath !== null && policyPath.length > 4096) bad("PLR_VPN_POLICY_PATH");
+  // dstack mode measures the dstack app-compose; the enforced VPN policy is the compose baked into the image.
+  if (attester === "dstack" && policyPath === null) bad("PLR_VPN_POLICY_PATH");
+  const pccsUrl = env.PLR_PCCS_URL === undefined || env.PLR_PCCS_URL === "" ? DEFAULT_PCCS_URL : env.PLR_PCCS_URL;
+  if (pccsUrl.length > 2048) bad("PLR_PCCS_URL");
+  let pccs: URL;
+  try {
+    pccs = new URL(pccsUrl);
+  } catch {
+    bad("PLR_PCCS_URL");
+  }
+  if (pccs.protocol !== "https:") bad("PLR_PCCS_URL");
   const host = env.PLR_VPN_HOST || "127.0.0.1";
   if (!HOST_RE.test(host)) bad("PLR_VPN_HOST");
   const port = intVar(env, "PLR_VPN_PORT", DEFAULT_EXIT_PORT, 0, 65535);
@@ -45,5 +75,5 @@ export function loadExitConfig(env: Env = process.env): ExitConfig {
     stellarRegistryVar: vpnVar("PLR_STELLAR_VPN_REGISTRY", "PLR_STELLAR_REGISTRY"),
     solanaRegistryVar: vpnVar("PLR_SOLANA_VPN_REGISTRY", "PLR_SOLANA_REGISTRY"),
   });
-  return { tdxSocket, composePath, host, port, anchorIntervalMs, near, registry, nearConfigError };
+  return { attester, tdxSocket, composePath, policyPath, pccsUrl, host, port, anchorIntervalMs, near, registry, nearConfigError };
 }

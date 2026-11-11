@@ -43,7 +43,8 @@ export class NearRegistryWriter implements RegistryWriter {
   }
 
   async registerInstance(args: RegisterArgs): Promise<void> {
-    await this.#call("register_instance", args, this.#deposit);
+    // INTEL mode registers through the on-chain DCAP-verifying method (INTERFACES §2.3); same gas + deposit.
+    await this.#call(args.collateral ? "register_instance_tdx" : "register_instance", args, this.#deposit);
   }
 
   /** Attaches the anchor storage deposit (excess refunded by the contract; shortfall drawn from the prepaid credit). */

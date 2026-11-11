@@ -24,9 +24,10 @@
  *   `registration_failed code=E_OPERATOR_MISMATCH` and calls `onOperatorMismatch` so the service stops serving.
  */
 import { PlrError, anchorMessage, equalBytes, fromHex, toHex, type Attester, type TdxEvent } from "@plr/shared";
+import type { CollateralCache } from "./attest/collateral-cache.js";
 import type { EnclaveKeys } from "./keys.js";
 import { Logger, code as codeField, codeOf, hex as hexField, type Code } from "./log.js";
-import type { AnchorView, RegistryWriter } from "./registry-writer.js";
+import type { AnchorView, RegisterArgs, RegistryWriter } from "./registry-writer.js";
 import type { LeafLog } from "./receipts.js";
 
 export interface AnchorerOptions {
@@ -49,12 +50,21 @@ export interface AnchorerOptions {
   scanLimit?: number;
   /** Enables the operator read-back after each registration; called once if the on-chain operator is not ours. */
   onOperatorMismatch?: () => void;
+  /**
+   * INTEL mode (dstack): every registration carries the Intel collateral of its quote, which turns the call into
+   * `register_instance_tdx` (INTERFACES §4.4). Unset in MOCK mode.
+   */
+  collateral?: CollateralCache;
 }
 
 export type RegistrationState = "pending" | "registered" | "failed";
 
 export class Anchorer {
-  readonly #o: Required<Omit<AnchorerOptions, "log" | "onOperatorMismatch">> & { log: Logger; onOperatorMismatch: (() => void) | null };
+  readonly #o: Required<Omit<AnchorerOptions, "log" | "onOperatorMismatch" | "collateral">> & {
+    log: Logger;
+    onOperatorMismatch: (() => void) | null;
+    collateral: CollateralCache | null;
+  };
   readonly #keyHashHex: string;
   #state: RegistrationState = "pending";
   #lastError: Code | null = null;
@@ -76,6 +86,7 @@ export class Anchorer {
       ...o,
       log: o.log ?? new Logger("plr-router"),
       onOperatorMismatch: o.onOperatorMismatch ?? null,
+      collateral: o.collateral ?? null,
     };
     this.#retryMs = this.#o.retryMinMs;
     this.#keyHashHex = toHex(o.keys.keyHash);
@@ -154,13 +165,16 @@ export class Anchorer {
         const rd = this.#o.keys.registrationReportData(this.#o.chain.contractId, this.#o.chain.operatorId);
         const { quote, eventLog } =
           this.#o.chain.reuseRegistrationQuote === true && this.#regQuote !== null ? this.#regQuote : await this.#o.attester.getQuote(rd);
-        await this.#o.chain.registerInstance({
+        const args: RegisterArgs = {
           quote: toHex(quote),
           event_log: eventLog,
           app_compose: new TextDecoder("utf-8", { fatal: true }).decode(this.#o.composeBytes),
           x25519: toHex(this.#o.keys.x25519),
           ed25519: toHex(this.#o.keys.ed25519),
-        });
+        };
+        // INTEL mode: the Intel collateral travels with the quote (§1.2) and selects `register_instance_tdx`.
+        if (this.#o.collateral) args.collateral = JSON.stringify(await this.#o.collateral.get(quote));
+        await this.#o.chain.registerInstance(args);
         if (this.#o.onOperatorMismatch) {
           // Read back who the chain thinks operates this key (a lookup failure throws: retried like any failure).
           const op = await this.#o.chain.getInstanceOperator(this.#keyHashHex);

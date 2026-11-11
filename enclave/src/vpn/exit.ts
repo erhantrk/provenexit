@@ -12,8 +12,8 @@
 import http from "node:http";
 import type { Duplex } from "node:stream";
 import { sha256 } from "@noble/hashes/sha2.js";
-import type { Attester } from "@plr/shared";
-import { vpnPolicyOf } from "../compose.js";
+import type { Attester, CollateralJson, RootKind } from "@plr/shared";
+import { vpnPolicyOf, type VpnCompose } from "../compose.js";
 import { HttpError, parseUrl, sendError } from "../http-util.js";
 import { commonRoutes, type RouteHandler } from "../service-routes.js";
 import { createDohLookup } from "./doh.js";
@@ -34,6 +34,15 @@ export interface ExitOptions {
   receipts: VpnReceiptLog;
   /** The registration quote once registered, served in `/v1/attestation` (SPEC-CHAINS §4). */
   registrationQuote?: () => Uint8Array | null;
+  /** The root published in the bundle (`root_kind`, INTERFACES §1.5); default MOCK. */
+  rootKind?: RootKind;
+  /** INTEL mode: the Intel collateral served with the quote (INTERFACES §1.5); failure → 503 E_UPSTREAM. */
+  collateral?: (quote: Uint8Array) => Promise<CollateralJson>;
+  /**
+   * The enforced VPN policy. Default: the strict policy of `composeBytes`. In dstack mode `composeBytes` is the
+   * dstack app-compose (which carries no egress policy), so boot passes the policy of the baked-in compose instead.
+   */
+  policy?: VpnCompose["policy"];
   /** Upstream dialer (default: the honest {@link dialEgress}). */
   dial?: Dialer;
   /**
@@ -82,7 +91,7 @@ function connectionHasUpgrade(v: string | string[] | undefined): boolean {
 export function createExit(o: ExitOptions): ExitServer {
   const composeBytes = o.composeBytes.slice();
   // Strict + canonical (`plr-vpn`, or the `vpn` part of a `plr-combo`); the policy we enforce is the measured one.
-  const vpnPolicy = vpnPolicyOf(composeBytes);
+  const vpnPolicy = o.policy ?? vpnPolicyOf(composeBytes);
   const policy = { allow_loopback: vpnPolicy.egress.allow_loopback, deny_private: vpnPolicy.egress.deny_private };
   const composeHash = sha256(composeBytes);
   const maxTunnels = o.maxTunnels ?? MAX_TUNNELS;
@@ -105,6 +114,8 @@ export function createExit(o: ExitOptions): ExitServer {
     keys: o.keys,
     composeBytes,
     receipts: o.receipts,
+    rootKind: o.rootKind ?? "MOCK",
+    ...(o.collateral ? { collateral: o.collateral } : {}),
     ...(o.registrationQuote ? { registrationQuote: o.registrationQuote } : {}),
   });
   const tunnelWithoutUpgrade: RouteHandler = () => {

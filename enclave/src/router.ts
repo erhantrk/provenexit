@@ -180,6 +180,7 @@ export function createRouter(o: RouterOptions): http.Server {
     keys: o.keys,
     composeBytes,
     receipts: o.receipts,
+    rootKind: "MOCK",
     ...(o.registrationQuote ? { registrationQuote: o.registrationQuote } : {}),
   });
   const routes: Record<string, RouteHandler> = {

@@ -91,6 +91,16 @@ async function bundle(entry, outName) {
     charset: "utf8",
     metafile: false,
     logLevel: "warning",
+    // "@phala/dstack-sdk" 0.5.8 (dstack mode) declares @noble/hashes ^1.6.1 / @noble/curves ^1.8.1 as peers but
+    // imports the v1 deep paths. This repo pins the v2 packages, where the same symbols live at "<name>.js":
+    // sha256/sha384 in sha2.js, keccak_256 in sha3.js, bytesToHex in utils.js, secp256k1 in secp256k1.js.
+    alias: {
+      "@noble/hashes/sha256": "@noble/hashes/sha2.js",
+      "@noble/hashes/sha512": "@noble/hashes/sha2.js",
+      "@noble/hashes/sha3": "@noble/hashes/sha3.js",
+      "@noble/hashes/utils": "@noble/hashes/utils.js",
+      "@noble/curves/secp256k1": "@noble/curves/secp256k1.js",
+    },
     // CommonJS dependencies inside an ESM bundle need a real `require` for node builtins.
     banner: { js: 'import { createRequire as __plrCreateRequire } from "node:module";\nconst require = __plrCreateRequire(import.meta.url);' },
   });

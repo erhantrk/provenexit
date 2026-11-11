@@ -11,6 +11,11 @@ export interface RegisterArgs {
   app_compose: string;
   x25519: string;
   ed25519: string;
+  /**
+   * INTEL mode: the canonical collateral JSON text (INTERFACES §1.2). Its presence selects `register_instance_tdx`
+   * on NEAR; MOCK registrations never carry it.
+   */
+  collateral?: string;
 }
 
 export interface AnchorArgs {

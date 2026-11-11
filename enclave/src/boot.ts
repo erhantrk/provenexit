@@ -1,6 +1,6 @@
 /** Boot helpers shared by the LLM router (`main.ts`) and the VPN exit (`vpn/main.ts`). */
 import { randomBytes } from "@noble/hashes/utils.js";
-import { equalBytes, parseQuote, verifyEventLog, type Attester } from "@plr/shared";
+import { equalBytes, parseQuote, verifyEventLog, verifyEventLogDstack, type Attester, type RootKind } from "@plr/shared";
 import type { EnclaveKeys } from "./keys.js";
 import { codeOf, type Logger } from "./log.js";
 
@@ -9,12 +9,18 @@ import { codeOf, type Logger } from "./log.js";
  * will publish (otherwise every client would refuse us anyway; fail before serving).
  * @throws Error E_REPORT_DATA / E_COMPOSE_MISMATCH (or the quote service's error)
  */
-export async function selfCheckQuote(attester: Attester, keys: EnclaveKeys, composeHash: Uint8Array): Promise<void> {
+export async function selfCheckQuote(
+  attester: Attester,
+  keys: EnclaveKeys,
+  composeHash: Uint8Array,
+  rootKind: RootKind = "MOCK",
+): Promise<void> {
   const probe = keys.reportData(randomBytes(32));
   const q = await attester.getQuote(probe);
-  const parsed = parseQuote(q.quote);
+  const parsed = parseQuote(q.quote, rootKind);
   if (!equalBytes(parsed.report.reportData, probe)) throw new Error("E_REPORT_DATA");
-  const measured = verifyEventLog(q.eventLog, parsed.report.rtmr[3]);
+  const measured =
+    rootKind === "INTEL" ? verifyEventLogDstack(q.eventLog, parsed.report.rtmr[3]) : verifyEventLog(q.eventLog, parsed.report.rtmr[3]);
   if (!equalBytes(measured.composeHash, composeHash)) throw new Error("E_COMPOSE_MISMATCH");
 }
 

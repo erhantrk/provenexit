@@ -3,7 +3,7 @@
  * `GET /v1/attestation`, `GET /v1/receipts/proof`, `GET /healthz`. Content-free errors only.
  */
 import type http from "node:http";
-import { QUOTE, equalBytes, fromHex, isHex, toHex, type Attester, type TdxEvent } from "@plr/shared";
+import { QUOTE, equalBytes, fromHex, isHex, toHex, type Attester, type CollateralJson, type RootKind, type TdxEvent } from "@plr/shared";
 import { HttpError, onlyParams, sendJson } from "./http-util.js";
 import type { EnclaveKeys } from "./keys.js";
 import type { LeafLog } from "./receipts.js";
@@ -18,6 +18,13 @@ export interface CommonRoutesOptions {
   keys: EnclaveKeys;
   composeBytes: Uint8Array;
   receipts: LeafLog;
+  /** The root published in the bundle (`root_kind`, INTERFACES §1.5). */
+  rootKind: RootKind;
+  /**
+   * INTEL mode: the Intel collateral for the served quote (INTERFACES §1.5); a failure is `503 E_UPSTREAM`.
+   * Unset in MOCK mode (the bundle carries no `collateral`).
+   */
+  collateral?: (quote: Uint8Array) => Promise<CollateralJson>;
   /**
    * The instance's registration quote once registered (SPEC-CHAINS §4: served as `registration_quote`), else null.
    * Called per request; a missing/throwing provider means "not registered".
@@ -63,13 +70,20 @@ export function commonRoutes(o: CommonRoutesOptions): {
     if (!equalBytes(quote.subarray(QUOTE.OFF.REPORT_DATA, QUOTE.OFF.REPORT_DATA + 64), rd)) throw new HttpError(503, "E_UPSTREAM");
     const body: Record<string, unknown> = {
       v: "PLR-v1",
-      root_kind: "MOCK",
+      root_kind: o.rootKind,
       quote: toHex(quote),
       event_log: eventLog,
       app_compose: composeText,
       x25519: xpHex,
       ed25519: epHex,
     };
+    if (o.collateral) {
+      try {
+        body.collateral = await o.collateral(quote);
+      } catch {
+        throw new HttpError(503, "E_UPSTREAM");
+      }
+    }
     const rq = registrationQuote();
     if (rq !== null) body.registration_quote = toHex(rq);
     sendJson(res, 200, body);
