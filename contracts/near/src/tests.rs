@@ -11,9 +11,14 @@ use crate::binding::{ak_cert_message, anchor_message, key_hash, registration_non
 use crate::bytes::{decode_hex, decode_hex_array, encode_hex};
 use crate::ecdsa::{self, compress, verify_low_s};
 use crate::errors::*;
-use crate::eventlog::{event_digest, verify_event_log};
+use crate::eventlog::{
+    event_digest, verify_event_log, verify_event_log_dstack, BootInfo, DSTACK_MAX_EVENT_PAYLOAD, MAX_EVENT_PAYLOAD,
+    MAX_EVENTS,
+};
 use crate::hash::{sha256, sha384_concat};
-use crate::quote::{parse_mock, MOCK_LEN};
+use crate::quote::{
+    off, parse_intel, parse_mock, MAX_INTEL_LEN, MOCK_LEN, MOCK_QE_VENDOR_ID, MR_SIGNER_SEAM, SIG_DATA_OFF, SIG_LEN_OFF,
+};
 use crate::test_host::{self, set_ctx, take_logs, take_transfers};
 use crate::*;
 
@@ -1234,4 +1239,241 @@ fn migrate_runs_once_and_only_on_a_rev_1_2_state() {
     fails_with(E_BAD_INPUT, Registry::migrate); // no state at all
     near_sdk::env::storage_write(b"STATE", b"garbage");
     fails_with(E_BAD_INPUT, Registry::migrate);
+}
+
+// ---------------- INTEL mode: `parse_intel` (INTERFACES §1.1) ----------------
+
+/// TV-Q1: `dcap-qvl` 0.7.1 `sample/tdx_quote`, a real Intel-signed TDX v4 quote (5 006 bytes, empty RTMR3; it is not
+/// a dstack quote, so it carries no event log).
+fn tdx_quote() -> Vec<u8> {
+    include_bytes!("../../../packages/shared/test/vectors/dcap/tdx_quote.bin").to_vec()
+}
+
+fn mutated(q: &[u8], f: impl Fn(&mut Vec<u8>)) -> Vec<u8> {
+    let mut m = q.to_vec();
+    f(&mut m);
+    m
+}
+
+/// The error code of `parse_intel`, or `"ok"`.
+fn intel_err(q: &[u8]) -> &'static str {
+    match parse_intel(q) {
+        Ok(_) => "ok",
+        Err(e) => e.code,
+    }
+}
+
+#[test]
+fn parse_intel_accepts_tv_q1_and_reads_the_fixed_v4_offsets() {
+    let q = tdx_quote();
+    assert_eq!(q.len(), 5006);
+    assert_eq!(encode_hex(&sha256(&q)), "c42f9164325024bca2757bc8819b11879a0a369132ea4e2b7c85df4805ea72db", "TV-Q1");
+    let iq = parse_intel(&q).unwrap();
+    assert!(!iq.is_debug());
+    assert_eq!(
+        encode_hex(&iq.mr_td()),
+        "91eb2b44d141d4ece09f0c75c2c53d247a3c68edd7fafe8a3520c942a604a407de03ae6dc5f87f27428b2538873118b7"
+    );
+    assert_eq!(encode_hex(&iq.rtmr(3)), "00".repeat(48), "TV-Q1 is not a dstack quote");
+    assert_eq!(
+        encode_hex(&iq.report_data()),
+        "9a9d48e7f6799642d3d1b34e1e5e1742d4bb02dd6ddd551862c1211d35c304f9eca3efdbb481601c163cf52493d6e44aed55d51ec39b7e518fadb92c2b523f20"
+    );
+    assert_eq!(encode_hex(&iq.os_measurement()), "345469a462dafe286b728237091da824ce7508ebf14b390a47b1766c9c22cd65");
+    // MOCK mode is unchanged: it still requires exactly MOCK_LEN bytes and the MOCK QE vendor id.
+    assert!(parse_mock(&q).is_err());
+}
+
+#[test]
+fn parse_intel_rejects_every_structural_deviation() {
+    let q = tdx_quote();
+    // Zero padding is normal: the real vector has 70 trailing zero bytes, up to MAX_INTEL_LEN is accepted ...
+    assert!(parse_intel(&mutated(&q, |m| m.resize(MAX_INTEL_LEN, 0))).is_ok());
+    // ... no padding at all is accepted too (`is_all_zero(&[])` must be true) ...
+    assert!(parse_intel(&q[..SIG_DATA_OFF + 4300]).is_ok());
+
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        ("length (short)", q[..SIG_DATA_OFF - 1].to_vec()),
+        ("length (long)", mutated(&q, |m| m.resize(MAX_INTEL_LEN + 1, 0))),
+        ("version", mutated(&q, |m| m[off::VERSION] = 5)),
+        ("att_key_type", mutated(&q, |m| m[off::ATT_KEY_TYPE] = 3)),
+        ("tee_type", mutated(&q, |m| m[off::TEE_TYPE] = 0x80)),
+        ("reserved", mutated(&q, |m| m[off::RESERVED + 3] = 1)),
+        ("qe_vendor_id", mutated(&q, |m| m[off::QE_VENDOR_ID + 15] ^= 1)),
+        ("mock qe_vendor_id", mutated(&q, |m| m[off::QE_VENDOR_ID..off::QE_VENDOR_ID + 16].copy_from_slice(MOCK_QE_VENDOR_ID))),
+        ("sig_data_len 0", mutated(&q, |m| m[SIG_LEN_OFF..SIG_LEN_OFF + 4].copy_from_slice(&0u32.to_le_bytes()))),
+        ("sig_data_len too large", mutated(&q, |m| {
+            let sl = (m.len() - SIG_DATA_OFF + 1) as u32;
+            m[SIG_LEN_OFF..SIG_LEN_OFF + 4].copy_from_slice(&sl.to_le_bytes());
+        })),
+        // The task's case: the last byte of the 70-byte zero padding set to 1.
+        ("trailing byte", mutated(&q, |m| *m.last_mut().unwrap() = 1)),
+        ("mr_signer_seam", mutated(&q, |m| m[MR_SIGNER_SEAM + 47] = 1)),
+    ];
+    for (name, m) in cases {
+        assert_eq!(intel_err(&m), E_QUOTE_FORMAT, "{name}");
+    }
+}
+
+// ---------------- INTEL mode: `verify_event_log_dstack` (INTERFACES §1.3) ----------------
+
+const DSTACK_APP_ID: [u8; 20] = [0x11; 20];
+const DSTACK_INSTANCE_ID: [u8; 20] = [0x22; 20];
+
+/// One dstack RTMR3 event: exactly the 5 SPEC §3 keys and the V1 digest `event_digest`.
+fn dstack_event(name: &str, payload: &[u8]) -> Value {
+    json!({
+        "imr": 3,
+        "event_type": 134_217_729u64,
+        "digest": encode_hex(&event_digest(name, payload)),
+        "event": name,
+        "event_payload": encode_hex(payload),
+    })
+}
+
+/// `rt = SHA384(rt ‖ digest)` over the log: the RTMR3 a CVM holds after those events.
+fn dstack_rtmr3(log: &Value) -> [u8; 48] {
+    let mut rt = [0u8; 48];
+    for e in log.as_array().unwrap() {
+        rt = sha384_concat(&[&rt, &decode_hex(e["digest"].as_str().unwrap()).unwrap()]);
+    }
+    rt
+}
+
+fn dstack_err(log: &Value, rtmr3: &[u8; 48]) -> &'static str {
+    verify_event_log_dstack(log, rtmr3).err().expect("expected a failure").code
+}
+
+/// TV-E2 shape (before the real S1 log existed): dstack's own non-boot events around the five boot events, whose
+/// payloads are 0 / 20 / 32 / 20 / 0 bytes.
+fn dstack_boot_log(compose_hash: &[u8; 32]) -> Value {
+    json!([
+        dstack_event("key-provider", br#"{"key_provider":"kms"}"#),
+        dstack_event("system-preparing", b""),
+        dstack_event("app-id", &DSTACK_APP_ID),
+        dstack_event("compose-hash", compose_hash),
+        dstack_event("instance-id", &DSTACK_INSTANCE_ID),
+        dstack_event("boot-mr-done", b""),
+        dstack_event("system-ready", b""),
+    ])
+}
+
+#[test]
+fn verify_event_log_dstack_accepts_a_boot_log_with_extra_events() {
+    let compose = br#"{"manifest_version":2,"name":"provenexit-exit","runner":"docker-compose"}"#;
+    let compose_hash = sha256(compose);
+    let log = dstack_boot_log(&compose_hash);
+    let boot = verify_event_log_dstack(&log, &dstack_rtmr3(&log)).unwrap();
+    assert_eq!(boot, BootInfo { compose_hash, app_id: DSTACK_APP_ID, instance_id: DSTACK_INSTANCE_ID });
+    // Rule 4: the app id comes from the deployment, so there is no `app_id == compose_hash[..20]` rule here.
+    assert_ne!(&boot.app_id[..], &boot.compose_hash[..20]);
+
+    // Other names may appear anywhere, repeat, and carry up to DSTACK_MAX_EVENT_PAYLOAD bytes.
+    let mut events = log.as_array().unwrap().clone();
+    events.insert(4, dstack_event("storage-fs", &[1, 2, 3]));
+    events.push(dstack_event("key-provider", &vec![b'x'; DSTACK_MAX_EVENT_PAYLOAD]));
+    events.push(dstack_event("gpu-policy-hash", &[0u8; 32]));
+    let log = Value::Array(events);
+    assert_eq!(verify_event_log_dstack(&log, &dstack_rtmr3(&log)).unwrap(), boot);
+}
+
+#[test]
+fn verify_event_log_dstack_requires_the_boot_order_and_a_matching_rtmr3() {
+    let log = dstack_boot_log(&sha256(b"compose"));
+
+    // app-id and compose-hash swapped: every digest and the RTMR3 still replay, only the order is wrong.
+    let mut events = log.as_array().unwrap().clone();
+    events.swap(2, 3);
+    let swapped = Value::Array(events);
+    assert_eq!(dstack_err(&swapped, &dstack_rtmr3(&swapped)), E_EVENT_LOG);
+
+    // app-id moved in front of system-preparing is out of order as well.
+    let mut events = log.as_array().unwrap().clone();
+    let app_id = events.remove(2);
+    events.insert(0, app_id);
+    let moved = Value::Array(events);
+    assert_eq!(dstack_err(&moved, &dstack_rtmr3(&moved)), E_EVENT_LOG);
+
+    // A well-formed log that does not replay to the quote's RTMR3 is E_RTMR3, not E_EVENT_LOG.
+    let mut rt = dstack_rtmr3(&log);
+    rt[0] ^= 1;
+    assert_eq!(dstack_err(&log, &rt), E_RTMR3);
+    rt[0] ^= 1;
+    assert!(verify_event_log_dstack(&log, &rt).is_ok());
+}
+
+#[test]
+fn verify_event_log_dstack_rejects_content_errors() {
+    let log = dstack_boot_log(&sha256(b"compose"));
+
+    // Repeated or missing boot events, and wrong boot payload sizes.
+    let mut dup = log.as_array().unwrap().clone();
+    dup.insert(3, dstack_event("app-id", &DSTACK_APP_ID));
+    let dup = Value::Array(dup);
+    assert_eq!(dstack_err(&dup, &dstack_rtmr3(&dup)), E_EVENT_LOG);
+    let mut missing = log.as_array().unwrap().clone();
+    missing.remove(4); // instance-id
+    let missing = Value::Array(missing);
+    assert_eq!(dstack_err(&missing, &dstack_rtmr3(&missing)), E_EVENT_LOG);
+    for (name, payload) in [
+        ("system-preparing", vec![1u8]),
+        ("app-id", vec![0x11; 21]),
+        ("compose-hash", vec![0u8; 31]),
+        ("instance-id", vec![0x22; 19]),
+        ("boot-mr-done", vec![0u8]),
+    ] {
+        let mut events = log.as_array().unwrap().clone();
+        let i = events.iter().position(|e| e["event"] == name).unwrap();
+        events[i] = dstack_event(name, &payload);
+        let ev = Value::Array(events);
+        assert_eq!(dstack_err(&ev, &dstack_rtmr3(&ev)), E_EVENT_LOG, "{name}");
+    }
+
+    // Per-event checks are shared with the MOCK rule (shape, imr, event_type, digest encoding, digest value).
+    for (field, val) in [("imr", json!(4)), ("event_type", json!(134_217_728u64)), ("digest", json!("00".repeat(48)))] {
+        let mut events = log.as_array().unwrap().clone();
+        events[1][field] = val;
+        let ev = Value::Array(events);
+        assert_eq!(dstack_err(&ev, &dstack_rtmr3(&ev)), E_EVENT_LOG, "{field}");
+    }
+
+    // Payload bound: 4096 bytes is fine in INTEL mode; the MOCK rule keeps its 256-byte bound (`checked_event_max`).
+    let mut big = log.as_array().unwrap().clone();
+    big.push(dstack_event("key-provider", &vec![0u8; MAX_EVENT_PAYLOAD + 1]));
+    let big = Value::Array(big);
+    let rt = dstack_rtmr3(&big);
+    assert!(verify_event_log_dstack(&big, &rt).is_ok());
+    let mock_err = verify_event_log(&big, &rt).err().expect("MOCK payload bound");
+    assert_eq!((mock_err.code, mock_err.detail), (E_EVENT_LOG, "payload size"));
+    let mut too_big = log.as_array().unwrap().clone();
+    too_big.push(dstack_event("key-provider", &vec![0u8; DSTACK_MAX_EVENT_PAYLOAD + 1]));
+    let too_big = Value::Array(too_big);
+    assert_eq!(dstack_err(&too_big, &dstack_rtmr3(&too_big)), E_EVENT_LOG);
+
+    // Shape and count bounds.
+    assert_eq!(dstack_err(&json!({ "not": "an array" }), &[0u8; 48]), E_EVENT_LOG);
+    let four = Value::Array(log.as_array().unwrap()[..4].to_vec());
+    assert_eq!(dstack_err(&four, &dstack_rtmr3(&four)), E_EVENT_LOG);
+    let mut many = log.as_array().unwrap().clone();
+    while many.len() <= MAX_EVENTS {
+        many.push(dstack_event("extra", b""));
+    }
+    let many = Value::Array(many);
+    assert_eq!(dstack_err(&many, &dstack_rtmr3(&many)), E_EVENT_LOG);
+}
+
+/// TV-E2, the real log: the spike S1 CVM's `event_log.json` replayed against the `rtmr3` inside its `quote.hex`.
+/// Compiled only with `--features spike-fixture` so a checkout without `fixtures/phala-spike/` still builds.
+#[cfg(feature = "spike-fixture")]
+#[test]
+fn verify_event_log_dstack_accepts_the_real_phala_spike_log() {
+    let log: Value = serde_json::from_str(include_str!("../../../fixtures/phala-spike/event_log.json")).expect("spike event_log.json");
+    let quote_hex = include_str!("../../../fixtures/phala-spike/quote.hex");
+    let quote_hex = quote_hex.trim();
+    let quote = decode_hex(quote_hex.strip_prefix("0x").unwrap_or(quote_hex)).expect("spike quote.hex");
+    let q = parse_intel(&quote).expect("the spike quote parses in INTEL mode");
+    let boot = verify_event_log_dstack(&log, &q.rtmr(3)).expect("the spike log replays to the quote's RTMR3");
+    assert_eq!(log.as_array().unwrap().len(), 11);
+    let app_compose = include_str!("../../../fixtures/phala-spike/app_compose.json");
+    assert_eq!(encode_hex(&boot.compose_hash), encode_hex(&sha256(app_compose.as_bytes())), "compose-hash event");
 }

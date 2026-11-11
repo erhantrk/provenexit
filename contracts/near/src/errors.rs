@@ -20,6 +20,11 @@ pub const E_COMPOSE_MISMATCH: &str = "E_COMPOSE_MISMATCH";
 pub const E_COMPOSE_NOT_ALLOWED: &str = "E_COMPOSE_NOT_ALLOWED";
 pub const E_OS_NOT_ALLOWED: &str = "E_OS_NOT_ALLOWED";
 pub const E_REPORT_DATA: &str = "E_REPORT_DATA";
+// INTEL mode (INTERFACES §0/§1): Intel DCAP verification and the dstack compose policy.
+pub const E_TCB_STATUS: &str = "E_TCB_STATUS";
+/// Client-side only (`checkDstackComposePolicy`, INTERFACES §3.1); kept here so both sides share one code list.
+pub const E_COMPOSE_POLICY: &str = "E_COMPOSE_POLICY";
+pub const E_COLLATERAL: &str = "E_COLLATERAL";
 // anchor_receipts.
 pub const E_INSTANCE_NOT_REGISTERED: &str = "E_INSTANCE_NOT_REGISTERED";
 pub const E_SEQ: &str = "E_SEQ";

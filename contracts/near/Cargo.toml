@@ -22,6 +22,9 @@ getrandom = { version = "0.2.16", features = ["custom"] }
 [features]
 # Test-only fixed clock for the TV-Q1 vector (collateral valid 2025-06-19..2025-07-19). NEVER deploy a build with it.
 tdx-test-clock = []
+# Native tests only: verify the real dstack log from spike S1 (`fixtures/phala-spike/`). Off by default so the
+# build does not depend on that fixture being present.
+spike-fixture = []
 
 [dev-dependencies]
 # Native test host (src/test_host.rs) implements the NEAR crypto host functions with these crates.

@@ -80,6 +80,51 @@ pub fn parse_mock(q: &[u8]) -> Result<MockQuote<'_>, Error> {
     Ok(MockQuote { q })
 }
 
+// ---------- INTEL mode (INTERFACES §1.1): TDX quote v4 with a real Intel signature ----------
+
+/// `qe_vendor_id` of an Intel QE (INTERFACES §0; SPEC §2.1).
+pub const INTEL_QE_VENDOR_ID: [u8; 16] =
+    [0x93, 0x9a, 0x72, 0x33, 0xf7, 0x9c, 0x4c, 0xa9, 0x94, 0x0a, 0x0d, 0xb3, 0x95, 0x7f, 0x06, 0x07];
+/// `MAX_TDX_QUOTE_BYTES`: real quotes are about 5 000 bytes, dstack's carry zero padding.
+pub const MAX_INTEL_LEN: usize = 8192;
+/// `mr_signer_seam` (48 bytes): the TD is signed by the Intel TDX module, so the seam is zero.
+pub const MR_SIGNER_SEAM: usize = 112;
+
+/// Parses a quote in INTEL mode (INTERFACES §1.1): the same fixed v4 header/body offsets as [`parse_mock`], plus
+/// the Intel QE vendor id, a bounded `sig_data` and its zero padding, and a zero `mr_signer_seam`. Every
+/// structural problem is `E_QUOTE_FORMAT`. The signature itself is checked by `dcap-qvl` (off-chain or T11).
+pub fn parse_intel(q: &[u8]) -> Result<MockQuote<'_>, Error> {
+    if q.len() < SIG_DATA_OFF || q.len() > MAX_INTEL_LEN {
+        return Err(fmt_err("length"));
+    }
+    if u16le(q, off::VERSION) != VERSION {
+        return Err(fmt_err("version"));
+    }
+    if u16le(q, off::ATT_KEY_TYPE) != ATT_KEY_TYPE_ECDSA_P256 {
+        return Err(fmt_err("att_key_type"));
+    }
+    if u32le(q, off::TEE_TYPE) != TEE_TYPE_TDX {
+        return Err(fmt_err("tee_type"));
+    }
+    if !is_all_zero(&q[off::RESERVED..off::RESERVED + 4]) {
+        return Err(fmt_err("reserved"));
+    }
+    if !ct_eq(&q[off::QE_VENDOR_ID..off::QE_VENDOR_ID + 16], &INTEL_QE_VENDOR_ID) {
+        return Err(fmt_err("qe_vendor_id"));
+    }
+    let sl = u32le(q, SIG_LEN_OFF) as usize;
+    if sl == 0 || sl > q.len() - SIG_DATA_OFF {
+        return Err(fmt_err("sig_data length"));
+    }
+    if !is_all_zero(&q[SIG_DATA_OFF + sl..]) {
+        return Err(fmt_err("trailing bytes"));
+    }
+    if !is_all_zero(&q[MR_SIGNER_SEAM..MR_SIGNER_SEAM + 48]) {
+        return Err(fmt_err("mr_signer_seam"));
+    }
+    Ok(MockQuote { q })
+}
+
 impl MockQuote<'_> {
     /// `quote[0:632]`, the bytes covered by `quote_sig`.
     pub fn signed_bytes(&self) -> &[u8] {
