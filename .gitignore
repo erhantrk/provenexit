@@ -6,3 +6,6 @@ target/
 .run/
 .env
 *.log
+.DS_Store
+.claude/
+fixtures/**/secret*
