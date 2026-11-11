@@ -17,6 +17,8 @@
 # Everything it starts is stopped on exit (trap), whatever happens.
 #
 # Env: PLR_LLM=llama|mock (default llama), PLR_SKIP_BUILD=1, NO_COLOR=1,
+#      PLR_DEMO_CHAINS=near|all (default near: the NEAR hackathon path only; "all" also runs the pre-hackathon
+#      multi-chain stages from temo: Zcash tier C and EVM/Stellar/Solana tier B),
 #      PLR_DEMO_SOCKS_PORT (default 18180; the production-exit proxy uses the next port).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -458,7 +460,10 @@ NEAR_LOG_DIR="$PLR_STACK_LOG_DIR"; NEAR_STACK_LOG="$STACK_LOG"
 ZEBRAD_BIN="${ZEBRAD_BIN:-$(command -v zebrad || true)}"
 [[ -n "$ZEBRAD_BIN" || ! -x "$HOME/.cargo/bin/zebrad" ]] || ZEBRAD_BIN="$HOME/.cargo/bin/zebrad"
 ZCASH_RAN=0
-if [[ -z "$ZEBRAD_BIN" || ! -x "$ZEBRAD_BIN" ]]; then
+DEMO_ALL_CHAINS=0; [[ "${PLR_DEMO_CHAINS:-near}" == all ]] && DEMO_ALL_CHAINS=1
+if [[ $DEMO_ALL_CHAINS != 1 ]]; then
+  step "Other chains (Zcash, EVM, Stellar, Solana: pre-hackathon temo code): skipped — NEAR only by default; PLR_DEMO_CHAINS=all runs them"
+elif [[ -z "$ZEBRAD_BIN" || ! -x "$ZEBRAD_BIN" ]]; then
   step "Zcash (SPEC-CHAINS tier C): skipped — zebrad is not installed (cargo install zebrad)"
 else
   export ZEBRAD_BIN
@@ -528,7 +533,8 @@ tierb_ready() {
     solana) [[ -f contracts/solana/target/deploy/plr_registry_solana.so && -x "$SOLANA_DIR/solana-test-validator" ]] ;;
   esac
 }
-for TB in evm stellar solana; do
+TIERB_CHAINS=(); [[ $DEMO_ALL_CHAINS == 1 ]] && TIERB_CHAINS=(evm stellar solana)
+for TB in ${TIERB_CHAINS[@]+"${TIERB_CHAINS[@]}"}; do
   if ! tierb_ready "$TB"; then step "$TB (SPEC-CHAINS tier B): skipped — node tools or the built contract are missing (README \"Tier B\")"; continue; fi
   TB_ID="$ID-$TB"
   ENV_FILE="$RUN/$TB_ID.env"; STACK_LOG="$RUN/$TB_ID.log"; STOP_FILE="$RUN/$TB_ID.stop"

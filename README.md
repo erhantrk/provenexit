@@ -236,7 +236,9 @@ written for (and the configuration `deploy/phala/` pins).
 Elsewhere in the repo, not part of the NEAR submission (mentioned once, as the plan asks): the private LLM router
 (PLR-v1, `plr verify` / `plr chat` / `plr proxy`, still exercised by `scripts/demo.sh`) and the multi-chain registries
 ([`SPEC-CHAINS.md`](SPEC-CHAINS.md): EVM/Monad, Stellar, Solana in `contracts/{evm,stellar,solana}`, Zcash record
-logs in `client/src/zcash-registry.ts`).
+logs in `client/src/zcash-registry.ts`). They are pre-hackathon temo code (October 2026). `scripts/demo.sh` runs the
+NEAR path only by default; `PLR_DEMO_CHAINS=all PLR_LLM=mock bash scripts/demo.sh` also runs those older chain stages
+(each only when its node tools are installed).
 
 ## Prior code and hackathon window (rules Q-001/Q-003/Q-004)
 
