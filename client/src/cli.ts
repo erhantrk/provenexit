@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * `plr` CLI (SPEC §12): `plr verify` | `plr chat "<prompt>"` | `plr chat` / `plr chat -` (prompt from stdin) | `plr proxy`;
- * VPN (SPEC-VPN §9.2): `plr vpn` (local SOCKS5 on 127.0.0.1:18180) | `plr vpn verify`.
+ * VPN (SPEC-VPN §9.2): `plr vpn` (local SOCKS5 on 127.0.0.1:18180) | `plr vpn verify` | `plr vpn verify --fixture <dir>` |
+ * `plr vpn inspect` (INTEL checks without the registry, for the owner's allow_compose / allow_os).
  * Reading the prompt from stdin is recommended: argv is visible to other local users (`ps`) and lands in
  * shell history.
  * Config via env: PLR_ROUTER_URL, PLR_NEAR_RPC, PLR_REGISTRY, PLR_TRUSTED_ROOT (128 hex);
@@ -16,9 +17,37 @@
  * (+ PLR_SOLANA_REGISTRY / PLR_SOLANA_VPN_REGISTRY). Zcash: PLR_ZCASH_RPC, PLR_ZCASH_NETWORK, PLR_ZCASH_OWNER,
  * PLR_ZCASH_START_HEIGHT.
  */
+import { createHash, randomBytes } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { PlrError, isHex, isPlrError, isTAddress, isValidP256Pub, isZcashNetwork, fromHex, toHex, type RegistryReader, type ZcashNetwork } from "@plr/shared";
+import {
+  DcapQvlVerifier,
+  INTEL_ROOT_P256,
+  MAX_DSTACK_COMPOSE_BYTES,
+  PlrError,
+  checkDstackComposePolicy,
+  equalBytes,
+  isCollateralJson,
+  isDebug,
+  isHex,
+  isPlrError,
+  isTAddress,
+  isValidP256Pub,
+  isZcashNetwork,
+  fromHex,
+  keyHash,
+  osMeasurement,
+  parseQuote,
+  sessionNonceDigest,
+  toHex,
+  utf8,
+  verifyEventLogDstack,
+  type AttestationBundle,
+  type RegistryReader,
+  type RootKind,
+  type VerifiedRouter,
+  type ZcashNetwork,
+} from "@plr/shared";
 import { NearRegistry, checkRpcUrl } from "./near-registry.js";
 import { ZcashRegistry, parseZcashContractId } from "./zcash-registry.js";
 import { EvmRegistry, evmContractId, isEvmChainId, parseEvmContractId } from "./chains/evm.js";
@@ -32,6 +61,8 @@ import { recheckRegistry, type AttestationSession } from "./attestation.js";
 import { VpnClient, VPN_ATTEST_TTL_MS } from "./vpn/client.js";
 import { TwoHopClient } from "./vpn/twohop.js";
 import { startVpn, type VpnConnector } from "./vpn/socks5-server.js";
+import { fetchAttestationDirect, normalizeExitUrl } from "./vpn/hop.js";
+import { fixtureReplayLine, readFixture, verifyFixture } from "./fixture.js";
 
 export interface CliIo {
   out: (s: string) => void;
@@ -117,6 +148,11 @@ const VPN_USAGE = `usage: plr vpn             verify the VPN exit, then serve a 
                             socks5h://127.0.0.1:${DEFAULTS.vpnSocksPort}, e.g.  curl --proxy socks5h://127.0.0.1:${DEFAULTS.vpnSocksPort} https://example.com
        plr vpn verify      print every attestation + registry check of the VPN exit (✔/✘); in two-hop mode both
                             hops and the operator-organization check
+       plr vpn verify --fixture <dir>
+                            replay a captured fixture (INTERFACES §3.3); needs no network and runs the DCAP check
+                            at the capture time
+       plr vpn inspect     INTEL checks 1–7b without the registry: compose hash, OS measurement, key hash, TCB and
+                            images — the values the owner approves with allow_compose / allow_os
 env:   PLR_VPN_URL       VPN exit URL (default ${DEFAULTS.vpnExit})
        PLR_VPN_ENTRY_URL entry exit URL; when set, traffic goes client → entry → exit (two-hop): the exit is
                             reached only through the entry and must belong to a different approved organization
@@ -423,11 +459,24 @@ function errCode(e: unknown): string {
   return isPlrError(e) ? e.code : e instanceof Error ? e.message : "error";
 }
 
+/** Root line of `plr verify` / `plr vpn verify` (INTERFACES §3.2). */
+function rootLabel(kind: RootKind): string {
+  return kind === "INTEL" ? "INTEL ROOT (Intel SGX Root CA)" : "MOCK ROOT (local test root, NOT Intel)";
+}
+
+/** Block-explorer line for a NEAR testnet registry (INTERFACES §3.2), else undefined. */
+function explorerLine(cfg: { chain: CliChain; rpcUrl: string; contractId: string }): string | undefined {
+  if (cfg.chain !== "near" || !cfg.rpcUrl.includes("testnet")) return undefined;
+  return `  explorer: https://testnet.nearblocks.io/address/${cfg.contractId}`;
+}
+
 async function cmdVerify(cfg: CliConfig, registry: TracingRegistry, client: PrivateClient, io: CliIo): Promise<number> {
   io.out(`PLR verify`);
   io.out(`  router:   ${client.routerUrl}`);
   io.out(`  registry: ${registry.contractId} on ${registry.chain} (${cfg.rpcUrl})`);
   io.out(tierLine(registry));
+  const explorer = explorerLine(cfg);
+  if (explorer !== undefined) io.out(explorer);
   io.out(`  pinned root: ${client.rootKind} ROOT ${toHex(cfg.trustedRoot)}`);
   io.out("");
   let verified;
@@ -442,7 +491,7 @@ async function cmdVerify(cfg: CliConfig, registry: TracingRegistry, client: Priv
   for (const l of checkLines(undefined, undefined, { evidence: !registry.verifiesOnChain })) io.out(formatCheckLine(l));
   io.out("");
   io.out(`✔ VERIFIED`);
-  io.out(`  root:            ${verified.rootKind} ROOT${verified.rootKind === "MOCK" ? " (local test root, NOT Intel)" : ""}`);
+  io.out(`  root:            ${rootLabel(verified.rootKind)}`);
   io.out(`  compose hash:    ${toHex(verified.composeHash)}`);
   io.out(`  OS measurement:  ${toHex(verified.osMeasurement)}`);
   io.out(`  key hash:        ${toHex(verified.keyHash)}`);
@@ -498,11 +547,17 @@ function composeSummary(appCompose: string): { name: string; egress: string; tes
   }
 }
 
-function printVpnSummary(io: CliIo, s: AttestationSession, ind = "  "): void {
+function printVpnSummary(io: CliIo, s: Pick<AttestationSession, "verified" | "appCompose">, ind = "  "): void {
   const v = s.verified;
-  const c = composeSummary(s.appCompose);
-  io.out(`${ind}root:            ${v.rootKind} ROOT${v.rootKind === "MOCK" ? " (local test root, NOT Intel)" : ""}`);
-  io.out(`${ind}build:           ${c.name} · egress ${c.egress}${c.testBuild ? "  ⚠ TEST BUILD (loopback egress allowed)" : ""}`);
+  io.out(`${ind}root:            ${rootLabel(v.rootKind)}`);
+  if (v.rootKind === "INTEL") {
+    // In INTEL mode the measured document is dstack's app-compose (INTERFACES §1.4), not the plr-vpn policy.
+    io.out(`${ind}tcb:             ${v.tcbStatus ?? "?"}`);
+    for (const image of v.images ?? []) io.out(`${ind}image:           ${image}`);
+  } else {
+    const c = composeSummary(s.appCompose);
+    io.out(`${ind}build:           ${c.name} · egress ${c.egress}${c.testBuild ? "  ⚠ TEST BUILD (loopback egress allowed)" : ""}`);
+  }
   io.out(`${ind}compose hash:    ${toHex(v.composeHash)}`);
   io.out(`${ind}OS measurement:  ${toHex(v.osMeasurement)}`);
   io.out(`${ind}key hash:        ${toHex(v.keyHash)}`);
@@ -531,23 +586,26 @@ async function printInstance(io: CliIo, registry: TracingRegistry, s: Attestatio
 const RECHECK_LINE = "registry re-check before each connection (compose, OS, instance)";
 
 async function cmdVpnVerify(cfg: VpnCliConfig, registry: TracingRegistry, client: VpnClient, io: CliIo): Promise<number> {
+  const intel = client.rootKind === "INTEL";
   io.out(`PLR VPN verify`);
   io.out(`  exit:     ${client.exitUrl}`);
   io.out(`  registry: ${registry.contractId} on ${registry.chain} (${cfg.rpcUrl})`);
   io.out(tierLine(registry));
+  const explorer = explorerLine(cfg);
+  if (explorer !== undefined) io.out(explorer);
   io.out(`  pinned root: ${client.rootKind} ROOT ${toHex(cfg.trustedRoot)}`);
   io.out("");
   let session: AttestationSession;
   try {
     session = await client.attestSession();
   } catch (e) {
-    for (const l of checkLines(e, registry.lastCall, { evidence: !registry.verifiesOnChain })) io.out(formatCheckLine(l));
+    for (const l of checkLines(e, registry.lastCall, { evidence: !registry.verifiesOnChain, intel })) io.out(formatCheckLine(l));
     io.out(`  · ${RECHECK_LINE}  (not checked)`);
     io.out("");
     io.out(`✘ REFUSED — ${errCode(e)}. No connection would be tunnelled through this exit.`);
     return 1;
   }
-  for (const l of checkLines(undefined, undefined, { evidence: !registry.verifiesOnChain })) io.out(formatCheckLine(l));
+  for (const l of checkLines(undefined, undefined, { evidence: !registry.verifiesOnChain, intel })) io.out(formatCheckLine(l));
   try {
     await recheckRegistry(registry, session.verified);
     io.out(`  ✔ ${RECHECK_LINE}`);
@@ -574,17 +632,18 @@ async function verifyHop(
   attest: () => Promise<AttestationSession>,
   check: (s: AttestationSession) => Promise<string>,
   orgLines: (code: string | undefined, org: string | undefined) => string[],
+  intel: boolean,
 ): Promise<{ session: AttestationSession; org: string } | { error: unknown }> {
   let session: AttestationSession;
   try {
     session = await attest();
   } catch (e) {
-    for (const l of checkLines(e, registry.lastCall, { evidence: !registry.verifiesOnChain })) io.out(formatCheckLine(l));
+    for (const l of checkLines(e, registry.lastCall, { evidence: !registry.verifiesOnChain, intel })) io.out(formatCheckLine(l));
     io.out(`  · ${RECHECK_LINE}  (not checked)`);
     for (const l of orgLines(undefined, undefined)) io.out(`  · ${l}  (not checked)`);
     return { error: e };
   }
-  for (const l of checkLines(undefined, undefined, { evidence: !registry.verifiesOnChain })) io.out(formatCheckLine(l));
+  for (const l of checkLines(undefined, undefined, { evidence: !registry.verifiesOnChain, intel })) io.out(formatCheckLine(l));
   try {
     const org = await check(session);
     io.out(`  ✔ ${RECHECK_LINE}`);
@@ -610,11 +669,14 @@ async function verifyHop(
 }
 
 async function cmdTwoHopVerify(cfg: VpnCliConfig, registry: TracingRegistry, client: TwoHopClient, io: CliIo): Promise<number> {
+  const intel = client.rootKind === "INTEL";
   io.out(`PLR VPN verify (two-hop)`);
   io.out(`  entry:    ${client.entryUrl}`);
   io.out(`  exit:     ${client.exitUrl}  (reached only through the entry)`);
   io.out(`  registry: ${registry.contractId} on ${registry.chain} (${cfg.rpcUrl})`);
   io.out(tierLine(registry));
+  const explorer = explorerLine(cfg);
+  if (explorer !== undefined) io.out(explorer);
   io.out(`  pinned root: ${client.rootKind} ROOT ${toHex(cfg.trustedRoot)}`);
   io.out("");
   const refused = (e: unknown): number => {
@@ -625,7 +687,7 @@ async function cmdTwoHopVerify(cfg: VpnCliConfig, registry: TracingRegistry, cli
   io.out(`entry hop (direct)`);
   const entry = await verifyHop(io, registry, () => client.attestEntrySession(), (s) => client.checkEntry(s), (_c, org) => [
     `entry operator approved by the registry owner${org !== undefined ? ` (organization ${org})` : ""}`,
-  ]);
+  ], intel);
   if ("error" in entry) {
     io.out(`exit hop  (not checked)`);
     return refused(entry.error);
@@ -634,7 +696,7 @@ async function cmdTwoHopVerify(cfg: VpnCliConfig, registry: TracingRegistry, cli
   const exit = await verifyHop(io, registry, () => client.attestExitSession(), (s) => client.checkExit(s, entry.org), (code, org) => [
     `exit operator approved by the registry owner${org !== undefined ? ` (organization ${org})` : code === "E_SAME_OPERATOR" ? ` (organization ${entry.org})` : ""}`,
     `entry and exit run by different organizations${org !== undefined ? ` (${entry.org} ≠ ${org})` : ""}`,
-  ]);
+  ], intel);
   if ("error" in exit) return refused(exit.error);
   io.out(`  ✔ ${REMOTE_DNS_LINE}`);
   io.out(`  ✔ the entry sees only the exit's address; destinations and payload are end-to-end encrypted to the exit`);
@@ -646,6 +708,111 @@ async function cmdTwoHopVerify(cfg: VpnCliConfig, registry: TracingRegistry, cli
   io.out(`exit:`);
   printVpnSummary(io, exit.session);
   await printInstance(io, registry, exit.session);
+  return 0;
+}
+
+/** Values `plr vpn inspect` prints (the owner approves compose / OS with them, TASKS T15 step 4). */
+interface IntelInspection {
+  composeHash: Uint8Array;
+  osMeasurement: Uint8Array;
+  keyHash: Uint8Array;
+  tcbStatus: string;
+  images: string[];
+}
+
+/**
+ * INTEL checks 1–7b of `verifyAttestation` without the registry: response shape, quote structure + DCAP
+ * signature (Intel root), DEBUG, report_data keys + nonce, dstack event log, compose hash, dstack compose policy.
+ * @throws PlrError — the first failing check's code
+ */
+function inspectIntelBundle(bundle: AttestationBundle, nonce: Uint8Array): IntelInspection {
+  if (bundle.v !== "PLR-v1" || bundle.root_kind !== "INTEL") throw new PlrError("E_ROOT_UNTRUSTED", "inspect needs an INTEL exit");
+  if (!isHex(bundle.quote) || bundle.quote.length === 0) throw new PlrError("E_BAD_RESPONSE", "quote");
+  if (!isCollateralJson(bundle.collateral)) throw new PlrError("E_BAD_RESPONSE", "collateral");
+  if (!isHex(bundle.x25519, 32) || !isHex(bundle.ed25519, 32)) throw new PlrError("E_BAD_RESPONSE", "keys");
+  if (!Array.isArray(bundle.event_log)) throw new PlrError("E_BAD_RESPONSE", "event_log");
+  if (typeof bundle.app_compose !== "string" || bundle.app_compose.length === 0) throw new PlrError("E_BAD_RESPONSE", "app_compose");
+  const composeBytes = utf8(bundle.app_compose);
+  if (composeBytes.length > MAX_DSTACK_COMPOSE_BYTES) throw new PlrError("E_BAD_RESPONSE", "app_compose size");
+
+  const quote = fromHex(bundle.quote);
+  const parsed = parseQuote(quote, "INTEL");
+  const verifier = new DcapQvlVerifier(INTEL_ROOT_P256);
+  verifier.verify(quote, {
+    collateral: bundle.collateral,
+    nowSecs: Math.floor(Date.now() / 1000),
+  });
+  const report = parsed.report;
+  if (isDebug(report)) throw new PlrError("E_DEBUG_TD");
+  const kh = keyHash(fromHex(bundle.x25519, 32), fromHex(bundle.ed25519, 32));
+  if (!equalBytes(report.reportData.subarray(0, 32), kh)) throw new PlrError("E_REPORT_DATA_KEYS");
+  if (!equalBytes(report.reportData.subarray(32, 64), sessionNonceDigest(nonce))) throw new PlrError("E_NONCE");
+  const ids = verifyEventLogDstack(bundle.event_log, report.rtmr[3]);
+  if (!equalBytes(new Uint8Array(createHash("sha256").update(composeBytes).digest()), ids.composeHash)) {
+    throw new PlrError("E_COMPOSE_MISMATCH");
+  }
+  const policy = checkDstackComposePolicy(bundle.app_compose);
+  if (verifier.lastStatus === undefined) throw new PlrError("E_TCB_STATUS");
+  return { composeHash: ids.composeHash, osMeasurement: osMeasurement(report), keyHash: kh, tcbStatus: verifier.lastStatus, images: policy.images };
+}
+
+/** `plr vpn inspect`: INTEL checks 1–7b with a fresh nonce, no registry (TASKS T15 step 4). */
+async function cmdVpnInspect(env: Record<string, string | undefined>, io: CliIo): Promise<number> {
+  const exitUrl = env.PLR_VPN_URL || DEFAULTS.vpnExit;
+  if (!isHttpUrl(exitUrl)) {
+    io.err("config error: PLR_VPN_URL must be an http(s) URL");
+    io.err(VPN_USAGE);
+    return 2;
+  }
+  io.out(`PLR VPN inspect`);
+  io.out(`  exit:     ${exitUrl}`);
+  io.out(`  root:     INTEL ROOT (Intel SGX Root CA)`);
+  io.out("");
+  const nonce = new Uint8Array(randomBytes(32));
+  let r: IntelInspection;
+  try {
+    r = inspectIntelBundle(await fetchAttestationDirect(normalizeExitUrl(exitUrl), nonce), nonce);
+  } catch (e) {
+    io.out(`✘ ${errCode(e)}`);
+    return 1;
+  }
+  io.out(`compose hash:    ${toHex(r.composeHash)}`);
+  io.out(`OS measurement:  ${toHex(r.osMeasurement)}`);
+  io.out(`key hash:        ${toHex(r.keyHash)}`);
+  io.out(`tcb:             ${r.tcbStatus}`);
+  for (const image of r.images) io.out(`image:           ${image}`);
+  return 0;
+}
+
+/** `plr vpn verify --fixture <dir>`: offline replay of a capture (INTERFACES §3.3). */
+async function cmdVpnVerifyFixture(dir: string, io: CliIo): Promise<number> {
+  io.out(`PLR VPN verify (fixture replay)`);
+  io.out(`  fixture:  ${dir}`);
+  let fixture: ReturnType<typeof readFixture>;
+  try {
+    fixture = readFixture(dir);
+  } catch (e) {
+    io.out("");
+    io.out(`✘ REFUSED — ${errCode(e)}. The fixture could not be read.`);
+    return 1;
+  }
+  io.out(`  exit:     ${fixture.meta.exit_url}`);
+  io.out(`  registry: ${fixture.meta.registry} (snapshot, no network)`);
+  io.out(`  pinned root: INTEL ROOT ${toHex(INTEL_ROOT_P256)}`);
+  io.out("");
+  let verified: VerifiedRouter;
+  try {
+    verified = await verifyFixture(dir);
+  } catch (e) {
+    for (const l of checkLines(e, undefined, { intel: true })) io.out(formatCheckLine(l));
+    io.out("");
+    io.out(`✘ REFUSED — ${errCode(e)}. The fixture does not verify.`);
+    return 1;
+  }
+  for (const l of checkLines(undefined, undefined, { intel: true })) io.out(formatCheckLine(l));
+  io.out("");
+  io.out(fixtureReplayLine(fixture.meta));
+  printVpnSummary(io, { verified, appCompose: fixture.bundle.app_compose });
   return 0;
 }
 
@@ -706,9 +873,24 @@ function untilSignal(): Promise<void> {
   });
 }
 
-/** `plr vpn [verify]`. */
+/** `plr vpn [verify [--fixture <dir>]] | inspect`. */
 async function runVpn(rest: string[], env: Record<string, string | undefined>, io: CliIo, untilStopped: () => Promise<void>): Promise<number> {
   const sub = rest[0];
+  if (sub === "inspect") {
+    if (rest.length > 1) {
+      io.err(VPN_USAGE);
+      return 2;
+    }
+    return cmdVpnInspect(env, io);
+  }
+  if (sub === "verify" && rest[1] === "--fixture") {
+    const dir = rest[2];
+    if (rest.length !== 3 || dir === undefined || dir === "") {
+      io.err(VPN_USAGE);
+      return 2;
+    }
+    return cmdVpnVerifyFixture(dir, io);
+  }
   if (rest.length > 1 || (sub !== undefined && sub !== "verify")) {
     io.err(VPN_USAGE);
     return 2;

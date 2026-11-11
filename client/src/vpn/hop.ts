@@ -7,10 +7,12 @@
  * bad destination) drops the cached attestation, so the next connection re-attests.
  */
 import {
+  DcapQvlVerifier,
   MockVerifier,
   PlrError,
   TUNNEL_IDLE_TIMEOUT_MS,
   TUNNEL_STEP_TIMEOUT_MS,
+  isIntelRoot,
   isPlrError,
   isValidP256Pub,
   toHex,
@@ -123,7 +125,8 @@ export class ExitHop {
     this.registry = o.registry;
     if (!isValidP256Pub(o.trustedRoot)) fail("E_ROOT_UNTRUSTED", "trustedRoot must be a valid 64-byte P-256 key");
     const trustedRoot = o.trustedRoot.slice();
-    this.verifier = o.verifier ?? new MockVerifier(trustedRoot);
+    // Pinning the Intel SGX Root CA is what selects INTEL mode (INTERFACES §3.2); no separate env var.
+    this.verifier = o.verifier ?? (isIntelRoot(trustedRoot) ? new DcapQvlVerifier(trustedRoot) : new MockVerifier(trustedRoot));
     if (o.lookup !== undefined && typeof o.lookup !== "function") fail("E_BAD_INPUT", "lookup must be a function");
     this.#target = { base: o.base, lookup: o.lookup, ...(o.createConnection !== undefined ? { createConnection: o.createConnection } : {}) };
     this.timeouts = o.timeouts;
@@ -224,22 +227,33 @@ export class ExitHop {
   }
 
   async #fetchAttestation(nonce: Uint8Array): Promise<AttestationBundle> {
-    let res: { status: number; body: Uint8Array };
-    try {
-      res = await getBounded(this.#target, `/v1/attestation?nonce=${toHex(nonce)}`, {
-        timeoutMs: this.timeouts.attestMs,
-        maxBytes: MAX_ATTESTATION_BODY,
-      });
-    } catch (e) {
-      if (isPlrError(e)) throw e; // e.g. the entry hop's verification failure (two-hop)
-      return fail("E_BAD_RESPONSE", e instanceof TransportError && e.kind === "too-large" ? "attestation too large" : "exit unreachable");
-    }
-    if (res.status !== 200) fail("E_BAD_RESPONSE", "attestation HTTP status");
-    const j = parseJsonBytes(res.body);
-    if (!isPlainObject(j)) fail("E_BAD_RESPONSE", "attestation is not a JSON object");
-    // Full shape validation happens in verifyAttestation (step 1, E_BAD_RESPONSE).
-    return j as unknown as AttestationBundle;
+    return fetchAttestation(this.#target, nonce, this.timeouts.attestMs);
   }
+}
+
+/** `GET /v1/attestation?nonce=` over `t` (bounded). @throws PlrError E_BAD_RESPONSE, or a dialer's PlrError */
+async function fetchAttestation(t: ExitTarget, nonce: Uint8Array, timeoutMs: number): Promise<AttestationBundle> {
+  let res: { status: number; body: Uint8Array };
+  try {
+    res = await getBounded(t, `/v1/attestation?nonce=${toHex(nonce)}`, { timeoutMs, maxBytes: MAX_ATTESTATION_BODY });
+  } catch (e) {
+    if (isPlrError(e)) throw e; // e.g. the entry hop's verification failure (two-hop)
+    return fail("E_BAD_RESPONSE", e instanceof TransportError && e.kind === "too-large" ? "attestation too large" : "exit unreachable");
+  }
+  if (res.status !== 200) fail("E_BAD_RESPONSE", "attestation HTTP status");
+  const j = parseJsonBytes(res.body);
+  if (!isPlainObject(j)) fail("E_BAD_RESPONSE", "attestation is not a JSON object");
+  // Full shape validation happens in verifyAttestation (step 1, E_BAD_RESPONSE).
+  return j as unknown as AttestationBundle;
+}
+
+/**
+ * Fetches `/v1/attestation` over a direct connection, without any registry: the INTEL inspection path of
+ * `plr vpn inspect`. The body is untrusted; callers validate it.
+ * @throws PlrError E_BAD_RESPONSE
+ */
+export function fetchAttestationDirect(base: URL, nonce: Uint8Array, timeoutMs = DEFAULT_TIMEOUTS.attestMs): Promise<AttestationBundle> {
+  return fetchAttestation({ base, lookup: undefined }, nonce, timeoutMs);
 }
 
 /**

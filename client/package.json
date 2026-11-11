@@ -10,7 +10,8 @@
     }
   },
   "bin": {
-    "plr": "./dist/cli.js"
+    "plr": "./dist/cli.js",
+    "provenexit": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc -b",
