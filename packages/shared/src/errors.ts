@@ -51,6 +51,10 @@ export const ERROR_CODES = [
   "E_SAME_OPERATOR",
   // rev 1.4 registration evidence for registries that do not verify quotes on-chain (SPEC-CHAINS §2)
   "E_REGISTRATION_EVIDENCE",
+  // INTEL / dstack mode (INTERFACES §0)
+  "E_TCB_STATUS",
+  "E_COMPOSE_POLICY",
+  "E_COLLATERAL",
 ] as const;
 
 export type PlrErrorCode = (typeof ERROR_CODES)[number];

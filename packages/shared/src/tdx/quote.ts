@@ -15,6 +15,8 @@ export const QUOTE = Object.freeze({
   MOCK_LEN: 828,
   /** Upper bound for INTEL-mode quotes (QE report + PCK chain); anything larger is rejected. */
   MAX_LEN: 32 * 1024,
+  /** Upper bound for an INTEL-mode TDX quote v4 (INTERFACES §1.1). */
+  MAX_INTEL_LEN: 8192,
   VERSION: 4,
   ATT_KEY_TYPE_ECDSA_P256: 2,
   TEE_TYPE_TDX: 0x81,
@@ -152,7 +154,8 @@ export function encodeQuote(
  * Parses and structurally validates a quote (SPEC §2.3). Returned byte fields are copies.
  *
  * MOCK mode (default): length exactly 828, `sig_data_len == 192`, `qe_vendor_id == MOCK_QE_VENDOR_ID`.
- * INTEL mode: `qe_vendor_id` = Intel, `sig_data_len` equals the remaining length (≤ {@link QUOTE.MAX_LEN}).
+ * INTEL mode: `qe_vendor_id` = Intel, `sig_data_len` in `1..=len − 636`, ≤ {@link QUOTE.MAX_INTEL_LEN},
+ * trailing bytes all zero (padding is normal), `mr_signer_seam` all zero (INTERFACES §1.1).
  *
  * @throws PlrError E_QUOTE_FORMAT, or E_TEE_TYPE when the TEE type is not TDX.
  */
@@ -177,10 +180,12 @@ export function parseQuote(q: Uint8Array, mode: RootKind = "MOCK"): ParsedQuote 
       throw new PlrError("E_QUOTE_FORMAT", "sig_data length");
     }
   } else {
+    if (q.length > QUOTE.MAX_INTEL_LEN) throw new PlrError("E_QUOTE_FORMAT", "length");
     if (!equalBytes(qeVendorId, INTEL_QE_VENDOR_ID)) throw new PlrError("E_QUOTE_FORMAT", "qe_vendor_id");
-    if (sigDataLen === 0 || sigDataLen !== q.length - QUOTE.SIG_DATA_OFF) {
-      throw new PlrError("E_QUOTE_FORMAT", "sig_data length");
-    }
+    const rest = q.length - QUOTE.SIG_DATA_OFF;
+    if (sigDataLen === 0 || sigDataLen > rest) throw new PlrError("E_QUOTE_FORMAT", "sig_data length");
+    if (!isAllZero(q.subarray(QUOTE.SIG_DATA_OFF + sigDataLen))) throw new PlrError("E_QUOTE_FORMAT", "trailing bytes");
+    if (!isAllZero(q.subarray(QUOTE.OFF.MR_SIGNER_SEAM, QUOTE.OFF.MR_SIGNER_SEAM + 48))) throw new PlrError("E_QUOTE_FORMAT", "mr_signer_seam");
   }
   const at = (off: number, len: number) => q.slice(off, off + len);
   const report: TdReport = {
@@ -205,7 +210,7 @@ export function parseQuote(q: Uint8Array, mode: RootKind = "MOCK"): ParsedQuote 
     userData: at(QUOTE.OFF.USER_DATA, 20),
     report,
     signedBytes: q.slice(0, QUOTE.SIGNED_LEN),
-    sigData: q.slice(QUOTE.SIG_DATA_OFF),
+    sigData: q.slice(QUOTE.SIG_DATA_OFF, QUOTE.SIG_DATA_OFF + sigDataLen),
   };
 }
 
