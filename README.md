@@ -1,88 +1,56 @@
-# ProvenExit: a VPN exit whose no-logs claim is checked by your client
+# ProvenExit
 
-Built at NEAR HACKATHON (2026-11). Track: Privacy & Private AI.
+**NEAR verifies Intel's TDX attestation on chain, and uses it as an allowlist for VPN exits. When the owner revokes a build on NEAR, the next connection is refused.**
 
-A VPN exit whose no-logs promise your own computer checks before any byte leaves it. The design: the exit runs in an
-Intel TDX confidential VM, and a NEAR contract that verifies Intel's signature on-chain decides which exit builds
-count. **In this snapshot no exit runs on TDX**: the demo exit runs on a MOCK root on the local machine (see "Status"
-below); the real Intel evidence is one quote from a test CVM that is not the exit.
+Every VPN says "no logs". ProvenExit's client checks, before it sends a byte, that the exit runs an approved build with logging off. The proof is an Intel-signed quote, checked against a NEAR registry. Built at NEAR HACKATHON (2026-11).
 
-The judge's one-sentence version (the design; in this snapshot the exit behind it is the MOCK one): *ProvenExit's client refuses to send traffic unless an Intel-signed TDX quote proves
-the exit runs an approved, logging-disabled build listed on a NEAR registry that itself verified that quote on-chain,
-and when the owner revokes the build on NEAR, the very next connection is refused.*
+> **Honest status, once:** the demo exit runs on a mock root on your machine. No TDX exit is deployed. The real Intel quote comes from a separate test VM. Full explanation: [Limits and trust](#limits-and-trust).
 
-This file replaces the October 2026 tour of the pre-hackathon code, which is kept verbatim at
-[`docs/PLR-README-2026-10.md`](docs/PLR-README-2026-10.md).
+Demo video: (link added at submission)
 
-## Status of this snapshot (read this first)
+## Try it in 2 minutes (offline, Node only, no accounts)
 
-The plan's fallback **S1-F2** applies (maintainer decision, 2026-11-11):
-**the VPN exit is not deployed on Phala Cloud.** Phala was used once, on 2026-11-09, for a harmless test CVM that
-returned one real TDX quote (kept in [`fixtures/phala-spike/`](fixtures/phala-spike)). What follows from that:
+```sh
+npm ci && npx tsc -b && node client/dist/cli.js vpn verify --fixture fixtures/phala-spike/replay
+```
 
-- The **live demo exit in this repository runs on the MOCK root on the local machine** — the plan's pre-existing mode,
-  unchanged. It exercises the real protocol, the real SOCKS5 proxy, the real egress policy, the real receipts and the
-  real registry/revocation path, but it is not Intel hardware.
-- The **real Intel TDX evidence** is that 2026-11-09 quote. It was verified **on-chain** on testnet up to check 13 of
-  13 (`report_data`): the spike CVM had asked dstack for `report_data = 64 × 0x42`, not for an exit's keys, so the
-  registration was refused with `E_REPORT_DATA`. Checks 1–12 — quote format, Intel root, **DCAP signature
-  verification with Intel collateral**, TCB status, DEBUG clear, dstack event log → RTMR3, compose hash, compose and
-  OS allowlists — passed **inside the contract**, on chain (tx
-  [`9AUTujEQv8p1R1z7SKEpNa5BYFw3a9ZZerkKmpQb5NRB`](https://testnet.nearblocks.io/txns/9AUTujEQv8p1R1z7SKEpNa5BYFw3a9ZZerkKmpQb5NRB),
-  186.03 Tgas).
-- The offline replay of that quote therefore prints `✔ quote signature chain to root` and
-  `✔ Intel TCB status accepted` and then stops at the **expected refusal** `✘ E_REPORT_DATA_KEYS`. A
-  `✔ VERIFIED (FIXTURE REPLAY …)` line needs a TDX exit that asked for the exit's key hash and nonce; no such exit
-  exists in this snapshot (and none can be manufactured: `report_data` is fixed by Intel at quote time).
-- **No exit image was built or published** (T13 was skipped under S1-F2). `deploy/phala/docker-compose.yml` pins a
-  documented placeholder digest — it is the exact measured configuration a paid deploy would use, not a live image.
+You see a real Intel TDX quote from a Phala test VM checked offline: `✔ quote signature chain to root`, `✔ Intel TCB status accepted`, then the expected stop `✘ E_REPORT_DATA_KEYS`. The command exits with a non-zero code by design. NEAR's on-chain run stopped at the same point, after checks 1-12 passed. The full local demo with revocation (needs Rust) is [option 1](#try-it-all-options).
 
-## What it does
+## Numbers
 
-- `plr vpn` runs a local SOCKS5 proxy (`socks5h://127.0.0.1:18180`, CONNECT only, remote DNS). Before every new
-  connection it verifies the exit, fail-closed:
-  1. an Intel TDX v4 quote whose signature chain reaches the pinned Intel SGX Root CA and whose TCB status is
-     accepted (`UpToDate` / `SWHardeningNeeded`), checked with `@phala/dcap-qvl`;
-  2. `report_data` binds the exit's X25519 + Ed25519 keys and the client's fresh 32-byte nonce;
-  3. the dstack event log (IMR3) replays to RTMR3, and the app-id / compose-hash / instance-id payloads are well formed;
-  4. the measured docker-compose pins every image by digest, forbids `build` and `privileged`, and disables logging on
-     the `exit` service (`logging.driver: none`);
-  5. the NEAR registry, read at that moment, still allows that compose hash and OS measurement and has a live
-     registration for exactly these keys.
-  Only then does it open an end-to-end encrypted tunnel (X25519 + HKDF, ChaCha20-Poly1305) to the attested key. The
-  operator, the host and the network see ciphertext; the exit resolves destinations over DNS-over-HTTPS only, refuses
-  loopback/private/link-local/metadata targets, and keeps no destinations, IPs, ports or payloads in logs or receipts.
-- Revoking a build on NEAR makes every client refuse the **next** connection, even with a cached attestation.
-- Session receipts (transcript hash, compose/key hash, sequence, open/close time — never a destination) are
-  Merkle-anchored on the same contract with the exit's Ed25519 key.
+- **186.03 Tgas:** one NEAR transaction verified Intel's DCAP signature inside the contract ([tx `9AUTujEQ…`](https://testnet.nearblocks.io/txns/9AUTujEQv8p1R1z7SKEpNa5BYFw3a9ZZerkKmpQb5NRB)).
+- **Checks 1-12 of 13 passed on chain** for a real Phala TDX quote. Check 13 refuses it by design: it is a test VM, not an exit.
+- **298 client tests (1 skipped) and 60 contract tests** pass (see [`NOTES-DECISIONS.md`](NOTES-DECISIONS.md), [`contracts/near/README.md`](contracts/near/README.md)).
+- **Revoke and re-allow** both ran on NEAR testnet ([revoke tx](https://testnet.nearblocks.io/txns/3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz), [re-allow tx](https://testnet.nearblocks.io/txns/642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV)).
 
-## NEAR's role (concrete)
+## Tracks
 
-- Contract [`pe-vpnreg-erhan.testnet`](https://testnet.nearblocks.io/address/pe-vpnreg-erhan.testnet)
-  ([`contracts/near`](contracts/near), near-sdk 5.29.1): owner allowlist (compose hash, OS measurement), operator
-  organizations, instance records, receipt anchors, and **on-chain Intel DCAP verification**.
-- `register_instance_tdx` runs `dcap-qvl` 0.7.1 inside the contract: thirteen ordered checks (DCAP quote signature and
-  TCB status, dstack event log, compose hash, allowlists, `report_data` binding) before an exit's keys are listed. It
-  is payable (0.1 NEAR) and called with 300 Tgas. Measured: **179.63 Tgas** to DCAP-verify dcap-qvl's sample quote
-  in a near-sandbox spike (test-clock build); the testnet run burnt **186.03 Tgas** and reached check 13, so checks
-  1–12 ran on chain for the real quote.
-- Deployed wasm: 622 282 bytes, SHA-256 `e2864a9c75f592af91cbdf36ba3918e5793434a949f1daca2b92df40db2b1bdc`.
-  Initialization (`new`, owner `pe-owner-erhan.testnet`, root `INTEL`, TTL 86 400 000 ms): tx
-  [`FyRSR12vo3KXEwmH8DN7DJQ78SFFHcXoYKeRREUCUWj`](https://testnet.nearblocks.io/txns/FyRSR12vo3KXEwmH8DN7DJQ78SFFHcXoYKeRREUCUWj).
-- Operator `pe-op-erhan.testnet` approved as organization `erhan-demo`: tx
-  [`G24JXkyLJZQjV8FFHeG9x5ZGy9mNVgwKtSi8p8xEZHL1`](https://testnet.nearblocks.io/txns/G24JXkyLJZQjV8FFHeG9x5ZGy9mNVgwKtSi8p8xEZHL1).
-- Allowlists for the **spike** (not an exit) compose `b9823a79…d05f` and OS measurement `821d442f…d323d`. They are
-  allowed on the INTEL registry **only to demonstrate checks 1–12**; the client refuses that compose with
-  `E_COMPOSE_POLICY` (no `exit` service, unpinned image), but the registry itself would list a registration under it,
-  so the owner should `revoke_compose b9823a79…` once the demo video is recorded (not done here): txs
-  [`EmWz2Uawni6PicfCqrG8YwkZeZwgkyQMTCbGACQwq6sM`](https://testnet.nearblocks.io/txns/EmWz2Uawni6PicfCqrG8YwkZeZwgkyQMTCbGACQwq6sM)
-  and [`E3to6jCjasF37vLqRtsFKLsehLpXL2J1xK7PNFbHnwbX`](https://testnet.nearblocks.io/txns/E3to6jCjasF37vLqRtsFKLsehLpXL2J1xK7PNFbHnwbX).
-- Revocation works on testnet: `revoke_compose b9823a79…` tx
-  [`3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz`](https://testnet.nearblocks.io/txns/3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz),
-  re-allow tx [`642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV`](https://testnet.nearblocks.io/txns/642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV).
-  (`anchor_count` is 0: no exit runs on testnet in this snapshot.)
+**Privacy & Private AI** (primary) · Open Innovation · AI Security & Defense
 
-## Try it (pick one)
+## What NEAR does here
+
+A NEAR contract on testnet ([`pe-vpnreg-erhan.testnet`](https://testnet.nearblocks.io/address/pe-vpnreg-erhan.testnet)) runs Intel DCAP verification itself, with `dcap-qvl` inside the contract. It also checks the dstack event log, the compose hash and the OS allowlists before it lists an exit's keys. The owner can revoke a build on chain. The client reads the registry before every new connection, so a revoked build is refused on the next connection, even with a cached attestation. The same contract anchors Merkle roots of session receipts.
+
+[Judge path](#how-to-verify-each-claim) · [Limits and trust](#limits-and-trust) · [AI use](#ai-use) · [Prior code](#prior-code-and-hackathon-window-rules-q-001q-003q-004) · [History](docs/HISTORY.md)
+
+---
+
+## The judge's one-sentence version
+
+*ProvenExit's client refuses to send traffic unless an Intel-signed TDX quote proves the exit runs an approved, logging-disabled build listed on a NEAR registry that itself verified that quote on-chain, and when the owner revokes the build on NEAR, the very next connection is refused.* This is the design. In this snapshot the exit behind it is the MOCK one (see [Limits and trust](#limits-and-trust)).
+
+## How to verify each claim
+
+| claim | command / evidence | expected |
+|---|---|---|
+| a real Phala TDX quote chains to Intel's root and passes TCB (the 2026-11-09 spike CVM, **not** the exit) | `node client/dist/cli.js vpn verify --fixture fixtures/phala-spike/replay` | `✔ quote signature chain to root`, `✔ Intel TCB status accepted`, then the expected stop at `✘ E_REPORT_DATA_KEYS`: the client's event-log, compose and allowlist checks never run on this real quote (only the on-chain run reached them) |
+| NEAR verified Intel's signature itself | registration tx `9AUTujEQ…` on nearblocks | failure at check 13 `E_REPORT_DATA` — checks 1–12 (DCAP, TCB, event log, compose, allowlists) passed in the contract |
+| the exit image is pinned and logging is off | `deploy/phala/docker-compose.yml`; `checkDstackComposePolicy` in [`packages/shared/src/attest/compose-policy.ts`](packages/shared/src/attest/compose-policy.ts) | image by digest, `logging.driver: none`; the same check rejects the real 2026-11-09 spike compose (`E_COMPOSE_POLICY`) |
+| image = this source | not shown in this snapshot: no image was built (T13 skipped) | stated, not claimed |
+| revocation works | option 1 (MOCK stack) or the testnet revoke/re-allow txs above | `refused with E_COMPOSE_NOT_ALLOWED`, then restored by re-approval |
+| no destination in receipts | [`SPEC-VPN.md`](SPEC-VPN.md) §5; e2e scans the exits' output and run directory | only hashes, sequence numbers and timestamps |
+
+## Try it (all options)
 
 1. **Offline, ~2 minutes, no accounts** — the whole story on a local near-sandbox with the MOCK root:
 
@@ -117,18 +85,79 @@ returned one real TDX quote (kept in [`fixtures/phala-spike/`](fixtures/phala-sp
    PLAN §10.1 sequence (`vpn verify` → browse → owner revoke → refusal → re-allow) against a deployed exit, reading
    `deploy/testnet/env.live`; it signs nothing itself.
 
-## How to verify each claim
+## What it does
 
-| claim | command / evidence | expected |
-|---|---|---|
-| a real Phala TDX quote chains to Intel's root and passes TCB (the 2026-11-09 spike CVM, **not** the exit) | `node client/dist/cli.js vpn verify --fixture fixtures/phala-spike/replay` | `✔ quote signature chain to root`, `✔ Intel TCB status accepted`, then the expected stop at `✘ E_REPORT_DATA_KEYS`: the client's event-log, compose and allowlist checks never run on this real quote (only the on-chain run reached them) |
-| NEAR verified Intel's signature itself | registration tx `9AUTujEQ…` on nearblocks | failure at check 13 `E_REPORT_DATA` — checks 1–12 (DCAP, TCB, event log, compose, allowlists) passed in the contract |
-| the exit image is pinned and logging is off | `deploy/phala/docker-compose.yml`; `checkDstackComposePolicy` in [`packages/shared/src/attest/compose-policy.ts`](packages/shared/src/attest/compose-policy.ts) | image by digest, `logging.driver: none`; the same check rejects the real 2026-11-09 spike compose (`E_COMPOSE_POLICY`) |
-| image = this source | not shown in this snapshot: no image was built (T13 skipped) | stated, not claimed |
-| revocation works | option 1 (MOCK stack) or the testnet revoke/re-allow txs above | `refused with E_COMPOSE_NOT_ALLOWED`, then restored by re-approval |
-| no destination in receipts | [`SPEC-VPN.md`](SPEC-VPN.md) §5; e2e scans the exits' output and run directory | only hashes, sequence numbers and timestamps |
+- `plr vpn` runs a local SOCKS5 proxy (`socks5h://127.0.0.1:18180`, CONNECT only, remote DNS). Before every new
+  connection it verifies the exit, fail-closed:
+  1. an Intel TDX v4 quote whose signature chain reaches the pinned Intel SGX Root CA and whose TCB status is
+     accepted (`UpToDate` / `SWHardeningNeeded`), checked with `@phala/dcap-qvl`;
+  2. `report_data` binds the exit's X25519 + Ed25519 keys and the client's fresh 32-byte nonce;
+  3. the dstack event log (IMR3) replays to RTMR3, and the app-id / compose-hash / instance-id payloads are well formed;
+  4. the measured docker-compose pins every image by digest, forbids `build` and `privileged`, and disables logging on
+     the `exit` service (`logging.driver: none`);
+  5. the NEAR registry, read at that moment, still allows that compose hash and OS measurement and has a live
+     registration for exactly these keys.
+  Only then does it open an end-to-end encrypted tunnel (X25519 + HKDF, ChaCha20-Poly1305) to the attested key. The
+  operator, the host and the network see ciphertext; the exit resolves destinations over DNS-over-HTTPS only, refuses
+  loopback/private/link-local/metadata targets, and keeps no destinations, IPs, ports or payloads in logs or receipts.
+- Revoking a build on NEAR makes every client refuse the **next** connection, even with a cached attestation.
+- Session receipts (transcript hash, compose/key hash, sequence, open/close time — never a destination) are
+  Merkle-anchored on the same contract with the exit's Ed25519 key.
 
-## What it does not prove
+## NEAR contract details
+
+- Contract [`pe-vpnreg-erhan.testnet`](https://testnet.nearblocks.io/address/pe-vpnreg-erhan.testnet)
+  ([`contracts/near`](contracts/near), near-sdk 5.29.1): owner allowlist (compose hash, OS measurement), operator
+  organizations, instance records, receipt anchors, and **on-chain Intel DCAP verification**.
+- `register_instance_tdx` runs `dcap-qvl` 0.7.1 inside the contract: thirteen ordered checks (DCAP quote signature and
+  TCB status, dstack event log, compose hash, allowlists, `report_data` binding) before an exit's keys are listed. It
+  is payable (0.1 NEAR) and called with 300 Tgas. Measured: **179.63 Tgas** to DCAP-verify dcap-qvl's sample quote
+  in a near-sandbox spike (test-clock build); the testnet run burnt **186.03 Tgas** and reached check 13, so checks
+  1–12 ran on chain for the real quote.
+- Deployed wasm: 622 282 bytes, SHA-256 `e2864a9c75f592af91cbdf36ba3918e5793434a949f1daca2b92df40db2b1bdc`.
+  Initialization (`new`, owner `pe-owner-erhan.testnet`, root `INTEL`, TTL 86 400 000 ms): tx
+  [`FyRSR12vo3KXEwmH8DN7DJQ78SFFHcXoYKeRREUCUWj`](https://testnet.nearblocks.io/txns/FyRSR12vo3KXEwmH8DN7DJQ78SFFHcXoYKeRREUCUWj).
+- Operator `pe-op-erhan.testnet` approved as organization `erhan-demo`: tx
+  [`G24JXkyLJZQjV8FFHeG9x5ZGy9mNVgwKtSi8p8xEZHL1`](https://testnet.nearblocks.io/txns/G24JXkyLJZQjV8FFHeG9x5ZGy9mNVgwKtSi8p8xEZHL1).
+- Allowlists for the **spike** (not an exit) compose `b9823a79…d05f` and OS measurement `821d442f…d323d`. They are
+  allowed on the INTEL registry **only to demonstrate checks 1–12**; the client refuses that compose with
+  `E_COMPOSE_POLICY` (no `exit` service, unpinned image), but the registry itself would list a registration under it,
+  so the owner should `revoke_compose b9823a79…` once the demo video is recorded (not done here): txs
+  [`EmWz2Uawni6PicfCqrG8YwkZeZwgkyQMTCbGACQwq6sM`](https://testnet.nearblocks.io/txns/EmWz2Uawni6PicfCqrG8YwkZeZwgkyQMTCbGACQwq6sM)
+  and [`E3to6jCjasF37vLqRtsFKLsehLpXL2J1xK7PNFbHnwbX`](https://testnet.nearblocks.io/txns/E3to6jCjasF37vLqRtsFKLsehLpXL2J1xK7PNFbHnwbX).
+- Revocation works on testnet: `revoke_compose b9823a79…` tx
+  [`3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz`](https://testnet.nearblocks.io/txns/3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz),
+  re-allow tx [`642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV`](https://testnet.nearblocks.io/txns/642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV).
+  (`anchor_count` is 0: no exit runs on testnet in this snapshot.)
+
+## Limits and trust
+
+Every limit and disclosure from the earlier README is kept here.
+
+### Status of this snapshot
+
+The plan's fallback **S1-F2** applies (maintainer decision, 2026-11-11):
+**the VPN exit is not deployed on Phala Cloud.** Phala was used once, on 2026-11-09, for a harmless test CVM that
+returned one real TDX quote (kept in [`fixtures/phala-spike/`](fixtures/phala-spike)). What follows from that:
+
+- The **live demo exit in this repository runs on the MOCK root on the local machine** — the plan's pre-existing mode,
+  unchanged. It exercises the real protocol, the real SOCKS5 proxy, the real egress policy, the real receipts and the
+  real registry/revocation path, but it is not Intel hardware.
+- The **real Intel TDX evidence** is that 2026-11-09 quote. It was verified **on-chain** on testnet up to check 13 of
+  13 (`report_data`): the spike CVM had asked dstack for `report_data = 64 × 0x42`, not for an exit's keys, so the
+  registration was refused with `E_REPORT_DATA`. Checks 1–12 — quote format, Intel root, **DCAP signature
+  verification with Intel collateral**, TCB status, DEBUG clear, dstack event log → RTMR3, compose hash, compose and
+  OS allowlists — passed **inside the contract**, on chain (tx
+  [`9AUTujEQv8p1R1z7SKEpNa5BYFw3a9ZZerkKmpQb5NRB`](https://testnet.nearblocks.io/txns/9AUTujEQv8p1R1z7SKEpNa5BYFw3a9ZZerkKmpQb5NRB),
+  186.03 Tgas).
+- The offline replay of that quote therefore prints `✔ quote signature chain to root` and
+  `✔ Intel TCB status accepted` and then stops at the **expected refusal** `✘ E_REPORT_DATA_KEYS`. A
+  `✔ VERIFIED (FIXTURE REPLAY …)` line needs a TDX exit that asked for the exit's key hash and nonce; no such exit
+  exists in this snapshot (and none can be manufactured: `report_data` is fixed by Intel at quote time).
+- **No exit image was built or published** (T13 was skipped under S1-F2). `deploy/phala/docker-compose.yml` pins a
+  documented placeholder digest — it is the exact measured configuration a paid deploy would use, not a live image.
+
+### What it does not prove
 
 - **The exit sees your destinations.** Any VPN exit must know the host/port it connects to and relays the
   bytes. ProvenExit proves the approved code does not *keep* them — not that it never sees them.
@@ -187,6 +216,29 @@ returned one real TDX quote (kept in [`fixtures/phala-spike/`](fixtures/phala-sp
 - **TEE vendor trust and side channels** are out of scope: Intel, the dstack OS image and the TDX module are trusted
   roots; micro-architectural side channels are not defended.
 
+## Prior code and hackathon window (rules Q-001/Q-003/Q-004)
+
+- **Disclosed baseline:** commits `58c5ea9`..`4fb2f08` (2026-10-23/24 — after the 2026-10-19 announcement, before the
+  2026-11-01 start) built the mock-root protocol, the NEAR registry, the VPN exit and the multi-chain registries. They
+  are prior work and are not claimed as hackathon-window work.
+- **Judged work:** `4fb2f08`..`hackathon-submission` (from 2026-11-09): the real Intel TDX path (dstack event log,
+  DCAP in the client and on-chain in the contract, compose policy, the Phala spike, the S1-F2 local stack).
+- Branches and tags: all of this work is on `main` (the same commits as the branch `provenexit`). The tags
+  `window-start` (`58c5ea9`), `real-tdx-start` (`4fb2f08`) and `hackathon-submission` (final HEAD) are to be created by
+  the maintainers; none exists in this snapshot, so the links use `main`.
+- Diffs: [4fb2f08...main](https://github.com/erhantrk/provenexit/compare/4fb2f08...main) (the real-TDX
+  work) and [the full history](https://github.com/erhantrk/provenexit/commits/main).
+- The design record is in [`docs/plan/`](docs/plan) (plan, tasks, frozen interfaces, sources), with the decisions and
+  findings in [`NOTES-DECISIONS.md`](NOTES-DECISIONS.md).
+- This file replaces the October 2026 tour of the pre-hackathon code, which is kept verbatim at [`docs/PLR-README-2026-10.md`](docs/PLR-README-2026-10.md). Older history: [`docs/HISTORY.md`](docs/HISTORY.md).
+
+## AI use
+
+Large parts of the code, specs and tests were written with AI coding assistants, directed and reviewed by Erhan
+Türker (design decisions, review, accounts, keys, deployment, submission). The planning documents in `docs/plan/`
+(PLAN, TASKS, INTERFACES, SOURCES) were generated by Claude. Details, including which assistant did what:
+[`AI_USE.md`](AI_USE.md).
+
 ## Architecture
 
 ```
@@ -240,27 +292,7 @@ logs in `client/src/zcash-registry.ts`). They are pre-hackathon temo code (Octob
 NEAR path only by default; `PLR_DEMO_CHAINS=all PLR_LLM=mock bash scripts/demo.sh` also runs those older chain stages
 (each only when its node tools are installed).
 
-## Prior code and hackathon window (rules Q-001/Q-003/Q-004)
-
-- **Disclosed baseline:** commits `58c5ea9`..`4fb2f08` (2026-10-23/24 — after the 2026-10-19 announcement, before the
-  2026-11-01 start) built the mock-root protocol, the NEAR registry, the VPN exit and the multi-chain registries. They
-  are prior work and are not claimed as hackathon-window work.
-- **Judged work:** `4fb2f08`..`hackathon-submission` (from 2026-11-09): the real Intel TDX path (dstack event log,
-  DCAP in the client and on-chain in the contract, compose policy, the Phala spike, the S1-F2 local stack).
-- Branches and tags: all of this work is on the branch `provenexit`; `main` holds only the plan documents until it is
-  fast-forwarded. The tags `window-start` (`58c5ea9`), `real-tdx-start` (`4fb2f08`) and `hackathon-submission` (final
-  HEAD) are to be created by the maintainers; none exists in this snapshot, so the links use the branch.
-- Diffs: [4fb2f08...provenexit](https://github.com/erhantrk/provenexit/compare/4fb2f08...provenexit) (the real-TDX
-  work) and [the full history](https://github.com/erhantrk/provenexit/commits/provenexit).
-- The design record is in [`docs/plan/`](docs/plan) (plan, tasks, frozen interfaces, sources), with the decisions and
-  findings in [`NOTES-DECISIONS.md`](NOTES-DECISIONS.md).
-
-## AI use
-
-Large parts of the code, specs and tests were written with AI coding assistants, directed and reviewed by Erhan
-Türker (design decisions, review, accounts, keys, deployment, submission). The planning documents in `docs/plan/`
-(PLAN, TASKS, INTERFACES, SOURCES) were generated by Claude. Details, including which assistant did what:
-[`AI_USE.md`](AI_USE.md).
+Older history (commit timeline, multi-chain work, the October tour): [`docs/HISTORY.md`](docs/HISTORY.md).
 
 ## Libraries
 
