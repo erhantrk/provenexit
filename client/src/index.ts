@@ -30,6 +30,7 @@ export {
   type CliConfig, type VpnCliConfig, type CliIo, type CliChain, type ZcashCliConfig, type IntelInspection,
 } from "./cli.js";
 export { AttestationCache, recheckRegistry, type AttestationSession, type AttestationCacheOptions } from "./attestation.js";
+export { fetchPccsCollateral, isPccsUrl } from "./pccs.js";
 // PLR-VPN-v1 (SPEC-VPN §9.2)
 export { VpnClient, VPN_ATTEST_TTL_MS, type VpnClientOptions, type VpnClientTimeouts } from "./vpn/client.js";
 export { TunnelStream, TwoHopTunnelStream, type VpnStream, type TwoHopStream, type VpnReceiptResult, type TunnelStreamParams } from "./vpn/stream.js";

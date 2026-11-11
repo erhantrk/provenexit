@@ -7,6 +7,8 @@
 import { randomBytes } from "node:crypto";
 import {
   PlrError,
+  fromHex,
+  isHex,
   isInstanceRecord,
   isPlrError,
   toHex,
@@ -17,6 +19,10 @@ import {
   type RegistryReader,
   type VerifiedRouter,
 } from "@plr/shared";
+import { fetchPccsCollateral } from "./pccs.js";
+
+/** `MAX_TDX_QUOTE_BYTES` (INTERFACES §0) in hex. */
+const MAX_PCCS_QUOTE_HEX = 2 * 8192;
 
 /** A verified attestation plus the nonce it was verified with (the tunnel / session binds that nonce). */
 export interface AttestationSession {
@@ -39,6 +45,11 @@ export interface AttestationCacheOptions {
   ttlMs: number;
   /** Monotonic clock in ms. */
   clock: () => number;
+  /**
+   * `PLR_PCCS_URL` (TASKS T24): fetch fresh Intel collateral for the quote from this PCCS instead of using the
+   * exit's copy. INTEL mode only; unset ⇒ the bundle's `collateral` field is used as before.
+   */
+  pccsUrl?: string;
 }
 
 export class AttestationCache {
@@ -60,7 +71,7 @@ export class AttestationCache {
   async attest(): Promise<AttestationSession> {
     const nonce = new Uint8Array(randomBytes(32));
     try {
-      const bundle = await this.#o.fetchBundle(nonce);
+      const bundle = await this.#withFreshCollateral(await this.#o.fetchBundle(nonce));
       const verified = await verifyAttestation({
         bundle,
         nonce,
@@ -77,6 +88,23 @@ export class AttestationCache {
       if (isPlrError(e)) throw e;
       throw new PlrError("E_BAD_RESPONSE");
     }
+  }
+
+  /**
+   * INTERFACES §1.5 / TASKS T24: in INTEL mode with `pccsUrl` set, replace the exit's `collateral` with a fresh
+   * copy fetched from the PCCS (`getCollateral`) before verification. The fetch is async and runs here, so
+   * `verifyAttestation` stays synchronous and receives the value through the bundle field. The exit's own copy is
+   * untrusted anyway; a stale or missing one must not decide whether the client can verify.
+   * @throws PlrError E_BAD_RESPONSE (malformed quote), E_COLLATERAL (PCCS unreachable / not collateral)
+   */
+  async #withFreshCollateral(bundle: AttestationBundle): Promise<AttestationBundle> {
+    const pccsUrl = this.#o.pccsUrl;
+    if (pccsUrl === undefined || this.#o.verifier.rootKind !== "INTEL") return bundle;
+    const q = bundle.quote;
+    if (typeof q !== "string" || !isHex(q) || q.length === 0 || q.length > MAX_PCCS_QUOTE_HEX) {
+      throw new PlrError("E_BAD_RESPONSE", "quote");
+    }
+    return { ...bundle, collateral: await fetchPccsCollateral(pccsUrl, fromHex(q)) };
   }
 
   /** The cached verification if it is younger than `ttlMs`, else a fresh one (shared between concurrent callers). */

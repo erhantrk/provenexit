@@ -42,6 +42,8 @@ export interface TwoHopClientOptions {
   timeouts?: Partial<VpnClientTimeouts>;
   /** Monotonic clock in ms for the attestation caches. Tests only. */
   clock?: () => number;
+  /** `PLR_PCCS_URL`: fetch fresh Intel collateral from this PCCS instead of using each hop's copy (INTEL mode). */
+  pccsUrl?: string;
 }
 
 export interface TwoHopAttestation {
@@ -99,6 +101,7 @@ export class TwoHopClient {
       lookup: o.lookup,
       timeouts,
       clock,
+      ...(o.pccsUrl !== undefined ? { pccsUrl: o.pccsUrl } : {}),
     });
     this.registry = this.#entry.registry;
     this.#exit = new ExitHop({
@@ -112,6 +115,7 @@ export class TwoHopClient {
       // An exit attestation fetch includes dialing through the entry (entry attestation + tunnel open).
       timeouts: { ...timeouts, attestMs: Math.min(2 * timeouts.attestMs + timeouts.connectMs, 3_600_000) },
       clock,
+      ...(o.pccsUrl !== undefined ? { pccsUrl: o.pccsUrl } : {}),
     });
   }
 

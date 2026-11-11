@@ -44,6 +44,8 @@ export interface VpnClientOptions {
   timeouts?: Partial<VpnClientTimeouts>;
   /** Monotonic clock in ms for the attestation cache (default `performance.now`). Tests only. */
   clock?: () => number;
+  /** `PLR_PCCS_URL`: fetch fresh Intel collateral from this PCCS instead of using the exit's copy (INTEL mode). */
+  pccsUrl?: string;
 }
 
 /**
@@ -78,6 +80,7 @@ export class VpnClient {
       lookup: o.lookup,
       timeouts: resolveTimeouts(o.timeouts),
       clock: o.clock ?? (() => performance.now()),
+      ...(o.pccsUrl !== undefined ? { pccsUrl: o.pccsUrl } : {}),
     });
     this.registry = this.#hop.registry;
   }

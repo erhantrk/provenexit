@@ -304,7 +304,11 @@ scripts/dev-down.sh
 
 Client env: `PLR_VPN_URL` (default `http://127.0.0.1:18200`), `PLR_VPN_REGISTRY`, `PLR_NEAR_RPC`,
 `PLR_TRUSTED_ROOT`, `PLR_VPN_SOCKS_PORT` (default 18180), `PLR_VPN_ATTEST_TTL_MS` (default 60000; 0 = a fresh
-attestation for every connection — the registry is re-checked on every connection regardless).
+attestation for every connection — the registry is re-checked on every connection regardless), and
+`PLR_PCCS_URL` (INTEL mode only, e.g. `https://pccs.phala.network`): fetch fresh Intel collateral (PCK CRL, TCB
+info, QE identity) from that PCCS with `getCollateral` instead of trusting the exit's copy, before verification.
+`PLR_PCCS_URL=https://pccs.phala.network node scripts/pccs-live-check.mjs` shows it against the recorded real TDX
+quote (build first: `npx tsc -b`).
 
 Browser / app settings — SOCKS v5 host `127.0.0.1`, port `18180`, **remote DNS**:
 

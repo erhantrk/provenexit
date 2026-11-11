@@ -8,7 +8,8 @@
  * Config via env: PLR_ROUTER_URL, PLR_NEAR_RPC, PLR_REGISTRY, PLR_TRUSTED_ROOT (128 hex);
  * optional PLR_PROXY_PORT (default 18787) and PLR_PROXY_HOST (default 127.0.0.1).
  * VPN env: PLR_VPN_URL, PLR_VPN_REGISTRY, PLR_NEAR_RPC, PLR_TRUSTED_ROOT; optional PLR_VPN_SOCKS_PORT (default 18180),
- * PLR_VPN_ATTEST_TTL_MS (default 60000), PLR_VPN_ENTRY_URL (set ⇒ two-hop, SPEC-VPN §10, with PLR_VPN_URL as the exit).
+ * PLR_VPN_ATTEST_TTL_MS (default 60000), PLR_VPN_ENTRY_URL (set ⇒ two-hop, SPEC-VPN §10, with PLR_VPN_URL as the exit),
+ * PLR_PCCS_URL (INTEL mode: fetch fresh Intel collateral from that PCCS instead of the exit's copy).
  * Chain (SPEC-CHAINS §3-§5, §9-§11): PLR_CHAIN = near (default) | evm | stellar | solana | zcash. PLR_REGISTRY /
  * PLR_VPN_REGISTRY carry the SPEC-CHAINS §3 contractId (`evm:<chainId>:<0x…>`, `stellar:C…`, `solana:<state>`,
  * `zcash:<network>:<owner>`), or the chain-specific variables below locate the registry.
@@ -59,6 +60,7 @@ import { PrivateClient } from "./client.js";
 import { startProxy } from "./proxy.js";
 import { TracingRegistry, checkLines, formatCheckLine } from "./verify-report.js";
 import { recheckRegistry, type AttestationSession } from "./attestation.js";
+import { isPccsUrl } from "./pccs.js";
 import { VpnClient, VPN_ATTEST_TTL_MS } from "./vpn/client.js";
 import { TwoHopClient } from "./vpn/twohop.js";
 import { startVpn, type VpnConnector } from "./vpn/socks5-server.js";
@@ -104,6 +106,8 @@ export interface CliConfig {
   trustedRoot: Uint8Array;
   proxyPort: number;
   proxyHost: string;
+  /** `PLR_PCCS_URL`: fetch fresh Intel collateral from this PCCS (INTEL mode); undefined = use the router's copy. */
+  pccsUrl: string | undefined;
 }
 
 export interface VpnCliConfig {
@@ -122,6 +126,8 @@ export interface VpnCliConfig {
   trustedRoot: Uint8Array;
   socksPort: number;
   attestTtlMs: number;
+  /** `PLR_PCCS_URL`: fetch fresh Intel collateral from this PCCS (INTEL mode); undefined = use the exit's copy. */
+  pccsUrl: string | undefined;
 }
 
 const DEFAULTS = {
@@ -160,6 +166,8 @@ env:   PLR_VPN_URL       VPN exit URL (default ${DEFAULTS.vpnExit})
        PLR_VPN_REGISTRY  VPN registry contract account id (required; a separate deployment from PLR_REGISTRY)
        PLR_NEAR_RPC      (default ${DEFAULTS.rpc}; https, or http to a loopback host only)
        PLR_TRUSTED_ROOT  pinned attestation root, 128 hex (required)
+       PLR_PCCS_URL      fetch fresh Intel collateral from this PCCS instead of the exit's copy
+                            (https; INTEL mode only)
        PLR_VPN_SOCKS_PORT (default ${DEFAULTS.vpnSocksPort}), PLR_VPN_ATTEST_TTL_MS (default ${VPN_ATTEST_TTL_MS}; 0 = attest every connection)`;
 
 const USAGE = `usage: plr verify | plr chat [-|"<prompt>"] | plr proxy | plr vpn [verify]
@@ -169,6 +177,8 @@ env:   PLR_ROUTER_URL (default ${DEFAULTS.router})
        PLR_NEAR_RPC   (default ${DEFAULTS.rpc}; https, or http to a loopback host only)
        PLR_REGISTRY   registry contract account id (required)
        PLR_TRUSTED_ROOT  pinned attestation root, 128 hex (required)
+       PLR_PCCS_URL   fetch fresh Intel collateral from this PCCS instead of the router's copy
+                            (https; INTEL mode only)
        PLR_PROXY_PORT (default ${DEFAULTS.proxyPort}), PLR_PROXY_HOST (default ${DEFAULTS.proxyHost})
 chain: PLR_CHAIN      near (default) | evm | stellar | solana | zcash — which chain holds the registry
        tier B: PLR_REGISTRY / PLR_VPN_REGISTRY = SPEC-CHAINS contractId (evm:<chainId>:<0x address> | stellar:C… |
@@ -193,6 +203,13 @@ function trustedRootFrom(env: Record<string, string | undefined>): Uint8Array {
   const trustedRoot = fromHex(rootHex, 64);
   if (!isValidP256Pub(trustedRoot)) throw new ConfigError("PLR_TRUSTED_ROOT is not a valid P-256 public key");
   return trustedRoot;
+}
+
+/** `PLR_PCCS_URL` (TASKS T24): unset ⇒ undefined (use the bundle's collateral); else an https URL (INTERFACES §4.1). */
+function pccsUrlFrom(env: Record<string, string | undefined>): string | undefined {
+  const u = env.PLR_PCCS_URL || undefined;
+  if (u !== undefined && !isPccsUrl(u)) throw new ConfigError("PLR_PCCS_URL must be an https URL (at most 2048 chars)");
+  return u;
 }
 
 function rpcUrlFrom(env: Record<string, string | undefined>): string {
@@ -430,6 +447,7 @@ export function loadConfig(env: Record<string, string | undefined>): CliConfig {
     trustedRoot,
     proxyPort,
     proxyHost: env.PLR_PROXY_HOST || DEFAULTS.proxyHost,
+    pccsUrl: pccsUrlFrom(env),
   };
 }
 
@@ -444,7 +462,7 @@ export function loadVpnConfig(env: Record<string, string | undefined>): VpnCliCo
   const entryUrl = env.PLR_VPN_ENTRY_URL || undefined;
   if (!isHttpUrl(exitUrl)) throw new ConfigError("PLR_VPN_URL must be an http(s) URL");
   if (entryUrl !== undefined && !isHttpUrl(entryUrl)) throw new ConfigError("PLR_VPN_ENTRY_URL must be an http(s) URL");
-  return { exitUrl, entryUrl, ...reg, trustedRoot, socksPort, attestTtlMs: Number(ttlStr) };
+  return { exitUrl, entryUrl, ...reg, trustedRoot, socksPort, attestTtlMs: Number(ttlStr), pccsUrl: pccsUrlFrom(env) };
 }
 
 function isHttpUrl(u: string): boolean {
@@ -912,7 +930,7 @@ async function runVpn(
   try {
     cfg = loadVpnConfig(env);
     registry = new TracingRegistry(makeRegistry(cfg));
-    const common = { registry, trustedRoot: cfg.trustedRoot, attestTtlMs: cfg.attestTtlMs };
+    const common = { registry, trustedRoot: cfg.trustedRoot, attestTtlMs: cfg.attestTtlMs, pccsUrl: cfg.pccsUrl };
     client =
       cfg.entryUrl !== undefined
         ? new TwoHopClient({ entryUrl: cfg.entryUrl, exitUrl: cfg.exitUrl, ...common })
@@ -995,7 +1013,7 @@ export async function runCli(
   try {
     cfg = loadConfig(env);
     registry = new TracingRegistry(makeRegistry(cfg));
-    client = new PrivateClient({ routerUrl: cfg.routerUrl, registry, trustedRoot: cfg.trustedRoot });
+    client = new PrivateClient({ routerUrl: cfg.routerUrl, registry, trustedRoot: cfg.trustedRoot, pccsUrl: cfg.pccsUrl });
   } catch (e) {
     io.err(`config error: ${e instanceof ConfigError ? e.message : errCode(e)}`);
     io.err(USAGE);

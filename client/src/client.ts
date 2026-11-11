@@ -68,6 +68,8 @@ export interface PrivateClientOptions {
   timeouts?: Partial<PrivateClientTimeouts>;
   /** Monotonic clock in ms, for the verification cache (default `performance.now`). Tests only. */
   clock?: () => number;
+  /** `PLR_PCCS_URL`: fetch fresh Intel collateral from this PCCS instead of using the router's copy (INTEL mode). */
+  pccsUrl?: string;
 }
 
 /** A verification is reused for at most this long (SPEC §12). */
@@ -143,6 +145,7 @@ export class PrivateClient {
       trustedRoot,
       ttlMs: VERIFIED_TTL_MS,
       clock: o.clock ?? (() => performance.now()),
+      ...(o.pccsUrl !== undefined ? { pccsUrl: o.pccsUrl } : {}),
     });
   }
 

@@ -101,6 +101,8 @@ export interface ExitHopOptions {
   createConnection?: Dialer;
   timeouts: VpnClientTimeouts;
   clock: () => number;
+  /** `PLR_PCCS_URL`: fetch fresh Intel collateral from this PCCS instead of using the exit's copy (INTEL mode). */
+  pccsUrl?: string;
 }
 
 /** A verified, registry-re-checked hop, ready for a tunnel. */
@@ -137,6 +139,7 @@ export class ExitHop {
       trustedRoot,
       ttlMs: boundedMs(o.attestTtlMs, VPN_ATTEST_TTL_MS, 0, MAX_ATTEST_TTL_MS),
       clock: o.clock,
+      ...(o.pccsUrl !== undefined ? { pccsUrl: o.pccsUrl } : {}),
     });
   }
 
