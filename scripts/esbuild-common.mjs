@@ -3,17 +3,21 @@ import { readFileSync } from "node:fs";
 import * as esbuild from "esbuild";
 
 /**
- * @plr/shared loads `@phala/dcap-qvl` (pure JS) through `createRequire(...)("@phala/dcap-qvl")`, which a bundler
- * cannot follow. This plugin rewrites exactly that call to a static import of the package, so it is inlined.
+ * @plr/shared (`attest/intel`) and the client (`pccs`, the fresh-collateral fetch) load `@phala/dcap-qvl` (pure JS)
+ * lazily through `createRequire(...)("@phala/dcap-qvl")`, which a bundler cannot follow: left as is, the bundle would
+ * need node_modules at run time. This plugin rewrites exactly those calls to a static import, so the package is inlined.
  */
+const DCAP_FILES = /[\\/](attest[\\/]intel|pccs)\.(js|ts)$/;
 const dcapPlugin = {
   name: "inline-dcap-qvl",
   setup(build) {
-    build.onLoad({ filter: /[\\/]attest[\\/]intel\.js$/ }, (args) => {
+    build.onLoad({ filter: DCAP_FILES }, (args) => {
+      if (args.path.includes(`${"node_modules"}`)) return undefined;
       const src = readFileSync(args.path, "utf8");
-      const call = 'require("@phala/dcap-qvl")';
-      if (!src.includes(call)) throw new Error("inline-dcap-qvl: expected call not found in " + args.path);
-      return { contents: 'import * as __dcapQvl from "@phala/dcap-qvl";\n' + src.replace(call, "__dcapQvl"), loader: "js" };
+      const call = /createRequire\(import\.meta\.url\)\("@phala\/dcap-qvl"\)|require\("@phala\/dcap-qvl"\)/g;
+      if (!call.test(src)) throw new Error("inline-dcap-qvl: expected call not found in " + args.path);
+      const contents = 'import * as __dcapQvl from "@phala/dcap-qvl";\n' + src.replace(call, "__dcapQvl");
+      return { contents, loader: args.path.endsWith(".ts") ? "ts" : "js" };
     });
   },
 };
