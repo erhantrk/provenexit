@@ -140,7 +140,8 @@ describe("getStatus: exit running and verified", () => {
     expect(s.registry.events.map((e) => [e.kind, e.tx])).toEqual([["register_instance_tdx", TX_REG], ["allow_compose", TX_ALLOW]]);
     expect(s.registry.events[1]!.hash).toBe("ab".repeat(32));
     expect(s.receipts.anchors).toEqual([{ id: 0, root: "cd".repeat(32), count: 4, first_seq: 0, tx: TX_ANCHOR, at: new Date(now - 1500).toISOString() }]);
-    expect(s.replay).toMatchObject({ verdict: "VERIFIED", code: null, captured_at: "2026-11-12T08:02:54.378Z" });
+    const capturedAt = new Date(JSON.parse(readFileSync(new URL(`${FIXTURE}/meta.json`, import.meta.url), "utf8")).captured_at_ms).toISOString();
+    expect(s.replay).toMatchObject({ verdict: "VERIFIED", code: null, captured_at: capturedAt });
     expect(s.replay!.checks).toHaveLength(16);
   });
 });
