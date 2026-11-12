@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ProvenExit</title>
+<meta name="description" content="A VPN exit on Intel TDX. The client checks Intel's signature on what is running and asks a NEAR registry whether that build is still allowed, before a byte leaves your machine. NEAR testnet only.">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#FCFCFF">
+<meta property="og:title" content="ProvenExit">
+<meta property="og:description" content="The VPN exit you verify before you connect. NEAR testnet only.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="/assets/share.png">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="/assets/fonts/overpass.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/assets/styles.css">
+<script src="/assets/motion-flag.js"></script>
+<noscript><link rel="stylesheet" href="/assets/noscript.css"></noscript>
+<script type="module" src="/assets/app.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to the content</a>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="#top" aria-label="ProvenExit, top of the page">
+      <svg class="brand-mark" viewBox="84 98 344 316" aria-hidden="true" focusable="false">
+        <path class="brand-arc" d="M110 388V224a100 100 0 0 1 200 0v4"/>
+        <path class="brand-tick" d="M218 314l52 52L402 218"/>
+      </svg>
+      <span class="brand-name">ProvenExit</span>
+    </a>
+    <nav class="menu" id="menu" aria-label="Sections">
+      <ul>
+        <li><a href="#checks">Checks</a></li>
+        <li><a href="#build">Build</a></li>
+        <li><a href="#near">NEAR</a></li>
+        <li><a href="#keys">Keys</a></li>
+        <li><a href="#history">History</a></li>
+        <li><a href="#traffic">Traffic</a></li>
+        <li><a href="#run">Run it</a></li>
+        <li><a href="#agents">Agents</a></li>
+        <li><a href="#limits">Limits</a></li>
+        <li><a data-href="links.repo" hidden>GitHub</a></li>
+      </ul>
+    </nav>
+    <a class="chip js-only" id="chip" href="#top">
+      <span class="chip-dot" aria-hidden="true"></span>
+      <span id="chip-text">Checking</span>
+    </a>
+    <button class="menu-btn js-only" id="menu-btn" type="button" aria-expanded="false" aria-controls="menu">Menu</button>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero" id="top">
+  <div class="wrap hero-grid">
+    <div class="hero-text">
+      <p class="notice"><span class="notice-dot" aria-hidden="true"></span>NEAR testnet only.</p>
+      <h1>
+        <span class="h1-line"><span>The VPN exit you</span></span>
+        <span class="h1-line"><span>verify before</span></span>
+        <span class="h1-line"><span>you connect</span></span>
+      </h1>
+      <p class="lead rise">The exit runs in an Intel TDX machine on Phala Cloud. Before a byte leaves your machine, the client checks Intel's signature on what is running and asks a NEAR registry whether that build is still allowed.</p>
+      <p class="actions rise">
+        <a class="btn" href="#run">Run the check yourself</a>
+        <a class="link" href="#limits">Read the limits</a>
+      </p>
+    </div>
+    <div class="hero-sign">
+      <div class="plate" id="plate" data-face="unlit">
+        <p class="vh" id="live" role="status" aria-live="polite"></p>
+        <p class="plate-badge" id="plate-badge" hidden><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 3h6M10 3v6L4.5 18.5A1.7 1.7 0 0 0 6 21h12a1.7 1.7 0 0 0 1.5-2.5L14 9V3"/><path d="M7 15h10"/></svg>Sample data, not live</p>
+        <div class="plate-text" id="plate-text">
+          <p class="plate-word js-only">Checking</p>
+          <p class="plate-line js-only">Fetching the latest check.</p>
+          <p class="plate-word no-js-only">Not checked</p>
+          <p class="plate-line no-js-only">The live check needs JavaScript. The commands under “Run it” do not.</p>
+        </div>
+        <div class="plate-foot">
+          <ol class="pips" id="pips" aria-hidden="true"></ol>
+          <ul class="platform" id="platform" aria-label="Where the exit runs"></ul>
+        </div>
+      </div>
+      <p class="under-plate" id="under-plate"></p>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="checks" aria-labelledby="checks-h">
+  <div class="wrap">
+    <header class="sec-head reveal" data-label="01  The checks">
+      <h2 id="checks-h">The checks, in the order the client runs them</h2>
+      <p class="sec-lead">If one fails, the client stops there and opens no tunnel.</p>
+    </header>
+    <div id="checks-body">
+      <p class="quiet no-js-only">The live result needs JavaScript. The replay command under “Run it” prints the same checks on your machine.</p>
+    </div>
+  </div>
+</section>
+
+<section class="sec sec-unlit" id="route" aria-labelledby="route-h">
+  <div class="route-pin" id="route-pin">
+  <div class="route-stage">
+  <div class="wrap">
+    <header class="sec-head reveal" data-label="02  How it works">
+      <h2 id="route-h">How one connection is decided</h2>
+    </header>
+    <div class="route" id="route-fig">
+      <div class="route-registry">
+        <p class="station-name">The NEAR registry</p>
+        <p class="station-sub mono" data-bind="registry.account">–</p>
+      </div>
+      <div class="route-drop" aria-hidden="true"></div>
+      <div class="route-line" aria-hidden="true"><i></i></div>
+      <ol class="stations" aria-label="The route of a connection">
+        <li class="station">
+          <span class="station-dot" aria-hidden="true"></span>
+          <p class="station-name">Your machine</p>
+          <p class="station-sub">The client and its local proxy</p>
+        </li>
+        <li class="station station-mid">
+          <span class="station-dot" aria-hidden="true"></span>
+          <p class="station-name">The exit</p>
+          <p class="station-sub" data-bind-platform>–</p>
+        </li>
+        <li class="station station-end">
+          <span class="station-dot" aria-hidden="true"></span>
+          <p class="station-name">The website</p>
+          <p class="station-sub">It sees the exit's address</p>
+        </li>
+      </ol>
+    </div>
+    <ol class="steps" id="route-steps">
+      <li>Your client sends the exit a fresh random number and asks for its Intel quote.</li>
+      <li>It checks Intel's signature, that debug is off, and that the quote contains the exit's keys and your number.</li>
+      <li>It reads the NEAR registry: is this build allowed, is this OS allowed, is this exit registered.</li>
+      <li>Only then it opens an encrypted tunnel to the key in the quote. If the owner revokes the build, the next connection is refused.</li>
+    </ol>
+    <p class="route-count" id="route-count" aria-hidden="true"><span class="route-count-n">Step <b id="route-n">1</b> of 4</span><span class="route-count-bar"><i></i></span></p>
+  </div>
+  </div>
+  </div>
+</section>
+
+<section class="sec" id="build" aria-labelledby="build-h">
+  <div class="wrap">
+    <header class="sec-head reveal" data-label="03  The build">
+      <h2 id="build-h">The image the exit runs</h2>
+      <p class="sec-lead">These values are part of the measurement Intel signs.<span id="build-lead"></span></p>
+    </header>
+    <div id="build-body" class="stagger"></div>
+  </div>
+</section>
+
+<section class="sec" id="near" aria-labelledby="near-h">
+  <div class="wrap">
+    <header class="sec-head reveal" data-label="04  On NEAR">
+      <h2 id="near-h">NEAR ran the Intel check itself</h2>
+    </header>
+    <div id="near-body" class="stagger"></div>
+  </div>
+</section>
+
+<section class="sec sec-unlit" id="keys" aria-labelledby="keys-h">
+  <div class="wrap">
+    <header class="sec-head reveal" data-label="05  Keys">
+      <h2 id="keys-h">Who holds each key</h2>
+    </header>
+    <div id="keys-body" class="stagger">
+      <div class="cards cards-2">
+        <article class="card">
+          <div class="card-top"><span class="card-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="11"/><path d="M5 16h22M16 5c3.5 3.2 5 7 5 11s-1.5 7.8-5 11c-3.5-3.2-5-7-5-11s1.5-7.8 5-11z"/></svg></span><h3 class="card-k">This site</h3></div>
+          <p class="card-big">No key</p>
+          <div class="card-body"><p>No wallet, no signing, no transactions. It reads the registry and the exit and shows the result.</p></div>
+        </article>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="history" aria-labelledby="history-h">
+  <div class="wrap">
+    <header class="sec-head reveal" data-label="06  History">
+      <h2 id="history-h">Every change to the allowlist</h2>
+      <p class="sec-lead">Approvals, revocations and registrations on <span class="mono" data-bind="registry.account">the registry</span>, newest first.</p>
+    </header>
+    <div id="history-body"></div>
+  </div>
+</section>
+
+<section class="sec" id="traffic" aria-labelledby="traffic-h">
+  <div class="wrap">
+    <header class="sec-head reveal" data-label="07  Traffic">
+      <h2 id="traffic-h">The address websites see</h2>
+    </header>
+    <div id="traffic-body" class="stagger"></div>
+    <p class="quiet disclosure">Your address is read by this site and is not stored. The exit's address comes from api.ipify.org, asked through the tunnel.</p>
+  </div>
+</section>
+
+<section class="sec sec-unlit" id="run" aria-labelledby="run-h">
+  <div class="wrap">
+    <header class="sec-head reveal" data-label="08  Run it">
+      <h2 id="run-h">Check the exit from your own machine</h2>
+      <p class="sec-lead">Node 22 and a network connection. No accounts.</p>
+    </header>
+    <div id="run-body">
+      <div class="cmd-block">
+        <h3>Verify the live exit and send one request through it</h3>
+        <div class="cmd"><pre><code>npm ci &amp;&amp; npx tsc -b &amp;&amp; scripts/try-live.sh</code></pre></div>
+        <p>Prints every check, starts a local SOCKS5 proxy on 127.0.0.1:18180, and shows your IP next to the IP a website sees through the exit. It changes no system settings and needs no sudo.</p>
+      </div>
+      <div class="cmd-block">
+        <h3>Replay the recorded check without a network</h3>
+        <div class="cmd"><pre><code>npm ci &amp;&amp; npx tsc -b &amp;&amp; node client/dist/cli.js vpn verify --fixture fixtures/live-exit</code></pre></div>
+        <p>Replays the same exit's quote and registry state from a capture. You see one ✔ line for each check and ✔ VERIFIED (FIXTURE REPLAY …).</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="agents" aria-labelledby="agents-h">
+  <div class="wrap">
+    <header class="sec-head reveal" data-label="09  For agents">
+      <h2 id="agents-h">An MCP server for AI agents</h2>
+      <p class="sec-lead">Your agent checks the exit, then fetches pages through it. If any check fails, it fetches nothing and returns the error code.</p>
+    </header>
+    <div id="agents-live"></div>
+    <div class="agents-grid">
+      <dl class="tools">
+        <div>
+          <dt class="mono">verify_exit</dt>
+          <dd>Runs the same checks as this page and returns the verdict and each check.</dd>
+        </div>
+        <div>
+          <dt class="mono">fetch_via_exit</dt>
+          <dd>Gets an http or https URL on port 80 or 443 through the verified tunnel. The exit resolves the hostname.</dd>
+        </div>
+        <div>
+          <dt class="mono">registry_status</dt>
+          <dd>Returns the NEAR registry: owner, code hash, key count, history.</dd>
+        </div>
+      </dl>
+      <div class="install">
+        <div class="cmd-block">
+          <h3>Add it to Claude Code</h3>
+          <div class="cmd"><pre><code id="cmd-mcp">claude mcp add provenexit -- node /path/to/provenexit-mcp.mjs</code></pre><button class="copy js-only" type="button" data-copy-from="cmd-mcp"><span>Copy command</span></button></div>
+          <p>One file, Node 22, runs on your machine. It is in the repo at <span id="mcp-path"><span class="mono">mcp/dist/provenexit-mcp.mjs</span></span>.</p>
+        </div>
+        <div class="cmd-block">
+          <h3>Claude Desktop, in <span class="mono">claude_desktop_config.json</span></h3>
+          <div class="cmd"><pre><code id="cmd-desktop">{ "mcpServers": { "provenexit": { "command": "node", "args": ["/path/to/provenexit-mcp.mjs"] } } }</code></pre><button class="copy js-only" type="button" data-copy-from="cmd-desktop"><span>Copy config</span></button></div>
+        </div>
+        <p class="quiet">Only what goes through <span class="mono">fetch_via_exit</span> uses the exit. The agent's model calls and its other tools do not.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="limits" aria-labelledby="limits-h">
+  <div class="wrap">
+    <header class="sec-head reveal" data-label="10  Limits">
+      <h2 id="limits-h">What this does not prove</h2>
+    </header>
+    <ol class="limits stagger">
+      <li>
+        <h3 data-more-title>Testnet only.</h3>
+        <p data-more="limit-1">The registry is on NEAR testnet.</p>
+      </li>
+      <li>
+        <h3 data-more-title>The exit sees your destinations.</h3>
+        <p data-more="limit-2">Any VPN exit must know the host and port it connects to. ProvenExit proves the approved code does not keep them, not that it never sees them. TLS hides the content, not the host.</p>
+      </li>
+      <li>
+        <h3 data-more-title>Timing and metadata are visible to the operator's network.</h3>
+        <p data-more="limit-3">“No logs” covers the attested code, not the operator's host, which can observe destination IP and port, timing, the TLS SNI and every byte of plain HTTP. Traffic is not padded. With one hop, your IP is visible to the exit operator's network.</p>
+      </li>
+      <li>
+        <h3 data-more-title>Intel and the dstack OS are trusted.</h3>
+        <p data-more="limit-4">Intel, the dstack OS image and the TDX module are trusted roots. Side channels are not defended.</p>
+      </li>
+      <li>
+        <h3 data-more-title>One owner key decides the allowlist.</h3>
+        <p data-more="limit-5"><span class="mono" data-bind="registry.owner">The owner</span> is one NEAR account. Whoever holds that key can allow or revoke builds and operators. Multisig is future work.</p>
+      </li>
+    </ol>
+    <h3 class="also-h">More limits</h3>
+    <ol class="limits limits-small" start="6" data-more="more-limits" data-more-button="big" data-more-label="Show 7 more limits" data-more-less="Hide the 7 more limits">
+      <li>
+        <h4 data-more-title>Proxy only.</h4>
+        <p data-more="limit-6">TCP through a SOCKS5 proxy. No UDP, no QUIC, no system-wide tunnel.</p>
+      </li>
+      <li>
+        <h4 data-more-title>The NEAR RPC endpoint is trusted.</h4>
+        <p data-more="limit-7">View results carry no state proofs.</p>
+      </li>
+      <li>
+        <h4 data-more-title>Phala's gateway sits in front of the exit.</h4>
+        <p data-more="limit-8">It terminates TLS. It sees only tunnel ciphertext, can observe timing and volume, and can refuse to serve.</p>
+      </li>
+      <li>
+        <h4 data-more-title>The OS measurement is observed, not rebuilt.</h4>
+        <p data-more="limit-9">The OS measurement was observed in the quote, not rebuilt from source.</p>
+      </li>
+      <li>
+        <h4 data-more-title>The exit image is not reproducible yet.</h4>
+        <p data-more="limit-10">A rebuild is not shown to give the same digest.</p>
+      </li>
+      <li>
+        <h4 data-more-title>Intel revocation data can be stale.</h4>
+        <p data-more="limit-11">An exit can serve Intel revocation data that is stale but not expired; the window is the list's update interval.</p>
+      </li>
+      <li>
+        <h4 data-more-title>The exit may be stopped after judging.</h4>
+        <p data-more="limit-12">The exit is paid by the hour. It runs through judging and may be stopped afterwards.</p>
+      </li>
+    </ol>
+    <p class="limits-more" hidden><a class="link" data-href="links.repo" data-href-suffix="#limits-and-trust">Read every limit in the README</a></p>
+  </div>
+</section>
+
+<section class="sec sec-unlit close" aria-labelledby="close-h">
+  <div class="wrap">
+    <h2 class="close-line" id="close-h">Every VPN says “no logs”. This one proves it.</h2>
+    <p class="sec-lead">Logging is off in the approved build, Intel signs what is running, and NEAR decides whether it is still allowed.</p>
+    <p class="actions"><a class="btn" href="#run">Run the check yourself</a></p>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <p><a class="link" data-href="links.repo" hidden>GitHub</a></p>
+    <p>MIT licence.</p>
+    <p>Built at the NEAR hackathon, November 2026.</p>
+    <p>This page loads nothing from third parties and runs no analytics.</p>
+  </div>
+</footer>
+
+</body>
+</html>
