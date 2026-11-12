@@ -22,7 +22,7 @@ import {
   type SocksRequest,
 } from "@plr/shared";
 import { isPlainObject } from "../util.js";
-import { isRegistryCodeHashError } from "../near-registry.js";
+import { isRegistryRefusal } from "../near-registry.js";
 import type { VpnStream } from "./stream.js";
 
 /** Anything that opens verified VPN streams: a `VpnClient`, a `TwoHopClient`, … (SPEC-VPN §9.2). */
@@ -176,8 +176,9 @@ export async function startVpn(o: VpnProxyOptions): Promise<VpnProxyHandle> {
     try {
       stream = await client.connect(req.host, req.port);
     } catch (e) {
-      // E_REGISTRY_CODE_HASH is a client-only verification refusal: answered like an unavailable registry
-      replyAndClose(sock, socksReplyFor(isRegistryCodeHashError(e) ? "E_REGISTRY_UNAVAILABLE" : isPlrError(e) ? e.code : "E_INTERNAL"));
+      // E_REGISTRY_CODE_HASH and E_REGISTRY_RPC_DISAGREE are client-only verification refusals: answered like an
+      // unavailable registry
+      replyAndClose(sock, socksReplyFor(isRegistryRefusal(e) ? "E_REGISTRY_UNAVAILABLE" : isPlrError(e) ? e.code : "E_INTERNAL"));
       return;
     }
     if (sock.destroyed || closing) {

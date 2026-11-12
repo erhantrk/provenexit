@@ -20,7 +20,7 @@ import {
   type VpnReceipt,
 } from "@plr/shared";
 import { isPlainObject } from "./util.js";
-import { isRegistryCodeHashError } from "./near-registry.js";
+import { isRegistryRefusal } from "./near-registry.js";
 
 const isUint = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
 
@@ -75,7 +75,7 @@ async function chainAnchor(registry: RegistryReader, id: number): Promise<Anchor
   try {
     return await registry.getAnchor(id);
   } catch (e) {
-    if (isRegistryCodeHashError(e)) throw e;
+    if (isRegistryRefusal(e)) throw e;
     throw new PlrError("E_REGISTRY_UNAVAILABLE", "get_anchor");
   }
 }

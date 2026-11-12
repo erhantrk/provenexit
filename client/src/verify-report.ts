@@ -8,7 +8,7 @@ import {
   type RegistryReader,
   type RegistryRoot,
 } from "@plr/shared";
-import { E_REGISTRY_CODE_HASH, isRegistryCodeHashError } from "./near-registry.js";
+import { E_REGISTRY_CODE_HASH, E_REGISTRY_RPC_DISAGREE, isRegistryCodeHashError, isRegistryRpcDisagreeError } from "./near-registry.js";
 import { COLLATERAL_LINE, E_COLLATERAL_FETCH, isCollateralFetchError } from "./pccs.js";
 
 type CheckKey = keyof typeof CHECKS;
@@ -19,8 +19,8 @@ type RegistryMethod = "getRoot" | "isComposeAllowed" | "isOsAllowed" | "getInsta
  * view, and the fresh-collateral check (`COLLATERAL`, INTEL only), which runs right before the signature check.
  */
 type StepKey = CheckKey | "REGISTRY_CODE" | "COLLATERAL";
-/** Error codes a check line can carry: the shared ones plus the client's own two. */
-type LineCode = PlrErrorCode | typeof E_REGISTRY_CODE_HASH | typeof E_COLLATERAL_FETCH;
+/** Error codes a check line can carry: the shared ones plus the client's own three. */
+type LineCode = PlrErrorCode | typeof E_REGISTRY_CODE_HASH | typeof E_REGISTRY_RPC_DISAGREE | typeof E_COLLATERAL_FETCH;
 
 /** Name of the registry code-hash check line (shown only when the registry has a code-hash pin). */
 export const REGISTRY_CODE_LINE = "registry contract code hash matches the pinned build (view_account.code_hash)";
@@ -28,7 +28,10 @@ export const REGISTRY_CODE_LINE = "registry contract code hash matches the pinne
 /** State of the registry code-hash pin for a report: no pin (undefined), or whether the last check passed. */
 export type CodeHashState = "verified" | "unverified" | undefined;
 
-/** Registry wrapper that remembers the last method called, to attribute E_REGISTRY_UNAVAILABLE to a step. */
+/**
+ * Registry wrapper that remembers the last method called, to attribute E_REGISTRY_UNAVAILABLE and
+ * E_REGISTRY_RPC_DISAGREE to a step.
+ */
 export class TracingRegistry implements RegistryReader {
   lastCall: RegistryMethod | undefined;
   constructor(readonly inner: RegistryReader) {}
@@ -183,16 +186,23 @@ function rawCheckLines(err: unknown, lastRegistryCall: RegistryMethod | undefine
   if (err === undefined) return order.map((k) => ({ name: label(k), status: "pass" }));
   const code: LineCode = isRegistryCodeHashError(err)
     ? E_REGISTRY_CODE_HASH
-    : isCollateralFetchError(err)
-      ? E_COLLATERAL_FETCH
-      : err instanceof PlrError
-        ? err.code
-        : "E_BAD_RESPONSE";
+    : isRegistryRpcDisagreeError(err)
+      ? E_REGISTRY_RPC_DISAGREE
+      : isCollateralFetchError(err)
+        ? E_COLLATERAL_FETCH
+        : err instanceof PlrError
+          ? err.code
+          : "E_BAD_RESPONSE";
   let failing: StepKey | undefined =
-    code === E_REGISTRY_CODE_HASH ? "REGISTRY_CODE" : code === E_COLLATERAL_FETCH ? "COLLATERAL" : CODE_TO_CHECK[code];
-  if (code === "E_REGISTRY_UNAVAILABLE") {
+    code === E_REGISTRY_CODE_HASH ? "REGISTRY_CODE"
+    : code === E_COLLATERAL_FETCH ? "COLLATERAL"
+    : code === E_REGISTRY_RPC_DISAGREE ? undefined // set just below, like an unreadable registry
+    : CODE_TO_CHECK[code];
+  // An unreadable registry and RPC endpoints that disagree both fail the check whose registry query it was.
+  if (code === "E_REGISTRY_UNAVAILABLE" || code === E_REGISTRY_RPC_DISAGREE) {
     failing = lastRegistryCall ? REGISTRY_STEP[lastRegistryCall] : "ROOT";
-    // the account could not be read, so its code hash was never confirmed: that is the step that failed
+    // the account could not be read (or the endpoints report different code hashes), so its code hash was never
+    // confirmed: that is the step that failed
     if (o.codeHash === "unverified") failing = "REGISTRY_CODE";
   }
   const found = failing === undefined ? -1 : order.indexOf(failing);

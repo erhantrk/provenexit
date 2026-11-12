@@ -4,10 +4,26 @@
  * Every reply is validated strictly; any transport error, RPC error, timeout or malformed reply rejects, so
  * `verifyAttestation` maps it to E_REGISTRY_UNAVAILABLE (fail closed).
  *
- * TRUST: view results are not accompanied by state proofs, so the RPC endpoint is part of the client's trusted
- * base — whoever answers these calls decides checks 3, 8 and 9 of `verifyAttestation`. The network is
- * untrusted (SPEC §1), therefore the endpoint must be reached over an authenticated channel: `https:` for any
- * remote host; plain `http:` only to a loopback address (a local node / sandbox, or a local light client).
+ * TRUST: view results are not accompanied by state proofs, so whoever answers these calls decides checks 3, 8 and
+ * 9 of `verifyAttestation`. The network is untrusted (SPEC §1), therefore every endpoint must be reached over an
+ * authenticated channel: `https:` for any remote host; plain `http:` only to a loopback address (a local node /
+ * sandbox, or a local light client).
+ *
+ * SEVERAL ENDPOINTS: `rpcUrl` may list several endpoints, separated by commas (ideally run by different
+ * operators). Then every query (each contract view and the `view_account` of the code pin) is sent to all of them
+ * in parallel and is used only if ALL of them answer and ALL answers are the same:
+ *  - what is compared is the answer itself (the bytes the contract returned; for `view_account` the `code_hash`),
+ *    not the block height / block hash next to it, because endpoints answer at slightly different blocks;
+ *  - answers differ ⇒ the query is asked once more after {@link RPC_DISAGREE_RETRY_MS} (an owner call that landed
+ *    between two endpoints' latest blocks looks like a disagreement for a moment); still different ⇒ rejects with
+ *    {@link RegistryRpcDisagreeError} (`E_REGISTRY_RPC_DISAGREE`);
+ *  - an endpoint that is down, slow or answers garbage ⇒ rejects like a single unreachable endpoint
+ *    (`E_REGISTRY_UNAVAILABLE`). This is fail closed on purpose: a "2 of 3 is enough" rule would let an attacker
+ *    who can silence the honest endpoints choose which ones get a say. Two answers that differ win over a third
+ *    endpoint being down (the disagreement is what gets reported).
+ * So a single lying or compromised endpoint can make the client refuse, but cannot make it accept. What is still
+ * trusted: that the listed endpoints do not all lie in the same way (they collude, or share one upstream node).
+ * With one endpoint nothing is compared and that endpoint is trusted as before.
  *
  * CODE PIN: with `codeHash` set, the registry account's on-chain `code_hash` (`view_account`) must equal that pin
  * before any view result is used; a different hash rejects with {@link RegistryCodeHashError}
@@ -32,6 +48,7 @@ import {
 export type NearFinality = "optimistic" | "near-final" | "final";
 
 export interface NearRegistryOptions {
+  /** One RPC endpoint URL, or several separated by commas: then all must answer the same (see the file header). */
   rpcUrl: string;
   contractId: string;
   /** Per-call timeout (default 10 s). */
@@ -71,7 +88,8 @@ export function isRegistryCodeHashError(e: unknown): e is RegistryCodeHashError 
 /**
  * The code-hash check of a registry reader that has one (a {@link NearRegistry}, also behind a wrapper that
  * forwards `checkCodeHash`); a no-op for any other reader. Runs before the registry is used for a verification.
- * @throws RegistryCodeHashError (different code); PlrError E_REGISTRY_UNAVAILABLE (account unreadable)
+ * @throws RegistryCodeHashError (different code); RegistryRpcDisagreeError (the endpoints report different code
+ *         hashes); PlrError E_REGISTRY_UNAVAILABLE (account unreadable)
  */
 export async function checkRegistryCode(registry: unknown): Promise<void> {
   const f = (registry as { checkCodeHash?: unknown } | null)?.checkCodeHash;
@@ -79,9 +97,57 @@ export async function checkRegistryCode(registry: unknown): Promise<void> {
   try {
     await (f as () => Promise<void>).call(registry);
   } catch (e) {
-    if (isRegistryCodeHashError(e)) throw e;
+    if (isRegistryRefusal(e)) throw e;
     throw new PlrError("E_REGISTRY_UNAVAILABLE", "view_account");
   }
+}
+
+/** The client-only error code of RPC endpoints that give different answers to the same registry query. */
+export const E_REGISTRY_RPC_DISAGREE = "E_REGISTRY_RPC_DISAGREE";
+
+/**
+ * The configured RPC endpoints answered the same registry query differently (twice in a row). A `PlrError` whose
+ * `code` is `E_REGISTRY_RPC_DISAGREE`; like `E_REGISTRY_CODE_HASH` it is a client-only code and deliberately NOT
+ * in `@plr/shared`'s `ERROR_CODES` (the exit's source and its reproducible image digest stay as they are).
+ */
+export class RegistryRpcDisagreeError extends PlrError {
+  constructor(what = "") {
+    super("E_REGISTRY_UNAVAILABLE");
+    (this as { code: string }).code = E_REGISTRY_RPC_DISAGREE;
+    this.message = `${E_REGISTRY_RPC_DISAGREE}: the RPC endpoints give different answers${what === "" ? "" : ` (${what})`}`;
+  }
+}
+
+export function isRegistryRpcDisagreeError(e: unknown): e is RegistryRpcDisagreeError {
+  return e instanceof PlrError && (e.code as string) === E_REGISTRY_RPC_DISAGREE;
+}
+
+/**
+ * True for the two client-only registry refusals (other code than pinned; endpoints disagree). Callers that turn
+ * registry failures into E_REGISTRY_UNAVAILABLE let these two through unchanged.
+ */
+export function isRegistryRefusal(e: unknown): e is RegistryCodeHashError | RegistryRpcDisagreeError {
+  return isRegistryCodeHashError(e) || isRegistryRpcDisagreeError(e);
+}
+
+/** Endpoints that disagree are asked once more after this pause before the client refuses. */
+export const RPC_DISAGREE_RETRY_MS = 1_000;
+/** Upper bound on listed endpoints (every query goes to all of them). */
+export const MAX_RPC_URLS = 5;
+
+/**
+ * Splits and validates an RPC setting: one URL or a comma-separated list (spaces around commas are ignored). Each
+ * URL must pass {@link checkRpcUrl}; an empty entry, a repeated endpoint or more than {@link MAX_RPC_URLS} is
+ * refused (a repeated endpoint would look like two voices but be one).
+ * @throws PlrError E_BAD_INPUT
+ */
+export function parseRpcUrls(rpcUrl: unknown): URL[] {
+  if (typeof rpcUrl !== "string") throw new PlrError("E_BAD_INPUT", "rpcUrl must be a string");
+  const parts = rpcUrl.split(",");
+  if (parts.length > MAX_RPC_URLS) throw new PlrError("E_BAD_INPUT", `at most ${MAX_RPC_URLS} RPC endpoints`);
+  const urls = parts.map((u) => checkRpcUrl(parts.length === 1 ? u : u.trim()));
+  if (new Set(urls.map((u) => u.href)).size !== urls.length) throw new PlrError("E_BAD_INPUT", "the same RPC endpoint is listed twice");
+  return urls;
 }
 
 /** A passed code-hash check is reused for this long; a failed one is never reused. */
@@ -191,8 +257,12 @@ const ANCHOR_UINTS = ["id", "first_seq", "count", "at_ms"] as const;
 export class NearRegistry implements RegistryReader {
   readonly chain = "near";
   readonly contractId: string;
+  /** The endpoint URL; with several, their URLs joined by commas (as configured, normalised). */
   readonly rpcUrl: string;
-  readonly #provider: JsonRpcProvider;
+  /** Every endpoint asked, in the configured order. */
+  readonly rpcUrls: readonly string[];
+  readonly #providers: JsonRpcProvider[];
+  readonly #retryMs: number;
   readonly #timeoutMs: number;
   readonly #finality: NearFinality;
   /** The pinned `code_hash`, or undefined when only the account id is pinned. */
@@ -202,20 +272,61 @@ export class NearRegistry implements RegistryReader {
 
   constructor(o: NearRegistryOptions) {
     if (typeof o !== "object" || o === null) throw new PlrError("E_BAD_INPUT", "NearRegistry options required");
-    const url = checkRpcUrl(o.rpcUrl);
+    const urls = parseRpcUrls(o.rpcUrl);
     if (!isNearAccountId(o.contractId)) throw new PlrError("E_BAD_INPUT", "contractId is not a valid NEAR account id");
     const timeoutMs = o.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600_000) throw new PlrError("E_BAD_INPUT", "bad timeoutMs");
     const finality = o.finality ?? "optimistic";
     if (finality !== "optimistic" && finality !== "near-final" && finality !== "final") throw new PlrError("E_BAD_INPUT", "bad finality");
-    this.rpcUrl = url.href;
+    this.rpcUrls = Object.freeze(urls.map((u) => u.href));
+    this.rpcUrl = this.rpcUrls.join(",");
     this.contractId = o.contractId;
     this.#timeoutMs = timeoutMs;
     this.#finality = finality;
     if (o.codeHash !== undefined && !isCodeHash(o.codeHash)) throw new PlrError("E_BAD_INPUT", "codeHash is not a base58 code hash");
     this.pinnedCodeHash = o.codeHash;
     // Few, quick retries: the per-call timeout below bounds the total wait anyway.
-    this.#provider = new JsonRpcProvider({ url: url.href }, { retries: 2, wait: 100, backoff: 1.5 });
+    this.#providers = this.rpcUrls.map((url) => new JsonRpcProvider({ url }, { retries: 2, wait: 100, backoff: 1.5 }));
+    this.#retryMs = Math.min(RPC_DISAGREE_RETRY_MS, timeoutMs);
+  }
+
+  /**
+   * Sends one query to every endpoint in parallel (each bounded by the per-call timeout) and returns the answer
+   * they all gave. `ask` returns the part of the reply that must be the same everywhere, as text.
+   * One endpoint: its answer, as before. Several: see the file header (all must answer, all answers equal, one
+   * re-ask on a disagreement).
+   * @throws RegistryRpcDisagreeError; NearRegistryError (an endpoint failed, timed out or answered garbage)
+   */
+  async #askAll(what: string, ask: (p: JsonRpcProvider) => Promise<string>): Promise<string> {
+    for (let attempt = 0; ; attempt++) {
+      const settled = await Promise.allSettled(this.#providers.map((p) => this.#askOne(what, p, ask)));
+      const answers = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+      if (answers.some((a) => a !== answers[0])) {
+        if (attempt > 0) throw new RegistryRpcDisagreeError(what);
+        await new Promise<void>((ok) => setTimeout(ok, this.#retryMs));
+        continue;
+      }
+      // fail closed: an endpoint that did not answer is not outvoted by the ones that did
+      const failed = settled.find((r) => r.status === "rejected");
+      if (failed !== undefined) throw failed.reason as NearRegistryError;
+      return answers[0]!;
+    }
+  }
+
+  async #askOne(what: string, p: JsonRpcProvider, ask: (p: JsonRpcProvider) => Promise<string>): Promise<string> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new NearRegistryError(`${what}: timeout`)), this.#timeoutMs);
+      timer.unref?.();
+    });
+    try {
+      return await Promise.race([ask(p), timeout]);
+    } catch (e) {
+      if (e instanceof NearRegistryError) throw e;
+      throw new NearRegistryError(`${what}: RPC failed`);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** With a pin: true while the last code-hash check passed and is still fresh. Without a pin: undefined. */
@@ -226,7 +337,8 @@ export class NearRegistry implements RegistryReader {
   /**
    * Checks the registry account's `code_hash` against the pin (no-op without one, or within the reuse window);
    * concurrent callers share one `view_account`.
-   * @throws RegistryCodeHashError (different code); NearRegistryError (RPC failed / malformed / timeout)
+   * @throws RegistryCodeHashError (different code); RegistryRpcDisagreeError (endpoints report different hashes);
+   *         NearRegistryError (RPC failed / malformed / timeout)
    */
   async checkCodeHash(): Promise<void> {
     if (this.pinnedCodeHash === undefined || performance.now() < this.#codeOkUntil) return;
@@ -238,57 +350,29 @@ export class NearRegistry implements RegistryReader {
 
   async #fetchAndCompareCode(): Promise<void> {
     this.#codeOkUntil = 0;
-    let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new NearRegistryError("view_account: timeout")), this.#timeoutMs);
-      timer.unref?.();
+    // Only `code_hash` is compared between endpoints: balance and block fields legitimately differ by block.
+    const hash = await this.#askAll("view_account", async (p) => {
+      const acct: unknown = await p.query({ request_type: "view_account", finality: this.#finality, account_id: this.contractId });
+      const h: unknown = typeof acct === "object" && acct !== null ? (acct as Record<string, unknown>).code_hash : undefined;
+      if (typeof h !== "string" || !CODE_HASH_RE.test(h)) throw new NearRegistryError("view_account: malformed reply");
+      return h;
     });
-    let hash: unknown;
-    try {
-      const acct: unknown = await Promise.race([
-        this.#provider.query({ request_type: "view_account", finality: this.#finality, account_id: this.contractId }),
-        timeout,
-      ]);
-      hash = typeof acct === "object" && acct !== null ? (acct as Record<string, unknown>).code_hash : undefined;
-    } catch (e) {
-      if (e instanceof NearRegistryError) throw e;
-      throw new NearRegistryError("view_account: RPC failed");
-    } finally {
-      clearTimeout(timer);
-    }
-    if (typeof hash !== "string" || !CODE_HASH_RE.test(hash)) throw new NearRegistryError("view_account: malformed reply");
     if (hash !== this.pinnedCodeHash) throw new RegistryCodeHashError();
     this.#codeOkUntil = performance.now() + CODE_HASH_TTL_MS;
   }
 
   /**
    * Raw view call: returns the JSON-decoded result. Rejects on any error or timeout; with a code-hash pin, first
-   * rejects with {@link RegistryCodeHashError} when the account runs other code.
+   * rejects with {@link RegistryCodeHashError} when the account runs other code. With several endpoints: rejects
+   * with {@link RegistryRpcDisagreeError} unless all give the same result.
    */
   async view(method: string, args: Record<string, unknown>): Promise<unknown> {
     await this.checkCodeHash();
-    let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new NearRegistryError(`${method}: timeout`)), this.#timeoutMs);
-      timer.unref?.();
-    });
-    try {
-      const raw: unknown = await Promise.race([
-        this.#provider.callFunctionRaw({
-          contractId: this.contractId,
-          method,
-          args,
-          blockQuery: { finality: this.#finality },
-        }),
-        timeout,
-      ]);
-      return decodeResult(method, raw);
-    } catch (e) {
-      if (e instanceof NearRegistryError) throw e;
-      throw new NearRegistryError(`${method}: RPC failed`);
-    } finally {
-      clearTimeout(timer);
-    }
+    // The contract's returned bytes (as text) are what every endpoint must agree on; they are parsed once.
+    const text = await this.#askAll(method, async (p) =>
+      decodeResultText(method, await p.callFunctionRaw({ contractId: this.contractId, method, args, blockQuery: { finality: this.#finality } })),
+    );
+    return parseJsonIntegers(text);
   }
 
   async getRoot(): Promise<RegistryRoot> {
@@ -354,8 +438,8 @@ export class NearRegistry implements RegistryReader {
   }
 }
 
-/** Decodes `result: number[]` (UTF-8 JSON bytes) of a `call_function` query, strictly. */
-function decodeResult(method: string, raw: unknown): unknown {
+/** Decodes `result: number[]` (UTF-8 JSON bytes) of a `call_function` query, strictly, to its JSON text. */
+function decodeResultText(method: string, raw: unknown): string {
   if (typeof raw !== "object" || raw === null) throw new NearRegistryError(`${method}: malformed RPC reply`);
   const result: unknown = (raw as Record<string, unknown>).result;
   if (!Array.isArray(result) || result.length === 0 || result.length > MAX_RESULT_BYTES) {
@@ -368,7 +452,9 @@ function decodeResult(method: string, raw: unknown): unknown {
     bytes[i] = b;
   }
   try {
-    return parseJsonIntegers(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    parseJsonIntegers(text); // must parse, so that a non-JSON answer counts as an endpoint failure
+    return text;
   } catch {
     throw new NearRegistryError(`${method}: result is not JSON`);
   }

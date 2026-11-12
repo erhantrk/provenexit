@@ -19,7 +19,7 @@ import {
   type VerifiedRouter,
 } from "@plr/shared";
 import { CollateralFetchError, collateralSource, fetchPccsCollateral, type CollateralSource } from "./pccs.js";
-import { checkRegistryCode, isRegistryCodeHashError } from "./near-registry.js";
+import { checkRegistryCode, isRegistryRefusal } from "./near-registry.js";
 
 /** A verified attestation plus the nonce it was verified with (the tunnel / session binds that nonce). */
 export interface AttestationSession {
@@ -75,6 +75,11 @@ export class AttestationCache {
   /** Fetches and verifies a fresh attestation (new random nonce every call) and caches it. @throws PlrError */
   async attest(): Promise<AttestationSession> {
     const nonce = new Uint8Array(randomBytes(32));
+    // `@plr/shared`'s `verifyAttestation` (part of the measured exit image, not changed here) reports every registry
+    // failure as E_REGISTRY_UNAVAILABLE. The registry is therefore watched for this one attestation: if it refused
+    // for one of the client's own reasons (other code than pinned, RPC endpoints disagree), that refusal is what
+    // the caller gets. `verifyAttestation` stops at the first failing check, so the remembered refusal is its cause.
+    const watched = watchRefusals(this.#o.registry);
     try {
       // First of all: a registry whose account does not run the pinned code answers nothing we would trust.
       await checkRegistryCode(this.#o.registry);
@@ -84,12 +89,12 @@ export class AttestationCache {
       const src = this.collateral;
       const verified =
         src?.source === "pccs"
-          ? await this.#verifyWithFreshCollateral(bundle, nonce, src.url)
+          ? await this.#verifyWithFreshCollateral(bundle, nonce, src.url, watched.registry)
           : await verifyAttestation({
               bundle,
               nonce,
               verifier: this.#o.verifier,
-              registry: this.#o.registry,
+              registry: watched.registry,
               trustedRoot: this.#o.trustedRoot,
             });
       const session: AttestationSession = {
@@ -103,6 +108,7 @@ export class AttestationCache {
       return session;
     } catch (e) {
       this.#session = undefined;
+      if (isPlrError(e) && e.code === "E_REGISTRY_UNAVAILABLE" && watched.refusal !== undefined) throw watched.refusal;
       if (isPlrError(e)) throw e;
       throw new PlrError("E_BAD_RESPONSE");
     }
@@ -120,9 +126,8 @@ export class AttestationCache {
    * The registry root is read once and reused by the second run.
    * @throws PlrError (incl. CollateralFetchError)
    */
-  async #verifyWithFreshCollateral(bundle: AttestationBundle, nonce: Uint8Array, pccsUrl: string): Promise<VerifiedRouter> {
+  async #verifyWithFreshCollateral(bundle: AttestationBundle, nonce: Uint8Array, pccsUrl: string, inner: RegistryReader): Promise<VerifiedRouter> {
     const real = this.#o.verifier;
-    const inner = this.#o.registry;
     let root: ReturnType<RegistryReader["getRoot"]> | undefined;
     const registry: RegistryReader = {
       get chain() {
@@ -187,12 +192,39 @@ export class AttestationCache {
   }
 }
 
+/**
+ * A view of `inner` that remembers the last client-only refusal one of its calls rejected with (see
+ * `isRegistryRefusal`), and rejects with it unchanged.
+ */
+function watchRefusals(inner: RegistryReader): { registry: RegistryReader; refusal: unknown } {
+  const w: { registry: RegistryReader; refusal: unknown } = { registry: inner, refusal: undefined };
+  const watch = <T>(p: Promise<T>): Promise<T> =>
+    p.catch((e: unknown) => {
+      if (isRegistryRefusal(e)) w.refusal = e;
+      throw e;
+    });
+  w.registry = {
+    get chain() {
+      return inner.chain;
+    },
+    get contractId() {
+      return inner.contractId;
+    },
+    getRoot: () => watch(inner.getRoot()),
+    isComposeAllowed: (h) => watch(inner.isComposeAllowed(h)),
+    isOsAllowed: (h) => watch(inner.isOsAllowed(h)),
+    getInstance: (k) => watch(inner.getInstance(k)),
+    getAnchor: (id) => watch(inner.getAnchor(id)),
+  };
+  return w;
+}
+
 async function regCall<T>(f: () => Promise<unknown>, valid: (v: unknown) => v is T): Promise<T> {
   let v: unknown;
   try {
     v = await f();
   } catch (e) {
-    if (isRegistryCodeHashError(e)) throw e;
+    if (isRegistryRefusal(e)) throw e;
     throw new PlrError("E_REGISTRY_UNAVAILABLE");
   }
   if (!valid(v)) throw new PlrError("E_REGISTRY_UNAVAILABLE", "malformed registry reply");
@@ -208,7 +240,8 @@ const isInstanceOrNull = (v: unknown): v is InstanceRecord | null => v === null 
  * keys / compose / OS. Used on every new connection, even with a cached attestation, so an owner revocation
  * applies to the very next connection. Returns the live instance record (incl. its operator's `org_id`).
  * @throws PlrError E_COMPOSE_NOT_ALLOWED, E_OS_NOT_ALLOWED, E_INSTANCE_NOT_REGISTERED, E_REGISTRY_UNAVAILABLE,
- *         E_REGISTRY_CODE_HASH (a pinned registry whose account runs other code)
+ *         E_REGISTRY_CODE_HASH (a pinned registry whose account runs other code), E_REGISTRY_RPC_DISAGREE
+ *         (several RPC endpoints configured and they answer a registry query differently)
  */
 export async function recheckRegistry(registry: RegistryReader, v: VerifiedRouter, now: number = Date.now()): Promise<InstanceRecord> {
   await checkRegistryCode(registry);
