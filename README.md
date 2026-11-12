@@ -4,22 +4,32 @@
 
 Every VPN says "no logs". ProvenExit's client checks, before it sends a byte, that the exit runs an approved build with logging off. The proof is an Intel-signed quote, checked against a NEAR registry. Built at NEAR HACKATHON (2026-11).
 
-> **Honest status, once:** the demo exit runs on a mock root on your machine. No TDX exit is deployed. The real Intel quote comes from a separate test VM. Full explanation: [Limits and trust](#limits-and-trust).
+> **Status:** a live exit runs on Intel TDX hardware (Phala Cloud, production OS `dstack-0.6.1`). The NEAR contract verified its quote on chain, all 13 checks, before listing its keys ([tx `HSQqnRMu…`](https://testnet.nearblocks.io/txns/HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8)). The full local demo (option 1) uses a mock root. Limits: [Limits and trust](#limits-and-trust).
 
 Demo video: (link added at submission)
 
-## Try it in 2 minutes (offline, Node only, no accounts)
+## Try it in 2 minutes
+
+Live exit (Node 22, network, no accounts):
 
 ```sh
-npm ci && npx tsc -b && node client/dist/cli.js vpn verify --fixture fixtures/phala-spike/replay
+npm ci && npx tsc -b && scripts/try-live.sh
 ```
 
-You see a real Intel TDX quote from a Phala test VM checked offline: `✔ quote signature chain to root`, `✔ Intel TCB status accepted`, then the expected stop `✘ E_REPORT_DATA_KEYS`. The command exits with a non-zero code by design. NEAR's on-chain run stopped at the same point, after checks 1-12 passed. The full local demo with revocation (needs Rust) is [option 1](#try-it-all-options).
+It prints every check of the live exit (`✔ VERIFIED`), starts a local SOCKS5 proxy, and shows your IP next to the IP a website sees through the exit (the Phala machine). The proxy stays up for a browser until Ctrl-C.
+
+Offline (no network): the same exit's quote and registry state, captured 2026-11-12, replayed:
+
+```sh
+npm ci && npx tsc -b && node client/dist/cli.js vpn verify --fixture fixtures/live-exit
+```
+
+You see 16 `✔` lines and `✔ VERIFIED (FIXTURE REPLAY …)`. The full local demo with revocation (needs Rust) is [option 1](#try-it-all-options).
 
 ## Numbers
 
-- **186.03 Tgas:** one NEAR transaction verified Intel's DCAP signature inside the contract ([tx `9AUTujEQ…`](https://testnet.nearblocks.io/txns/9AUTujEQv8p1R1z7SKEpNa5BYFw3a9ZZerkKmpQb5NRB)).
-- **Checks 1-12 of 13 passed on chain** for a real Phala TDX quote. Check 13 refuses it by design: it is a test VM, not an exit.
+- **188.08 Tgas:** one NEAR transaction verified the live exit's real Intel TDX quote inside the contract, **all 13 checks** (DCAP signature, TCB, event log, compose, allowlists, key binding), then listed its keys ([tx `HSQqnRMu…`](https://testnet.nearblocks.io/txns/HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8)).
+- **1 live exit** on Intel TDX: TCB `UpToDate`, debug off, image pinned by digest, container logging off, only ports 80 and 443, at most 32 tunnels.
 - **298 client tests (1 skipped) and 60 contract tests** pass (see [`NOTES-DECISIONS.md`](NOTES-DECISIONS.md), [`contracts/near/README.md`](contracts/near/README.md)).
 - **Owner revoke and re-allow** transactions ran on the NEAR testnet registry (on the test compose; a client refusing right after a revocation is shown on the local demo stack) ([revoke tx](https://testnet.nearblocks.io/txns/3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz), [re-allow tx](https://testnet.nearblocks.io/txns/642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV)).
 
@@ -37,16 +47,17 @@ A NEAR contract on testnet ([`pe-vpnreg-erhan.testnet`](https://testnet.nearbloc
 
 ## The judge's one-sentence version
 
-*ProvenExit's client refuses to send traffic unless an Intel-signed TDX quote proves the exit runs an approved, logging-disabled build listed on a NEAR registry that itself verified that quote on-chain, and when the owner revokes the build on NEAR, the very next connection is refused.* This is the design. In this snapshot the exit behind it is the MOCK one (see [Limits and trust](#limits-and-trust)).
+*ProvenExit's client refuses to send traffic unless an Intel-signed TDX quote proves the exit runs an approved, logging-disabled build listed on a NEAR registry that itself verified that quote on-chain, and when the owner revokes the build on NEAR, the very next connection is refused.* The live exit on Phala runs exactly this path; the local demo stack runs it on a mock root.
 
 ## How to verify each claim
 
 | claim | command / evidence | expected |
 |---|---|---|
-| a real Phala TDX quote chains to Intel's root and passes TCB (the 2026-11-09 spike CVM, **not** the exit) | `node client/dist/cli.js vpn verify --fixture fixtures/phala-spike/replay` | `✔ quote signature chain to root`, `✔ Intel TCB status accepted`, then the expected stop at `✘ E_REPORT_DATA_KEYS`: the client's event-log, compose and allowlist checks never run on this real quote (only the on-chain run reached them) |
-| NEAR verified Intel's signature itself | registration tx `9AUTujEQ…` on nearblocks | failure at check 13 `E_REPORT_DATA` — checks 1–12 (DCAP, TCB, event log, compose, allowlists) passed in the contract |
+| the live exit is real Intel TDX, approved and registered | `scripts/try-live.sh` (or `vpn verify` with `deploy/testnet/env.live`) | every check `✔`, `✔ VERIFIED`, then a different IP through the exit |
+| the same, without network | `node client/dist/cli.js vpn verify --fixture fixtures/live-exit` | `✔ VERIFIED (FIXTURE REPLAY …)` |
+| NEAR verified Intel's signature itself | registration tx [`HSQqnRMu…`](https://testnet.nearblocks.io/txns/HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8) | success, 188.08 Tgas: all 13 checks ran in the contract |
 | the exit image is pinned and logging is off | `deploy/phala/docker-compose.yml`; `checkDstackComposePolicy` in [`packages/shared/src/attest/compose-policy.ts`](packages/shared/src/attest/compose-policy.ts) | image by digest, `logging.driver: none`; the same check rejects the real 2026-11-09 spike compose (`E_COMPOSE_POLICY`) |
-| image = this source | not shown in this snapshot: no image was built (T13 skipped) | stated, not claimed |
+| image = this source | [`scripts/build-exit-image.sh`](scripts/build-exit-image.sh) builds it from the `vpn-honest` bundle and [`deploy/phala/Dockerfile`](deploy/phala/Dockerfile) | not reproducible yet: a rebuild is not shown to give the same digest (no build provenance) |
 | revocation works | option 1 (MOCK stack) or the testnet revoke/re-allow txs above | `refused with E_COMPOSE_NOT_ALLOWED`, then restored by re-approval |
 | no destination in receipts | [`SPEC-VPN.md`](SPEC-VPN.md) §5; e2e scans the exits' output and run directory | only hashes, sequence numbers and timestamps |
 
@@ -69,21 +80,25 @@ A NEAR contract on testnet ([`pe-vpnreg-erhan.testnet`](https://testnet.nearbloc
      fit, the stack puts its host sockets in a short `<run root>/plr-<hash>` directory, or, if even that is too long, under
      `os.tmpdir()` (or `/tmp`). Any clone path works; `PLR_RUN_ROOT` is only needed to move the (non-socket) run state elsewhere.
 
-2. **Replay the real Intel attestation offline** — needs only `npm ci` and the TypeScript build:
+2. **Replay the live exit's attestation offline** — needs only `npm ci` and the TypeScript build:
 
    ```sh
-   npm ci && npx tsc -b && node client/dist/cli.js vpn verify --fixture fixtures/phala-spike/replay
+   npm ci && npx tsc -b && node client/dist/cli.js vpn verify --fixture fixtures/live-exit
    ```
 
-   - see: `✔ quote signature chain to root`, `✔ Intel TCB status accepted`, then the expected refusal
+   - see: every check `✔`, then `✔ VERIFIED (FIXTURE REPLAY …)` with the registration tx. No network is used; the
+     DCAP check runs at the capture time (2026-11-12).
+   - the older test-VM quote (2026-11-09, before the exit existed) is kept too:
+     `node client/dist/cli.js vpn verify --fixture fixtures/phala-spike/replay`. It shows `✔ quote signature chain to root`, `✔ Intel TCB status accepted`, then the expected refusal
      `✘ E_REPORT_DATA_KEYS` — the recorded 2026-11-09 Phala CVM asked dstack for `report_data = 64 × 0x42`, so it
      never bound an exit's keys. That is the same point at which the on-chain registration stopped (tx
      `9AUTujEQ…`, check 13 of 13, after checks 1–12 passed). No network is used; the DCAP check runs at the capture
      time.
 
-3. **Live exit:** there is none in this snapshot (S1-F2). [`scripts/demo-live.sh`](scripts/demo-live.sh) drives the
-   PLAN §10.1 sequence (`vpn verify` → browse → owner revoke → refusal → re-allow) against a deployed exit, reading
-   `deploy/testnet/env.live`; it signs nothing itself.
+3. **Live exit:** `scripts/try-live.sh` (above). The exit URL, registry and Intel root are in
+   [`deploy/testnet/env.live`](deploy/testnet/env.live). [`scripts/demo-live.sh`](scripts/demo-live.sh) drives the
+   PLAN §10.1 sequence (`vpn verify` → browse → owner revoke → refusal → re-allow) against it; it signs nothing itself.
+   The exit is paid by the hour, so it runs during judging but may be stopped afterwards; option 2 needs no exit.
 
 ## What it does
 
@@ -112,13 +127,19 @@ A NEAR contract on testnet ([`pe-vpnreg-erhan.testnet`](https://testnet.nearbloc
 - `register_instance_tdx` runs `dcap-qvl` 0.7.1 inside the contract: thirteen ordered checks (DCAP quote signature and
   TCB status, dstack event log, compose hash, allowlists, `report_data` binding) before an exit's keys are listed. It
   is payable (0.1 NEAR) and called with 300 Tgas. Measured: **179.63 Tgas** to DCAP-verify dcap-qvl's sample quote
-  in a near-sandbox spike (test-clock build); the testnet run burnt **186.03 Tgas** and reached check 13, so checks
-  1–12 ran on chain for the real quote.
+  in a near-sandbox spike (test-clock build); on testnet, the live exit's registration passed all 13 checks for
+  **188.08 Tgas** ([tx `HSQqnRMu…`](https://testnet.nearblocks.io/txns/HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8)). An earlier run on the 2026-11-09 test-VM quote burnt 186.03 Tgas and stopped,
+  as designed, at check 13 (that VM never bound an exit's keys).
 - Deployed wasm: 622 282 bytes, SHA-256 `e2864a9c75f592af91cbdf36ba3918e5793434a949f1daca2b92df40db2b1bdc`.
   Initialization (`new`, owner `pe-owner-erhan.testnet`, root `INTEL`, TTL 86 400 000 ms): tx
   [`FyRSR12vo3KXEwmH8DN7DJQ78SFFHcXoYKeRREUCUWj`](https://testnet.nearblocks.io/txns/FyRSR12vo3KXEwmH8DN7DJQ78SFFHcXoYKeRREUCUWj).
 - Operator `pe-op-erhan.testnet` approved as organization `erhan-demo`: tx
   [`G24JXkyLJZQjV8FFHeG9x5ZGy9mNVgwKtSi8p8xEZHL1`](https://testnet.nearblocks.io/txns/G24JXkyLJZQjV8FFHeG9x5ZGy9mNVgwKtSi8p8xEZHL1).
+- The live exit's compose hash `6b56436b…e2c0` was allowed by the owner in tx
+  [`8fU3ScGVptLev9qdGbBsW72kJDcye9CzKTLpQzaKh8dm`](https://testnet.nearblocks.io/txns/8fU3ScGVptLev9qdGbBsW72kJDcye9CzKTLpQzaKh8dm); its OS measurement is the same `821d442f…d323d`
+  (production `dstack-0.6.1`). The exit then registered itself: tx
+  [`HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8`](https://testnet.nearblocks.io/txns/HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8). It re-registers every 6 h (records expire after 24 h)
+  and anchors receipt roots on the same contract.
 - Allowlists for the **spike** (not an exit) compose `b9823a79…d05f` and OS measurement `821d442f…d323d`. They are
   allowed on the INTEL registry **only to demonstrate checks 1–12**; the client refuses that compose with
   `E_COMPOSE_POLICY` (no `exit` service, unpinned image), but the registry itself would list a registration under it,
@@ -128,7 +149,6 @@ A NEAR contract on testnet ([`pe-vpnreg-erhan.testnet`](https://testnet.nearbloc
 - Revocation works on testnet: `revoke_compose b9823a79…` tx
   [`3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz`](https://testnet.nearblocks.io/txns/3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz),
   re-allow tx [`642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV`](https://testnet.nearblocks.io/txns/642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV).
-  (`anchor_count` is 0: no exit runs on testnet in this snapshot.)
 
 ## Limits and trust
 
@@ -136,26 +156,19 @@ Every limit and disclosure from the earlier README is kept here.
 
 ### Status of this snapshot
 
-The plan's fallback **S1-F2** applies (maintainer decision, 2026-11-11):
-**the VPN exit is not deployed on Phala Cloud.** Phala was used once, on 2026-11-09, for a harmless test CVM that
-returned one real TDX quote (kept in [`fixtures/phala-spike/`](fixtures/phala-spike)). What follows from that:
-
-- The **live demo exit in this repository runs on the MOCK root on the local machine** — the plan's pre-existing mode,
-  unchanged. It exercises the real protocol, the real SOCKS5 proxy, the real egress policy, the real receipts and the
-  real registry/revocation path, but it is not Intel hardware.
-- The **real Intel TDX evidence** is that 2026-11-09 quote. It was verified **on-chain** on testnet up to check 13 of
-  13 (`report_data`): the spike CVM had asked dstack for `report_data = 64 × 0x42`, not for an exit's keys, so the
-  registration was refused with `E_REPORT_DATA`. Checks 1–12 — quote format, Intel root, **DCAP signature
-  verification with Intel collateral**, TCB status, DEBUG clear, dstack event log → RTMR3, compose hash, compose and
-  OS allowlists — passed **inside the contract**, on chain (tx
-  [`9AUTujEQv8p1R1z7SKEpNa5BYFw3a9ZZerkKmpQb5NRB`](https://testnet.nearblocks.io/txns/9AUTujEQv8p1R1z7SKEpNa5BYFw3a9ZZerkKmpQb5NRB),
-  186.03 Tgas).
-- The offline replay of that quote therefore prints `✔ quote signature chain to root` and
-  `✔ Intel TCB status accepted` and then stops at the **expected refusal** `✘ E_REPORT_DATA_KEYS`. A
-  `✔ VERIFIED (FIXTURE REPLAY …)` line needs a TDX exit that asked for the exit's key hash and nonce; no such exit
-  exists in this snapshot (and none can be manufactured: `report_data` is fixed by Intel at quote time).
-- **No exit image was built or published** (T13 was skipped under S1-F2). `deploy/phala/docker-compose.yml` pins a
-  documented placeholder digest — it is the exact measured configuration a paid deploy would use, not a live image.
+- **The live exit runs on Intel TDX** on Phala Cloud (instance `tdx.small`, production OS `dstack-0.6.1`, not the
+  SSH-enabled dev OS), from the image `ghcr.io/erhantrk/provenexit-exit@sha256:7e53f383…1ad5` pinned in
+  [`deploy/phala/docker-compose.yml`](deploy/phala/docker-compose.yml). The NEAR contract verified its quote on chain
+  (all 13 checks) before listing its keys ([tx `HSQqnRMu…`](https://testnet.nearblocks.io/txns/HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8)). It is paid by the hour on Phala; it runs through
+  judging and may be stopped afterwards. [`fixtures/live-exit/`](fixtures/live-exit) keeps a replayable capture.
+- **Safeguards in the measured compose:** the exit dials only ports 80 and 443 (`PLR_VPN_ALLOWED_PORTS`) and serves at
+  most 32 tunnels at once (`PLR_VPN_MAX_TUNNELS`). Both are part of the compose hash the owner approved.
+- **The local demo stack (option 1) runs on the MOCK root** — the pre-existing mode, unchanged. It exercises the real
+  protocol, SOCKS5 proxy, egress policy, receipts and registry/revocation path, but it is not Intel hardware.
+- **History:** until 2026-11-12 the plan's fallback S1-F2 applied (no exit on Phala); the only real quote was a
+  2026-11-09 test VM ([`fixtures/phala-spike/`](fixtures/phala-spike)), which passed checks 1–12 on chain (tx
+  [`9AUTujEQ…`](https://testnet.nearblocks.io/txns/9AUTujEQv8p1R1z7SKEpNa5BYFw3a9ZZerkKmpQb5NRB)) and stopped at
+  check 13 because it never bound an exit's keys. On 2026-11-12 the exit image was built (T13) and deployed.
 
 ### What it does not prove
 
@@ -175,7 +188,7 @@ returned one real TDX quote (kept in [`fixtures/phala-spike/`](fixtures/phala-sp
   padded, no cover traffic; only the CONNECT / CONNECT_ERR payloads have fixed sizes). With one hop, your own IP is visible to the exit operator's network.
 - **Proxy mode only.** Only what you send through the SOCKS5 proxy is protected: TCP CONNECT, no UDP (no QUIC,
   no WebRTC media, no system-wide tunnel). Use `socks5h` (or "proxy DNS") so names are not resolved locally.
-- **MOCK ROOT, not Intel, for the demo exit in this snapshot.** Its quote is signed by a locally generated test root
+- **MOCK ROOT, not Intel, for the local demo stack (option 1).** Its quote is signed by a locally generated test root
   through a per-boot attestation key, and the "TD" is a Node process supervised by a mock TDX host. The byte layouts,
   hashes, event log and verification logic are the real TDX/dstack ones, but **a MOCK root attests nothing about
   hardware**: whoever holds the mock root secret can forge quotes. The CLI says so on every verify
@@ -207,7 +220,7 @@ returned one real TDX quote (kept in [`fixtures/phala-spike/`](fixtures/phala-sp
   (`https://<app-id>-18200.<gateway-domain>`), which then speaks to the container; the tunnel inside is end-to-end
   encrypted to the attested key, so the gateway sees only ciphertext, cannot impersonate the exit (its key is inside
   the signed quote) and cannot read or forge tunnel content. It can still observe connection timing and volume, and
-  it is a liveness dependency ("refuse to serve" is always possible). In this snapshot no exit runs behind it.
+  it is a liveness dependency ("refuse to serve" is always possible). The live exit runs behind it.
 - **The registry owner's honesty** (see above) and **the registry RPC endpoint is trusted**: NEAR view results carry
   no state proofs, so whoever answers the client's `get_root` / `is_*_allowed` / `get_instance` calls decides checks
   3, 5 and the allowlist. The client therefore only talks to the registry over `https:`, or plain `http:` to a
@@ -222,7 +235,8 @@ returned one real TDX quote (kept in [`fixtures/phala-spike/`](fixtures/phala-sp
   2026-11-01 start) built the mock-root protocol, the NEAR registry, the VPN exit and the multi-chain registries. They
   are prior work and are not claimed as hackathon-window work.
 - **Judged work:** `4fb2f08`..`hackathon-submission` (from 2026-11-09): the real Intel TDX path (dstack event log,
-  DCAP in the client and on-chain in the contract, compose policy, the Phala spike, the S1-F2 local stack).
+  DCAP in the client and on-chain in the contract, compose policy, the Phala spike, the local stack, the exit image
+  and the live TDX exit).
 - Branches and tags: all of this work is on `main` (the same commits as the branch `provenexit`). The tags
   `window-start` (`58c5ea9`), `real-tdx-start` (`4fb2f08`) and `hackathon-submission` (final HEAD) are to be created by
   the maintainers; none exists in this snapshot, so the links use `main`.
@@ -268,8 +282,8 @@ Türker (design decisions, review, accounts, keys, deployment, submission). The 
                      ▼ destination (sees the exit's IP)
 ```
 
-Under S1-F2 the demo exit runs in this repository on the MOCK root; the diagram is the INTEL deployment the code is
-written for (and the configuration `deploy/phala/` pins).
+This is the live deployment (the configuration `deploy/phala/` pins). The local demo stack runs the same path with a
+MOCK root in place of Intel.
 
 ## Repository map
 
@@ -280,7 +294,8 @@ written for (and the configuration `deploy/phala/` pins).
 | [`enclave`](enclave) `@plr/enclave` | exit bundle, `DstackAttester`, collateral cache, the mock TDX host, mock LLM, test-only logging builds |
 | [`contracts/near`](contracts/near) | the registry: allowlists, `register_instance_tdx` (on-chain dcap-qvl), `anchor_receipts`, views |
 | [`SPEC-TDX.md`](SPEC-TDX.md) | the frozen INTEL/dstack byte formats and the contract/client additions this code implements |
-| [`deploy/phala`](deploy/phala) | the measured exit compose (placeholder image digest; see its README) and the spike compose |
+| [`deploy/phala`](deploy/phala) | the measured exit compose (the live image, pinned by digest), its Dockerfile, and the spike compose |
+| [`fixtures/live-exit`](fixtures/live-exit) | the live exit's attestation bundle, nonce and registry snapshot (2026-11-12), replayed by `vpn verify --fixture` |
 | [`fixtures/phala-spike`](fixtures/phala-spike) | the real 2026-11-09 TDX dump, its parsed parts, and the INTERFACES §3.3 replay fixture |
 | [`e2e`](e2e) | the stack harness (near-sandbox, zebrad, anvil, Stellar, Solana), attacker scenarios, locked e2e tests |
 | [`scripts`](scripts) | `demo.sh` (option 1), `demo-live.sh`, `dev-up.sh` / `dev-down.sh`, `owner.sh`, `pccs-live-check.mjs` |
@@ -299,7 +314,7 @@ Older history (commit timeline, multi-chain work, the October tour): [`docs/HIST
 `@noble/curves`, `@noble/hashes`, `@noble/ciphers`, `near-api-js`, `@phala/dcap-qvl` 0.7.1 (Apache-2.0),
 `@phala/dstack-sdk` 0.5.8 (Apache-2.0), `yaml` 2.8.1, `viem`, `@solana/web3.js`, `@stellar/stellar-sdk`, `esbuild`,
 `vitest`, `near-sdk` 5.29.1, the `dcap-qvl` 0.7.1 crate (MIT), `sha2`, `p256`, `ed25519-dalek`, `forge-std`.
-Test vectors from dcap-qvl's `sample/` (MIT). Infrastructure: Phala Cloud (dstack, test CVM only), NEAR testnet,
+Test vectors from dcap-qvl's `sample/` (MIT). Infrastructure: Phala Cloud (dstack: the live exit and a test CVM), NEAR testnet,
 FASTNEAR RPC, Phala PCCS.
 
 ## License

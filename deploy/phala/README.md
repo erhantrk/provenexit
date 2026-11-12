@@ -10,36 +10,43 @@ public testnet values from `deploy/testnet/env.live`:
 - `PLR_OPERATOR_KEY: ${PLR_OPERATOR_KEY}` stays a reference: it is the only secret and is supplied sealed at deploy
   time (`phala deploy -e PLR_OPERATOR_KEY=…`), never written to a file in this repo.
 
-**Under S1-F2 (maintainer decision 2026-11-11) the VPN exit is never deployed to Phala Cloud.** The demo exit runs on
-the mock root on the local machine; real TDX is shown by the spike fixture (`fixtures/phala-spike/`). This file is
-kept as the exact measured configuration that a paid deploy would use, and so that the compose policy check runs
-against a real file.
+- `PLR_VPN_ALLOWED_PORTS: "80,443"` and `PLR_VPN_MAX_TUNNELS: "32"`: the exit dials only web ports and serves at most 32
+  tunnels at once. They are measured with the rest of the compose.
 
-**The image digest is a documented placeholder.** There is no `Dockerfile` here either: building and pushing the
-exit image is T13, which S1-F2 skips, so no image was built or published and there is nothing real to pin.
-The digest in the `image:` line is the SHA-256 of this exact text:
+**Live since 2026-11-12.** This exact file runs on Phala Cloud (`tdx.small`, production OS `dstack-0.6.1`):
 
-```
-provenexit-exit: S1-F2 placeholder image digest; T13 (docker build/push) was skipped, so this digest references no published image (see deploy/phala/README.md)
-```
+- exit URL: `https://d2c65be0bde4f9b7628ef399310823e9e6339251-18200.dstack-pha1-prod9.phala.network` (also in
+  `deploy/testnet/env.live`)
+- dstack compose hash `6b56436b06a60c2739c0718f198812b5727f98b72467c0335f72b5e01277e2c0`, allowed by the owner in tx
+  `8fU3ScGVptLev9qdGbBsW72kJDcye9CzKTLpQzaKh8dm`; OS measurement `821d442f…d323d` (already allowed)
+- registration (all 13 on-chain checks): tx `HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8`
 
-Recompute it with:
+## The image (T13)
+
+`ghcr.io/erhantrk/provenexit-exit@sha256:7e53f383a6ea8ea8e537ad35c1d11665ca07540f537fe3d0c656879a92e61ad5` (public,
+`linux/amd64`). [`Dockerfile`](Dockerfile): `node:22-bookworm-slim` pinned by digest, plus the `vpn-honest` bundle and
+its SPEC-VPN §2 policy. Build and push with `scripts/build-exit-image.sh` (`IMAGE=…` to change the registry). Any
+change to the image gives a new digest, so a new compose hash that the owner must approve again (`allow_compose`).
+The build is not reproducible yet: no build provenance is published.
+
+## Deploy
 
 ```sh
-printf '%s' 'provenexit-exit: S1-F2 placeholder image digest; T13 (docker build/push) was skipped, so this digest references no published image (see deploy/phala/README.md)' | shasum -a 256
-# 5e8c74ff72b68b80fef52e219fb94c56d4e02a65d5a00c12cd302674d7167ce3
+# the operator key is the only secret: an env file, encrypted by phala to the CVM, never committed
+phala deploy -n provenexit-exit -c deploy/phala/docker-compose.yml -t tdx.small --image dstack-0.6.1 --no-dev-os \
+  -e <env file with PLR_OPERATOR_KEY=ed25519:…> --no-public-logs
+node client/dist/cli.js vpn inspect   # with PLR_VPN_URL etc. from deploy/testnet/env.live: compose hash + OS measurement
+scripts/owner.sh allow_compose '{"hash":"<compose hash>"}'   # the exit retries registration with backoff (≤ 5 min)
 ```
 
-`docker pull ghcr.io/erhantrk/provenexit-exit@sha256:5e8c74ff…` therefore fails. Before any real deploy: build
-and push the image (T13), put the returned digest here, and re-approve the compose hash on chain
-(`scripts/owner.sh allow_compose`) — any edit to this file is a different measured compose.
+Use a production OS image (`phala os-images`, DEV `no`): the dev images allow SSH into the CVM.
 
 Policy check (INTERFACES §1.4: every image pinned by digest and not built, no `privileged`, service `exit` with
 `logging.driver: none`):
 
 ```sh
 node --input-type=module -e "import fs from 'node:fs'; const {checkDstackComposePolicy}=await import('./packages/shared/dist/index.js'); console.log(checkDstackComposePolicy(JSON.stringify({runner:'docker-compose',docker_compose_file:fs.readFileSync('deploy/phala/docker-compose.yml','utf8')})))"
-# { images: [ 'ghcr.io/erhantrk/provenexit-exit@sha256:5e8c74ff…' ] }
+# { images: [ 'ghcr.io/erhantrk/provenexit-exit@sha256:7e53f383…' ] }
 ```
 
 (`node -e` without `--input-type=module` hits Node 22's `ERR_AMBIGUOUS_MODULE_SYNTAX` because the one-liner mixes
