@@ -20,7 +20,7 @@ import {
   type RegistryReader,
   type VerifyContext,
 } from "@plr/shared";
-import { AttestationCache, fetchPccsCollateral, isPccsUrl, loadConfig, loadVpnConfig } from "../src/index.js";
+import { AttestationCache, fetchPccsCollateral, isPccsUrl, loadVpnConfig } from "../src/index.js";
 
 const VECTORS = new URL("../../packages/shared/test/vectors/dcap/", import.meta.url);
 const QUOTE = new Uint8Array(readFileSync(new URL("tdx_quote.bin", VECTORS)));
@@ -99,13 +99,11 @@ class RecordingVerifier implements QuoteVerifier {
 const registry: RegistryReader = {
   chain: "near",
   contractId: "pe-vpnreg-erhan.testnet",
-  verifiesOnChain: true,
   getRoot: async () => ({ kind: "INTEL", p256: toHex(INTEL_ROOT_P256) }),
   isComposeAllowed: async () => true,
   isOsAllowed: async () => true,
   getInstance: async () => null,
   getAnchor: async () => null,
-  getRegistrationQuote: async () => null,
 };
 
 /** Passes `verifyAttestation`'s shape and root checks so the verifier is reached; the quote is the real TV-Q1. */
@@ -216,15 +214,12 @@ describe("PLR_PCCS_URL config", () => {
   const base = {
     PLR_NEAR_RPC: "https://rpc.testnet.fastnear.com",
     PLR_TRUSTED_ROOT: toHex(INTEL_ROOT_P256),
-    PLR_REGISTRY: "pe-reg-erhan.testnet",
     PLR_VPN_REGISTRY: "pe-vpnreg-erhan.testnet",
   };
 
   it("accepts an https PCCS and leaves it undefined when unset", () => {
     expect(loadVpnConfig({ ...base, PLR_PCCS_URL: "https://pccs.phala.network" }).pccsUrl).toBe("https://pccs.phala.network");
-    expect(loadConfig({ ...base, PLR_PCCS_URL: "https://pccs.phala.network" }).pccsUrl).toBe("https://pccs.phala.network");
     expect(loadVpnConfig(base).pccsUrl).toBeUndefined();
-    expect(loadConfig(base).pccsUrl).toBeUndefined();
   });
 
   it("rejects a non-https or oversized PCCS URL", () => {
@@ -234,7 +229,6 @@ describe("PLR_PCCS_URL config", () => {
     expect(isPccsUrl(`https://pccs.example/${"a".repeat(2048)}`)).toBe(false);
     for (const u of ["http://pccs.example", "pccs.example", "ftp://pccs.example"]) {
       expect(() => loadVpnConfig({ ...base, PLR_PCCS_URL: u }), u).toThrow(/PLR_PCCS_URL/);
-      expect(() => loadConfig({ ...base, PLR_PCCS_URL: u }), u).toThrow(/PLR_PCCS_URL/);
     }
   });
 });

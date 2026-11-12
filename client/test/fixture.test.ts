@@ -200,7 +200,6 @@ describe("readFixture", () => {
     expect(r.meta.exit_url).toContain("phala.network");
     expect(r.nonce).toHaveLength(32);
     expect(r.bundle.root_kind).toBe("INTEL");
-    expect(r.registry.verifiesOnChain).toBe(true);
     expect(r.registry.contractId).toBe(REGISTRY);
     expect(r.registry.now?.()).toBe(CAPTURED_AT);
   });

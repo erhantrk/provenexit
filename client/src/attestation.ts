@@ -56,8 +56,6 @@ export class AttestationCache {
   readonly #o: AttestationCacheOptions;
   #session: AttestationSession | undefined;
   #pending: Promise<AttestationSession> | undefined;
-  /** Keys of the last successful verification (kept across expiry/invalidation; used only as an anchor-signer hint). */
-  #keys: { x25519: Uint8Array; ed25519: Uint8Array } | undefined;
 
   constructor(o: AttestationCacheOptions) {
     this.#o = { ...o, trustedRoot: o.trustedRoot.slice() };
@@ -81,7 +79,6 @@ export class AttestationCache {
       });
       const session: AttestationSession = { verified, attNonce: nonce, at: this.#o.clock(), appCompose: bundle.app_compose };
       this.#session = session;
-      this.#keys = { x25519: verified.x25519.slice(), ed25519: verified.ed25519.slice() };
       return session;
     } catch (e) {
       this.#session = undefined;
@@ -115,15 +112,6 @@ export class AttestationCache {
       this.#pending = undefined;
     });
     return this.#pending;
-  }
-
-  /**
-   * The x25519/ed25519 keys of the last successful verification, or undefined. Attested keys stay authentic after the
-   * session expires, so they may check signatures of that instance (SPEC-CHAINS §2 anchors) when the key hash matches.
-   */
-  get verifiedKeys(): { x25519: Uint8Array; ed25519: Uint8Array } | undefined {
-    const k = this.#keys;
-    return k === undefined ? undefined : { x25519: k.x25519.slice(), ed25519: k.ed25519.slice() };
   }
 
   /** Forgets the cached verification; the next {@link current} re-attests. */

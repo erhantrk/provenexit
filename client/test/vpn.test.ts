@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { connect as tcpConnect, type Socket } from "node:net";
 import { lookup as realLookup } from "node:dns";
 import { PlrError, verifyVpnReceipt, toHex, type RegistryReader } from "@plr/shared";
-import { VpnClient, PrivateClient, startVpn, type VpnStream } from "../src/index.js";
+import { VpnClient, startVpn, type VpnStream } from "../src/index.js";
 import { startFakeExit, startDestination, type FakeExit, type FakeDestination } from "./fake-exit.js";
 
 let X: FakeExit;
@@ -213,8 +213,6 @@ describe("VpnClient — verification before every connection (§7)", () => {
     const tracing: RegistryReader = {
       chain: reg.chain,
       contractId: reg.contractId,
-      verifiesOnChain: true, // tier A fixture (SPEC-CHAINS §2)
-      getRegistrationQuote: async () => null,
       getRoot: () => (calls.push("getRoot"), reg.getRoot()),
       isComposeAllowed: (h) => (calls.push("isComposeAllowed"), reg.isComposeAllowed(h)),
       isOsAllowed: (h) => (calls.push("isOsAllowed"), reg.isOsAllowed(h)),
@@ -235,8 +233,6 @@ describe("VpnClient — verification before every connection (§7)", () => {
     const flaky: RegistryReader = {
       chain: reg.chain,
       contractId: reg.contractId,
-      verifiesOnChain: true, // tier A fixture (SPEC-CHAINS §2)
-      getRegistrationQuote: async () => null,
       getRoot: () => reg.getRoot(),
       isComposeAllowed: (h) => (down ? Promise.reject(new Error("rpc down")) : reg.isComposeAllowed(h)),
       isOsAllowed: (h) => reg.isOsAllowed(h),
@@ -282,12 +278,6 @@ describe("VpnClient — verification before every connection (§7)", () => {
       expect(await codeOf(c.connect(h, p)), `${h}:${p}`).toBe("E_BAD_INPUT");
     expect(await codeOf(c.connect(42 as never, 80))).toBe("E_BAD_INPUT");
     expect(X.stats.attestations).toBe(0);
-  });
-
-  it("an LLM-router attestation is not a VPN exit: the VPN registry refuses its compose", async () => {
-    // Same root, but the VPN registry only allows the VPN compose; a PrivateClient on the VPN registry fails too.
-    X.registry.revokeCompose(X.composeHash);
-    expect(await codeOf(new PrivateClient({ routerUrl: X.url, registry: X.registry, trustedRoot: X.root.publicKey }).attest())).toBe("E_COMPOSE_NOT_ALLOWED");
   });
 });
 

@@ -163,8 +163,6 @@ async function inspect(o: { defect?: Defect; verifier?: StubVerifier; fail?: Plr
     ["vpn", "inspect"],
     { PLR_VPN_URL: srv.url },
     { out: (s) => out.push(s), err: (s) => err.push(s) },
-    () => undefined,
-    undefined,
     undefined,
     o.verifier ?? stubVerifier(o.fail),
   );
@@ -239,8 +237,8 @@ describe("plr vpn inspect: usage", () => {
     const out: string[] = [];
     const err: string[] = [];
     const io = { out: (s: string) => out.push(s), err: (s: string) => err.push(s) };
-    expect(await runCli(["vpn", "inspect", "extra"], {}, io, () => undefined)).toBe(2);
-    expect(await runCli(["vpn", "inspect"], { PLR_VPN_URL: "file:///etc/passwd" }, io, () => undefined)).toBe(2);
+    expect(await runCli(["vpn", "inspect", "extra"], {}, io)).toBe(2);
+    expect(await runCli(["vpn", "inspect"], { PLR_VPN_URL: "file:///etc/passwd" }, io)).toBe(2);
     expect(err.join("\n")).toContain("PLR_VPN_URL");
   });
 });

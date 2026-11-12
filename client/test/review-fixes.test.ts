@@ -1,42 +1,29 @@
 // Regression tests for review findings on the client:
 //  - registry RPC over plain http to a remote host (forgeable policy answers) is refused;
-//  - `plr chat` reads the prompt from stdin;
-//  - receipt inclusion proofs are positioned with the CHAIN's anchor (first_seq/count), never the router's;
+//  - receipt inclusion proofs are positioned with the CHAIN's anchor (first_seq/count), never the exit's;
 //  - non-integer JSON number literals (`3.0`, `3e0`) never pass as integers (same as the Rust contract).
 import { describe, it, expect, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { Readable } from "node:stream";
 import {
-  MemoryRegistry,
   MockRoot,
+  MockVerifier,
   PlrError,
   merkleProof,
   merkleRoot,
   parseJsonIntegers,
   parseQuote,
   fromHex,
-  receiptLeaf,
   toHex,
+  verifyAttestation,
   verifyEventLog,
+  vpnReceiptLeaf,
   type AnchorRecord,
-  type Receipt,
   type RegistryReader,
+  type VpnReceipt,
 } from "@plr/shared";
-import {
-  ConfigError,
-  MAX_STDIN_PROMPT,
-  NearRegistry,
-  PrivateClient,
-  checkRpcUrl,
-  isLoopbackHost,
-  loadConfig,
-  readStdinText,
-  runCli,
-  verifyReceiptAnchored,
-} from "../src/index.js";
-import { makeFakeRouter, type FakeRouter } from "./fake-router.js";
-import { registryHandler, startFakeRpc } from "./fake-rpc.js";
+import { ConfigError, NearRegistry, VpnClient, checkRpcUrl, isLoopbackHost, loadVpnConfig, runCli, verifyVpnReceiptAnchored } from "../src/index.js";
+import { startFakeExit } from "./fake-exit.js";
 
 const closers: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -56,7 +43,7 @@ const codeOf = async (p: Promise<unknown>): Promise<string> => {
 
 describe("registry RPC transport (the RPC answers decide checks 3, 8, 9)", () => {
   const root = toHex(MockRoot.generate().publicKey);
-  const env = (rpc: string) => ({ PLR_NEAR_RPC: rpc, PLR_REGISTRY: "registry.test.near", PLR_TRUSTED_ROOT: root });
+  const env = (rpc: string) => ({ PLR_NEAR_RPC: rpc, PLR_VPN_REGISTRY: "registry.test.near", PLR_TRUSTED_ROOT: root });
 
   it("refuses plain http to any non-loopback host", () => {
     for (const u of [
@@ -86,184 +73,104 @@ describe("registry RPC transport (the RPC answers decide checks 3, 8, 9)", () =>
   });
 
   it("the CLI rejects PLR_NEAR_RPC=http://<remote> as a config error", async () => {
-    expect(() => loadConfig(env("http://rpc.example:3030"))).toThrow(ConfigError);
-    expect(loadConfig(env("https://rpc.example")).rpcUrl).toBe("https://rpc.example");
-    expect(loadConfig({ PLR_REGISTRY: "registry.test.near", PLR_TRUSTED_ROOT: root }).rpcUrl).toBe("http://127.0.0.1:3030");
+    expect(() => loadVpnConfig(env("http://rpc.example:3030"))).toThrow(ConfigError);
+    expect(loadVpnConfig(env("https://rpc.example")).rpcUrl).toBe("https://rpc.example");
+    expect(loadVpnConfig({ PLR_VPN_REGISTRY: "registry.test.near", PLR_TRUSTED_ROOT: root }).rpcUrl).toBe("http://127.0.0.1:3030");
     const err: string[] = [];
-    const code = await runCli(["verify"], env("http://rpc.example:3030"), { out: () => undefined, err: (s) => err.push(s) }, () => undefined);
+    const code = await runCli(["vpn", "verify"], env("http://rpc.example:3030"), { out: () => undefined, err: (s) => err.push(s) });
     expect(code).toBe(2);
     expect(err.join("\n")).toContain("PLR_NEAR_RPC");
   });
 });
 
-// ------------------------------------------------------------------------------------------ plr chat via stdin
-
-describe("plr chat reads the prompt from stdin", () => {
-  async function stack() {
-    const r = makeFakeRouter();
-    const srv = await r.listen();
-    const rpc = await startFakeRpc(registryHandler(r.registry));
-    closers.push(srv.close, rpc.close);
-    const env = { PLR_ROUTER_URL: srv.url, PLR_NEAR_RPC: rpc.url, PLR_REGISTRY: "registry.test.near", PLR_TRUSTED_ROOT: toHex(r.root.publicKey) };
-    return { r, env };
-  }
-  const io = () => {
-    const err: string[] = [];
-    const deltas: string[] = [];
-    return { err, deltas, io: { out: () => undefined, err: (s: string) => err.push(s) }, write: (s: string) => deltas.push(s) };
-  };
-
-  it("with no argument and with '-'; one trailing newline is dropped", async () => {
-    for (const argv of [["chat"], ["chat", "-"]]) {
-      const { r, env } = await stack();
-      const t = io();
-      expect(await runCli(argv, env, t.io, t.write, async () => "secret from stdin\n")).toBe(0);
-      expect(JSON.parse(r.stats.plaintexts[0]!).messages).toEqual([{ role: "user", content: "secret from stdin" }]);
-      expect(t.deltas.join("")).toBe("Hello, wörld 🌍\n");
-    }
-  });
-
-  it("empty, unreadable or oversized stdin is a usage error and nothing is sent", async () => {
-    const { r, env } = await stack();
-    for (const read of [async () => "", async () => "  \n", async () => { throw new Error("EIO"); }]) {
-      const t = io();
-      expect(await runCli(["chat"], env, t.io, t.write, read)).toBe(2);
-    }
-    expect(r.stats.chats).toBe(0);
-    await expect(readStdinText(Readable.from([Buffer.alloc(MAX_STDIN_PROMPT + 1, 0x61)]))).rejects.toThrow();
-    await expect(readStdinText(Readable.from([Buffer.from([0xff, 0xfe])]))).rejects.toThrow(); // not UTF-8
-    expect(await readStdinText(Readable.from([Buffer.from("héllo")]))).toBe("héllo");
-  });
-
-  it("never reads stdin when the configuration is invalid", async () => {
-    let read = false;
-    const t = io();
-    expect(await runCli(["chat"], {}, t.io, t.write, async () => { read = true; return "x"; })).toBe(2);
-    expect(read).toBe(false);
-  });
-
-  it("help recommends stdin", async () => {
-    const t = io();
-    expect(await runCli(["--help"], {}, t.io, t.write)).toBe(2);
-    expect(t.err.join("\n")).toMatch(/stdin/);
-  });
-});
-
 // ------------------------------------------------------------------------------------------ anchored proofs
 
-describe("verifyAnchored: positions come from the chain, never from the router", () => {
-  /** A fake router that has served `n` receipts, an on-chain anchor over them, and a proof endpoint. */
-  async function anchoredStack(n: number, o: { firstSeq?: number; otherKeyHash?: boolean } = {}) {
-    const r: FakeRouter = makeFakeRouter();
-    const client0 = new PrivateClient({ routerUrl: "http://router.test", registry: r.registry, trustedRoot: r.root.publicKey, fetch: r.fetch });
-    const receipts: Receipt[] = [];
-    for (let i = 0; i < n; i++) receipts.push((await client0.chat({ messages: [{ role: "user", content: `q${i}` }] })).receipt);
+describe("verifyAnchored: positions come from the chain, never from the exit", () => {
+  /** `n` session receipts of one instance, an on-chain anchor over them, and the exit's (untrusted) proof reply. */
+  function anchoredStack(n: number, o: { firstSeq?: number; otherKeyHash?: boolean } = {}) {
+    const keyHash = "a1".repeat(32);
+    const receipts: VpnReceipt[] = [];
+    for (let seq = 0; seq < n; seq++) {
+      receipts.push({ v: 1, th: toHex(new Uint8Array(32).fill(seq + 1)), compose_hash: "c0".repeat(32), key_hash: keyHash, seq, ts_open_ms: 1_000 + seq, ts_close_ms: 2_000 + seq });
+    }
     const firstSeq = o.firstSeq ?? 0;
     const batch = receipts.slice(firstSeq);
-    const leaves = batch.map(receiptLeaf);
+    const leaves = batch.map(vpnReceiptLeaf);
     const root = toHex(merkleRoot(leaves));
     const anchors: AnchorRecord[] = [
       { id: 0, key_hash: "ee".repeat(32), root: "ab".repeat(32), first_seq: 0, count: 5, at_ms: 1 }, // another instance
-      { id: 1, key_hash: o.otherKeyHash ? "ee".repeat(32) : r.keyHash, root, first_seq: firstSeq, count: batch.length, at_ms: 2 },
+      { id: 1, key_hash: o.otherKeyHash ? "ee".repeat(32) : keyHash, root, first_seq: firstSeq, count: batch.length, at_ms: 2 },
     ];
     const chain: RegistryReader = {
       chain: "memory",
-      contractId: r.registry.contractId,
-      verifiesOnChain: true, // tier A fixture (SPEC-CHAINS §2)
-      getRegistrationQuote: async () => null,
-      getRoot: () => r.registry.getRoot(),
-      isComposeAllowed: (h) => r.registry.isComposeAllowed(h),
-      isOsAllowed: (h) => r.registry.isOsAllowed(h),
-      getInstance: (k) => r.registry.getInstance(k),
+      contractId: "registry.test.near",
+      getRoot: async () => ({ kind: "MOCK", p256: "11".repeat(64) }),
+      isComposeAllowed: async () => true,
+      isOsAllowed: async () => true,
+      getInstance: async () => null,
       getAnchor: async (id) => anchors[id] ?? null,
     };
-    /** What the (untrusted) router answers on /v1/receipts/proof; tests tamper with it. */
-    const honestReply = (seq: number): { status: number; body: unknown } => {
-      // A self-consistent reply; for a seq outside the batch the router "proves" leaf 0 and claims it is ours.
+    /** A self-consistent reply; for a seq outside the batch the exit "proves" leaf 0 and claims it is ours. */
+    const honest = (seq: number): Record<string, unknown> => {
       const index = Math.max(0, seq - firstSeq);
-      return {
-        status: 200,
-        body: { anchor_id: 1, first_seq: firstSeq, count: batch.length, index, root, proof: merkleProof(leaves, index).map(toHex) },
-      };
+      return { anchor_id: 1, first_seq: firstSeq, count: batch.length, index, root, proof: merkleProof(leaves, index).map(toHex) };
     };
-    let reply = honestReply;
-    const fetchFn: typeof fetch = async (input, init) => {
-      const url = new URL(String(input instanceof Request ? input.url : input));
-      if (url.pathname === "/v1/receipts/proof") {
-        const { status, body } = reply(Number(url.searchParams.get("seq")));
-        return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-      }
-      return r.fetch(input, init);
-    };
-    const client = new PrivateClient({ routerUrl: "http://router.test", registry: chain, trustedRoot: r.root.publicKey, fetch: fetchFn });
-    return { r, client, receipts, leaves, root, anchors, setReply: (f: typeof reply) => { reply = f; }, honest: honestReply };
+    const check = (rc: VpnReceipt, reply: unknown = honest(rc.seq), registry: RegistryReader = chain) =>
+      verifyVpnReceiptAnchored({ receipt: rc, reply, registry });
+    return { receipts, leaves, root, check, honest };
   }
 
   it("accepts an honest proof and reports the chain's position", async () => {
-    const s = await anchoredStack(5);
+    const s = anchoredStack(5);
     for (const rc of s.receipts) {
-      const a = await s.client.verifyAnchored(rc);
-      expect(a).toMatchObject({ anchorId: 1, root: s.root, firstSeq: 0, count: 5, index: rc.seq });
+      expect(await s.check(rc)).toMatchObject({ anchorId: 1, root: s.root, firstSeq: 0, count: 5, index: rc.seq });
     }
   });
 
-  it("router-supplied count / index / first_seq / root that disagree with the chain → E_ANCHOR_MISMATCH", async () => {
-    const s = await anchoredStack(5);
-    const base = s.honest;
+  it("exit-supplied count / index / first_seq / root that disagree with the chain → E_ANCHOR_MISMATCH", async () => {
+    const s = anchoredStack(5);
     const rc = s.receipts[4]!;
-    const tamper = (f: (b: Record<string, unknown>) => void) =>
-      s.setReply((seq) => {
-        const r0 = base(seq);
-        const b = { ...(r0.body as Record<string, unknown>) };
-        f(b);
-        return { status: 200, body: b };
-      });
+    const tampered = (f: (b: Record<string, unknown>) => void): Record<string, unknown> => {
+      const b = { ...s.honest(rc.seq) };
+      f(b);
+      return b;
+    };
     // Classic RFC 6962 confusion: a proof for the last leaf of a 4-leaf tree claimed for size 4 / index 3.
-    tamper((b) => {
+    expect(await codeOf(s.check(rc, tampered((b) => {
       b.count = 4;
       b.index = 3;
       b.proof = merkleProof(s.leaves.slice(0, 4), 3).map(toHex);
-    });
-    expect(await codeOf(s.client.verifyAnchored(rc))).toBe("E_ANCHOR_MISMATCH");
-    tamper((b) => { b.index = 3; });
-    expect(await codeOf(s.client.verifyAnchored(rc))).toBe("E_ANCHOR_MISMATCH");
-    tamper((b) => { b.first_seq = 1; });
-    expect(await codeOf(s.client.verifyAnchored(rc))).toBe("E_ANCHOR_MISMATCH");
-    tamper((b) => { b.root = "cd".repeat(32); });
-    expect(await codeOf(s.client.verifyAnchored(rc))).toBe("E_ANCHOR_MISMATCH");
-    tamper((b) => { b.anchor_id = 0; }); // another instance's anchor
-    expect(await codeOf(s.client.verifyAnchored(rc))).toBe("E_ANCHOR_MISMATCH");
-    tamper((b) => { b.proof = (b.proof as string[]).map(() => "00".repeat(32)); });
-    expect(await codeOf(s.client.verifyAnchored(rc))).toBe("E_ANCHOR_MISMATCH");
-    tamper((b) => { b.anchor_id = 7; }); // not on chain
-    expect(await codeOf(s.client.verifyAnchored(rc))).toBe("E_NOT_ANCHORED");
-    tamper((b) => { b.extra = 1; });
-    expect(await codeOf(s.client.verifyAnchored(rc))).toBe("E_BAD_RESPONSE");
-    tamper((b) => { b.index = 4.0000001; });
-    expect(await codeOf(s.client.verifyAnchored(rc))).toBe("E_BAD_RESPONSE");
-    s.setReply(() => ({ status: 404, body: { error: "E_NOT_ANCHORED" } }));
-    expect(await codeOf(s.client.verifyAnchored(rc))).toBe("E_NOT_ANCHORED");
+    })))).toBe("E_ANCHOR_MISMATCH");
+    expect(await codeOf(s.check(rc, tampered((b) => { b.index = 3; })))).toBe("E_ANCHOR_MISMATCH");
+    expect(await codeOf(s.check(rc, tampered((b) => { b.first_seq = 1; })))).toBe("E_ANCHOR_MISMATCH");
+    expect(await codeOf(s.check(rc, tampered((b) => { b.root = "cd".repeat(32); })))).toBe("E_ANCHOR_MISMATCH");
+    expect(await codeOf(s.check(rc, tampered((b) => { b.anchor_id = 0; })))).toBe("E_ANCHOR_MISMATCH"); // another instance's anchor
+    expect(await codeOf(s.check(rc, tampered((b) => { b.proof = (b.proof as string[]).map(() => "00".repeat(32)); })))).toBe("E_ANCHOR_MISMATCH");
+    expect(await codeOf(s.check(rc, tampered((b) => { b.anchor_id = 7; })))).toBe("E_NOT_ANCHORED"); // not on chain
+    expect(await codeOf(s.check(rc, tampered((b) => { b.extra = 1; })))).toBe("E_BAD_RESPONSE");
+    expect(await codeOf(s.check(rc, tampered((b) => { b.index = 4.0000001; })))).toBe("E_BAD_RESPONSE");
   });
 
-  it("a receipt outside the chain's [first_seq, first_seq+count) is rejected even with a self-consistent router reply", async () => {
-    const s = await anchoredStack(4, { firstSeq: 2 }); // anchor covers seq 2..3
-    expect(await codeOf(s.client.verifyAnchored(s.receipts[3]!))).toBe("NO_THROW");
-    expect(await codeOf(s.client.verifyAnchored(s.receipts[0]!))).toBe("E_ANCHOR_MISMATCH");
-    // Even if the router rewrites first_seq/index to make seq 0 look like index 0 of a batch starting at 0.
-    s.setReply(() => ({ status: 200, body: { ...(s.honest(2).body as object), first_seq: 0, index: 0 } }));
-    expect(await codeOf(s.client.verifyAnchored(s.receipts[0]!))).toBe("E_ANCHOR_MISMATCH");
+  it("a receipt outside the chain's [first_seq, first_seq+count) is rejected even with a self-consistent exit reply", async () => {
+    const s = anchoredStack(4, { firstSeq: 2 }); // anchor covers seq 2..3
+    expect(await codeOf(s.check(s.receipts[3]!))).toBe("NO_THROW");
+    expect(await codeOf(s.check(s.receipts[0]!))).toBe("E_ANCHOR_MISMATCH");
+    // Even if the exit rewrites first_seq/index to make seq 0 look like index 0 of a batch starting at 0.
+    expect(await codeOf(s.check(s.receipts[0]!, { ...s.honest(2), first_seq: 0, index: 0 }))).toBe("E_ANCHOR_MISMATCH");
   });
 
   it("an anchor of another instance never validates our receipt", async () => {
-    const s = await anchoredStack(3, { otherKeyHash: true });
-    expect(await codeOf(s.client.verifyAnchored(s.receipts[0]!))).toBe("E_ANCHOR_MISMATCH");
+    const s = anchoredStack(3, { otherKeyHash: true });
+    expect(await codeOf(s.check(s.receipts[0]!))).toBe("E_ANCHOR_MISMATCH");
   });
 
   it("the pure verifier also maps registry failures to E_REGISTRY_UNAVAILABLE", async () => {
-    const s = await anchoredStack(1);
-    const broken: RegistryReader = { ...s.r.registry, chain: "x", contractId: "x", getAnchor: async () => { throw new Error("down"); } } as unknown as RegistryReader;
-    const reply = s.honest(0).body;
-    expect(await codeOf(verifyReceiptAnchored({ receipt: s.receipts[0]!, reply, registry: broken }))).toBe("E_REGISTRY_UNAVAILABLE");
+    const s = anchoredStack(1);
+    const broken: RegistryReader = {
+      chain: "x", contractId: "x", getRoot: async () => ({ kind: "MOCK", p256: "11".repeat(64) }), isComposeAllowed: async () => true,
+      isOsAllowed: async () => true, getInstance: async () => null, getAnchor: async () => { throw new Error("down"); },
+    };
+    expect(await codeOf(s.check(s.receipts[0]!, s.honest(0), broken))).toBe("E_REGISTRY_UNAVAILABLE");
   });
 });
 
@@ -300,24 +207,22 @@ describe("non-integer JSON number literals never pass as integers (TS == Rust)",
   });
 
   it("an attestation whose event log says imr 3.0 / 3e0 is refused with E_EVENT_LOG", async () => {
+    const X = await startFakeExit();
+    closers.push(X.close);
     for (const lit of ["3.0", "3e0", "0.3e1"]) {
-      const r = makeFakeRouter();
-      const f: typeof fetch = async (input, init) => {
-        const res = await r.fetch(input, init);
-        if (!new URL(String(input)).pathname.startsWith("/v1/attestation")) return res;
-        const text = (await res.text()).replace('"imr":3,', `"imr":${lit},`);
-        expect(text).toContain(`"imr":${lit},`);
-        return new Response(text, { status: res.status, headers: res.headers });
-      };
-      const c = new PrivateClient({ routerUrl: "http://router.test", registry: r.registry, trustedRoot: r.root.publicKey, fetch: f });
-      expect(await codeOf(c.attest()), lit).toBe("E_EVENT_LOG");
-      expect(r.stats.chats).toBe(0);
+      const nonce = crypto.getRandomValues(new Uint8Array(32));
+      const text = (await (await fetch(`${X.url}/v1/attestation?nonce=${toHex(nonce)}`)).text()).replace('"imr":3,', `"imr":${lit},`);
+      expect(text).toContain(`"imr":${lit},`);
+      const bundle = parseJsonIntegers(text) as never;
+      const verdict = verifyAttestation({ bundle, nonce, verifier: new MockVerifier(X.root.publicKey), registry: X.registry, trustedRoot: X.root.publicKey });
+      expect(await codeOf(verdict), lit).toBe("E_EVENT_LOG");
     }
   });
 
   it("MemoryRegistry sanity: honest attestation still verifies", async () => {
-    const r = makeFakeRouter();
-    const c = new PrivateClient({ routerUrl: "http://router.test", registry: r.registry as MemoryRegistry, trustedRoot: r.root.publicKey, fetch: r.fetch });
+    const X = await startFakeExit();
+    closers.push(X.close);
+    const c = new VpnClient({ exitUrl: X.url, registry: X.registry, trustedRoot: X.root.publicKey });
     await expect(c.attest()).resolves.toBeTruthy();
   });
 });

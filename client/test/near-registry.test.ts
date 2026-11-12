@@ -1,18 +1,28 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { createServer } from "node:net";
 import { PlrError, verifyAttestation, MockVerifier, fromHex } from "@plr/shared";
-import { NearRegistry, PrivateClient } from "../src/index.js";
-import { makeFakeRouter } from "./fake-router.js";
+import { NearRegistry, VpnClient } from "../src/index.js";
+import { startFakeExit, type FakeExit } from "./fake-exit.js";
 import { registryHandler, startFakeRpc, type FakeRpc } from "./fake-rpc.js";
 
 let rpcs: FakeRpc[] = [];
+let exits: FakeExit[] = [];
 afterEach(async () => {
   for (const r of rpcs) await r.close();
+  for (const x of exits) await x.close();
   rpcs = [];
+  exits = [];
 });
 
+/** A fake exit (its MemoryRegistry plays the contract state) behind a fake NEAR RPC. */
+async function fakeExit(): Promise<FakeExit> {
+  const x = await startFakeExit();
+  exits.push(x);
+  return x;
+}
+
 async function setup() {
-  const router = makeFakeRouter();
+  const router = await fakeExit();
   const rpc = await startFakeRpc(registryHandler(router.registry));
   rpcs.push(rpc);
   const reg = new NearRegistry({ rpcUrl: rpc.url, contractId: "registry.test.near", timeoutMs: 1_000 });
@@ -60,7 +70,7 @@ describe("NearRegistry", () => {
   });
 
   it("accepts u64 fields encoded as decimal strings (near-sdk U64)", async () => {
-    const router = makeFakeRouter();
+    const router = await fakeExit();
     const rpc = await startFakeRpc(async (m) => {
       if (m === "get_instance") return { ...router.record, registered_at_ms: "1", expires_at_ms: String(router.record.expires_at_ms), next_seq: "7" };
       if (m === "get_anchor") return { id: "0", key_hash: router.keyHash, root: "ee".repeat(32), first_seq: "0", count: "3", at_ms: 5 };
@@ -73,7 +83,7 @@ describe("NearRegistry", () => {
   });
 
   it("copies org_id (SPEC §7 rev 1.2): approved org or null; a missing or malformed org_id is a malformed reply", async () => {
-    const router = makeFakeRouter();
+    const router = await fakeExit();
     let reply: unknown = { ...router.record, org_id: "org-a" };
     const rpc = await startFakeRpc(async (m) => {
       if (m === "get_instance") return reply;
@@ -160,13 +170,12 @@ describe("NearRegistry", () => {
 
   it("drives verifyAttestation end to end; an unreachable RPC maps to E_REGISTRY_UNAVAILABLE", async () => {
     const { router, reg } = await setup();
-    const c = new PrivateClient({ routerUrl: "http://router.test", registry: reg, trustedRoot: router.root.publicKey, fetch: router.fetch });
-    const res = await c.chat({ messages: [{ role: "user", content: "hi" }] });
-    expect(res.content.length).toBeGreaterThan(0);
+    const c = new VpnClient({ exitUrl: router.url, registry: reg, trustedRoot: router.root.publicKey });
+    await expect(c.attest()).resolves.toMatchObject({ rootKind: "MOCK" });
 
     const dead = new NearRegistry({ rpcUrl: `http://127.0.0.1:${await freePort()}`, contractId: "registry.test.near", timeoutMs: 2_000 });
     const nonce = crypto.getRandomValues(new Uint8Array(32));
-    const bundleRes = await router.fetch(`http://router.test/v1/attestation?nonce=${Buffer.from(nonce).toString("hex")}`);
+    const bundleRes = await fetch(`${router.url}/v1/attestation?nonce=${Buffer.from(nonce).toString("hex")}`);
     const err = await verifyAttestation({
       bundle: (await bundleRes.json()) as never, nonce, verifier: new MockVerifier(router.root.publicKey),
       registry: dead, trustedRoot: fromHex(Buffer.from(router.root.publicKey).toString("hex"), 64),

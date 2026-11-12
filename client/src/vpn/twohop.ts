@@ -188,7 +188,7 @@ export class TwoHopClient {
     const res = await h.fetchProof(r.seq);
     if (res.status === 404) fail("E_NOT_ANCHORED");
     if (res.status !== 200) fail("E_BAD_RESPONSE", "proof HTTP status");
-    await verifyVpnReceiptAnchored({ receipt: r, reply: parseJsonBytes(res.body), registry: this.registry, signer: h.verifiedKeys });
+    await verifyVpnReceiptAnchored({ receipt: r, reply: parseJsonBytes(res.body), registry: this.registry });
     return true;
   }
 

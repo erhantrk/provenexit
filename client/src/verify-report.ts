@@ -1,7 +1,6 @@
-/** Human-readable per-check report of `verifyAttestation` for the CLI (`plr verify`). */
+/** Human-readable per-check report of `verifyAttestation` for the CLI (`plr vpn verify`). */
 import {
   CHECKS,
-  REGISTRATION_EVIDENCE_CHECK,
   PlrError,
   type AnchorRecord,
   type InstanceRecord,
@@ -11,9 +10,9 @@ import {
 } from "@plr/shared";
 
 type CheckKey = keyof typeof CHECKS;
-type RegistryMethod = "getRoot" | "isComposeAllowed" | "isOsAllowed" | "getInstance" | "getAnchor" | "getRegistrationQuote";
-/** A check line: one of SPEC §9 `CHECKS`, or SPEC-CHAINS §2 registration evidence (step 9b). */
-type StepKey = CheckKey | "REGISTRATION_EVIDENCE";
+type RegistryMethod = "getRoot" | "isComposeAllowed" | "isOsAllowed" | "getInstance" | "getAnchor";
+/** A check line: one of SPEC §9 `CHECKS`. */
+type StepKey = CheckKey;
 
 /** Registry wrapper that remembers the last method called, to attribute E_REGISTRY_UNAVAILABLE to a step. */
 export class TracingRegistry implements RegistryReader {
@@ -24,18 +23,6 @@ export class TracingRegistry implements RegistryReader {
   }
   get contractId(): string {
     return this.inner.contractId;
-  }
-  /** Forwarded strictly: anything but an explicit `true` counts as false (fail closed). */
-  get verifiesOnChain(): boolean {
-    try {
-      return this.inner.verifiesOnChain === true;
-    } catch {
-      return false;
-    }
-  }
-  getRegistrationQuote(keyHash: string, offered?: Uint8Array): Promise<Uint8Array | null> {
-    this.lastCall = "getRegistrationQuote";
-    return this.inner.getRegistrationQuote(keyHash, offered);
   }
   getRoot(): Promise<RegistryRoot> {
     this.lastCall = "getRoot";
@@ -72,10 +59,8 @@ const INTEL_ORDER: CheckKey[] = MOCK_ORDER.flatMap((k) =>
 );
 
 /** SPEC §9 order for MOCK, plus the two INTEL-only steps at their SPEC-TDX §3.1 positions. */
-function orderFor(o: { evidence?: boolean; intel?: boolean }): StepKey[] {
-  const order: StepKey[] = [...(o.intel === true ? INTEL_ORDER : MOCK_ORDER)];
-  if (o.evidence === true) order.push("REGISTRATION_EVIDENCE");
-  return order;
+function orderFor(o: { intel?: boolean }): StepKey[] {
+  return [...(o.intel === true ? INTEL_ORDER : MOCK_ORDER)];
 }
 
 /**
@@ -85,10 +70,7 @@ function orderFor(o: { evidence?: boolean; intel?: boolean }): StepKey[] {
 const LABELS: Partial<Record<CheckKey, string>> = {
   NONCE: `report_data binds client nonce as a session quote (SHA256("PLR-v1/session-nonce" ‖ nonce))`,
 };
-const label = (k: StepKey): string => (k === "REGISTRATION_EVIDENCE" ? REGISTRATION_EVIDENCE_LABEL : (LABELS[k] ?? CHECKS[k]));
-
-/** SPEC-CHAINS §2 wording for `plr verify`. */
-export const REGISTRATION_EVIDENCE_LABEL = `${REGISTRATION_EVIDENCE_CHECK} (registration evidence: the chain does not verify quotes)`;
+const label = (k: StepKey): string => LABELS[k] ?? CHECKS[k];
 
 const CODE_TO_CHECK: Partial<Record<PlrErrorCode, StepKey>> = {
   E_BAD_RESPONSE: "RESPONSE",
@@ -105,7 +87,6 @@ const CODE_TO_CHECK: Partial<Record<PlrErrorCode, StepKey>> = {
   E_COMPOSE_NOT_ALLOWED: "COMPOSE_ALLOWED",
   E_OS_NOT_ALLOWED: "OS_ALLOWED",
   E_INSTANCE_NOT_REGISTERED: "INSTANCE",
-  E_REGISTRATION_EVIDENCE: "REGISTRATION_EVIDENCE",
   E_TCB_STATUS: "TCB",
   E_COLLATERAL: "QUOTE_SIG",
   E_COMPOSE_POLICY: "COMPOSE_POLICY",
@@ -117,7 +98,6 @@ const REGISTRY_STEP: Record<RegistryMethod, StepKey> = {
   isOsAllowed: "OS_ALLOWED",
   getInstance: "INSTANCE",
   getAnchor: "INSTANCE",
-  getRegistrationQuote: "REGISTRATION_EVIDENCE",
 };
 
 export type CheckStatus = "pass" | "fail" | "skipped";
@@ -130,13 +110,12 @@ export interface CheckLine {
 /**
  * Per-check status. On success every check passed. On failure, `verifyAttestation` runs checks in the fixed
  * SPEC §9 order and stops at the first failure, so every earlier check passed and later ones did not run.
- * `o.evidence` (registries with `verifiesOnChain` false, SPEC-CHAINS §2) adds the registration-evidence step
- * after the instance check; `o.intel` (SPEC-TDX §3.1) adds the TCB and dstack-compose steps.
+ * `o.intel` (SPEC-TDX §3.1) adds the TCB and dstack-compose steps.
  */
 export function checkLines(
   err: unknown,
   lastRegistryCall?: RegistryMethod,
-  o: { evidence?: boolean; intel?: boolean } = {},
+  o: { intel?: boolean } = {},
 ): CheckLine[] {
   const order = orderFor(o);
   if (err === undefined) return order.map((k) => ({ name: label(k), status: "pass" }));

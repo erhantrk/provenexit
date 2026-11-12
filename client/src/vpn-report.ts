@@ -45,7 +45,7 @@ const fromLine = (l: CheckLine): VerifyCheck => ({
 export async function verifyVpnReport(client: VpnClient, registry: TracingRegistry): Promise<VerifyReport> {
   const root = client.rootKind;
   const intel = root === "INTEL";
-  const opts = { evidence: !registry.verifiesOnChain, intel };
+  const opts = { intel };
   const refused = (e: unknown, lines: CheckLine[], recheck: "skip" | "fail"): VerifyReport => {
     const code = errCode(e);
     const checks = lines.map(fromLine);

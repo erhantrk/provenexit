@@ -107,8 +107,6 @@ const ANCHOR_UINTS = ["id", "first_seq", "count", "at_ms"] as const;
 
 export class NearRegistry implements RegistryReader {
   readonly chain = "near";
-  /** Tier A: the contract verifies the registration quote at registration (SPEC-CHAINS §1, §2). */
-  readonly verifiesOnChain = true;
   readonly contractId: string;
   readonly rpcUrl: string;
   readonly #provider: JsonRpcProvider;
@@ -205,11 +203,6 @@ export class NearRegistry implements RegistryReader {
     if (v === null) return null;
     if (!isAnchorRecord(v)) throw new NearRegistryError("get_anchor: malformed reply");
     return { id: v.id, key_hash: v.key_hash, root: v.root, first_seq: v.first_seq, count: v.count, at_ms: v.at_ms };
-  }
-
-  /** Tier A: the contract checked the quote and does not store it (SPEC-CHAINS §2), so there is nothing to return. */
-  async getRegistrationQuote(_keyHash: string, _offered?: Uint8Array): Promise<Uint8Array | null> {
-    return null;
   }
 
   async anchorCount(): Promise<number> {

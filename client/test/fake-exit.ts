@@ -33,8 +33,27 @@ import {
   type ConnectErrCode,
   type InstanceRecord,
   type VpnReceipt,
+  registrationReportData,
+  reportData,
 } from "@plr/shared";
-import { quoteReportData } from "./fake-router.js";
+
+/** report_data a fake quotes for `nonce`: the §5 rev 1.3 session value unless a misbehaviour picks another purpose. */
+export function quoteReportData(
+  purpose: "raw-nonce" | "registration" | undefined,
+  xp: Uint8Array,
+  ep: Uint8Array,
+  nonce: Uint8Array,
+  reg: { contractId: string; operator: string },
+): Uint8Array {
+  if (purpose === "raw-nonce") {
+    const rd = new Uint8Array(64);
+    rd.set(keyHash(xp, ep), 0);
+    rd.set(nonce, 32);
+    return rd;
+  }
+  if (purpose === "registration") return registrationReportData(xp, ep, reg.contractId, reg.operator);
+  return reportData(xp, ep, nonce);
+}
 
 export const vpnCompose = (bundleSha = "33".repeat(32)): string =>
   JSON.stringify(
@@ -57,7 +76,7 @@ export interface ExitBehaviour {
   mitmKey?: boolean;
   /** Replay the first attestation bundle for every nonce. */
   replayAttestation?: boolean;
-  /** Quote a report_data of another purpose than §5 rev 1.3 session (see the fake router's `quotePurpose`). */
+  /** Quote a report_data of another purpose than §5 rev 1.3 session ({@link quoteReportData}). */
   quotePurpose?: "raw-nonce" | "registration";
   /** Answer every CONNECT with this CONNECT_ERR code. */
   connectErr?: ConnectErrCode;
@@ -122,7 +141,7 @@ export interface FakeExitOptions {
   operator?: string;
   /** Another build: `vpn.bundle_sha256` of the compose (default 33…33). */
   bundleSha?: string;
-  /** Measured compose text instead of the default `plr-vpn` one (e.g. a `plr-combo`, SPEC-COMBO). */
+  /** Measured compose text instead of the default `plr-vpn` one. */
   composeText?: string;
 }
 

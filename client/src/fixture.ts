@@ -94,7 +94,6 @@ function registryOptions(v: unknown, meta: FixtureMeta): MemoryRegistryOptions {
     instances: v.instances as Record<string, InstanceRecord>,
     chain: "near",
     contractId: meta.registry,
-    verifiesOnChain: true,
     now: () => meta.captured_at_ms,
   };
 }
@@ -146,7 +145,7 @@ export function fixtureVerifier(meta: FixtureMeta): DcapQvlVerifier {
 
 /**
  * SPEC-TDX §3.3: `verifyAttestation` over the recorded bundle, with the DCAP check at `captured_at_ms` and the
- * registry snapshot read through {@link MemoryRegistry} (`verifiesOnChain: true`, clock = `captured_at_ms`).
+ * registry snapshot read through {@link MemoryRegistry} (clock = `captured_at_ms`).
  * `verifier` exists for tests only: a synthetic fixture has no real Intel signature, so it needs a stub verifier.
  * @throws PlrError — the failing check's code (E_BAD_RESPONSE, E_QUOTE_*, E_COMPOSE_*, …)
  */

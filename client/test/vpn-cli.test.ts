@@ -41,29 +41,22 @@ describe("plr vpn verify", () => {
     expect(text).toContain("vpn-operator.test.near");
   });
 
-  it("shows the exit policy of a plr-combo compose (SPEC-COMBO: router + exit in one TD)", async () => {
+  it("shows the production exit policy (no loopback egress, DNS over HTTPS) without the TEST BUILD warning", async () => {
     const h = (b: string) => b.repeat(32);
-    const combo = JSON.stringify({
+    const prod = JSON.stringify({
       manifest_version: 1,
-      name: "plr-combo",
-      router: {
-        bundle_sha256: h("11"), entry: "router.bundle.mjs", node_sha256: h("44"),
-        llm: { kind: "mock", model_sha256: h("22"), runtime: "node", runtime_sha256: h("44") },
-        policy: { disk: "none", egress: [], logs: "none" },
-      },
-      vpn: {
-        bundle_sha256: h("33"), entry: "vpn.bundle.mjs", node_sha256: h("44"),
-        policy: { disk: "none", dns: { doh: ["https://1.1.1.1/dns-query"] }, egress: { allow_loopback: false, deny_private: true }, logs: "none" },
-      },
-    }) + "\n";
-    const X = await startFakeExit({ composeText: combo });
+      name: "plr-vpn",
+      policy: { disk: "none", dns: { doh: ["https://1.1.1.1/dns-query"] }, egress: { allow_loopback: false, deny_private: true }, logs: "none" },
+      vpn: { bundle_sha256: h("33"), entry: "vpn.bundle.mjs", node_sha256: h("44") },
+    }, null, 2) + "\n";
+    const X = await startFakeExit({ composeText: prod });
     const rpc = await startFakeRpc(registryHandler(X.registry));
     closers.push(X.close, rpc.close);
     const t = io();
     const env = { PLR_VPN_URL: X.url, PLR_NEAR_RPC: rpc.url, PLR_VPN_REGISTRY: "vpnregistry.test.near", PLR_TRUSTED_ROOT: toHex(X.root.publicKey) };
     expect(await runCli(["vpn", "verify"], env, t.io)).toBe(0);
     const text = t.out.join("\n");
-    expect(text).toContain("plr-combo · egress deny_private=true allow_loopback=false · DNS over HTTPS via https://1.1.1.1/dns-query");
+    expect(text).toContain("plr-vpn · egress deny_private=true allow_loopback=false · DNS over HTTPS via https://1.1.1.1/dns-query");
     expect(text).not.toContain("TEST BUILD");
   });
 
@@ -103,7 +96,7 @@ describe("plr vpn", () => {
         s.close(() => ok(p));
       });
     });
-    const run = runCli(["vpn"], { ...env, PLR_VPN_SOCKS_PORT: String(free) }, t.io, undefined, undefined, () => stopped);
+    const run = runCli(["vpn"], { ...env, PLR_VPN_SOCKS_PORT: String(free) }, t.io, () => stopped);
     for (let i = 0; i < 100 && !t.out.join("\n").includes("socks5h://"); i++) await new Promise((r) => setTimeout(r, 20));
     const text = t.out.join("\n");
     expect(text).toContain(`socks5h://127.0.0.1:${free}`);
@@ -135,7 +128,7 @@ describe("plr vpn", () => {
     const { X, env } = await stack();
     X.registry.revokeCompose(X.composeHash);
     const t = io();
-    expect(await runCli(["vpn"], env, t.io, undefined, undefined, () => Promise.resolve())).toBe(1);
+    expect(await runCli(["vpn"], env, t.io, () => Promise.resolve())).toBe(1);
     expect(t.err.join("\n")).toContain("E_COMPOSE_NOT_ALLOWED");
     expect(t.out.join("\n")).not.toContain("socks5h://");
   });
@@ -146,7 +139,7 @@ describe("plr vpn", () => {
     expect(t.err.join("\n")).toContain("plr vpn verify");
     const h = io();
     expect(await runCli(["--help"], {}, h.io)).toBe(2);
-    expect(h.err.join("\n")).toContain("plr vpn [verify]");
+    expect(h.err.join("\n")).toContain("plr vpn verify");
     expect(h.err.join("\n")).toContain("PLR_VPN_REGISTRY");
   });
 
@@ -262,7 +255,7 @@ describe("plr vpn — two-hop", () => {
         s.close(() => ok(p));
       });
     });
-    const run = runCli(["vpn"], { ...env, PLR_VPN_SOCKS_PORT: String(free) }, t.io, undefined, undefined, () => stopped);
+    const run = runCli(["vpn"], { ...env, PLR_VPN_SOCKS_PORT: String(free) }, t.io, () => stopped);
     for (let i = 0; i < 200 && !t.out.join("\n").includes("socks5h://"); i++) await new Promise((r) => setTimeout(r, 20));
     const text = t.out.join("\n");
     expect(text).toContain("two-hop VPN verified");
@@ -296,7 +289,7 @@ describe("plr vpn — two-hop", () => {
     const { E, env } = await twoHopStack();
     E.registry.approveOperator("exit-op.test.near", "org-a");
     const t = io();
-    expect(await runCli(["vpn"], env, t.io, undefined, undefined, () => Promise.resolve())).toBe(1);
+    expect(await runCli(["vpn"], env, t.io, () => Promise.resolve())).toBe(1);
     expect(t.err.join("\n")).toContain("E_SAME_OPERATOR");
     expect(t.out.join("\n")).not.toContain("socks5h://");
   });
