@@ -35,7 +35,7 @@ You see 16 `✔` lines and `✔ VERIFIED (FIXTURE REPLAY …)`. The full local d
 
 ## Tracks
 
-Proposed (Erhan confirms at submission): **Privacy & Private AI** (primary) · AI Security & Defense
+Proposed (Erhan confirms at submission): **Privacy & Private AI** (main) · AI Security & Defense · Open Innovation
 
 ## What NEAR does here
 
