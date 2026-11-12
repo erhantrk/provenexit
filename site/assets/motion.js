@@ -172,11 +172,31 @@ function heroFlow(animated) {
     return;
   }
 
+  // Two plays, then it rests in the end state (WCAG 2.2.2). The button pauses it at any time and
+  // plays it again from the start.
+  const PLAYS = 2;
+  const HOLD = 1400;
+  const btn = document.getElementById("flow-toggle");
+  let plays = 0;
+  let resting = false;
+  const label = () => { if (btn) btn.textContent = resting ? "Play again" : "Pause"; };
+  const rest = () => {
+    clearTimeout(timer);
+    gen += 1;
+    resting = true;
+    running = false;
+    delete fig.dataset.reset;
+    fig.classList.add("rest");
+    still();
+    label();
+  };
   const next = (g) => {
     if (g !== gen) return;
     if (!visible || document.visibilityState !== "visible") { running = false; return; }
     running = true;
     if (at >= last()) {
+      plays += 1;
+      if (plays >= PLAYS) { timer = setTimeout(() => { if (g === gen) rest(); }, 1800); return; }
       timer = setTimeout(() => {
         fig.dataset.reset = "1";
         at = 0;
@@ -190,11 +210,15 @@ function heroFlow(animated) {
     at += 1;
     const ms = at === 4 ? 900 : 650;
     tween(ms, (p) => place(from + (STOPS[at] - from) * p), null, inOut);
-    timer = setTimeout(() => { show(at); timer = setTimeout(() => next(g), at === 4 ? 0 : 750); }, ms);
+    timer = setTimeout(() => { show(at); timer = setTimeout(() => next(g), at === 4 ? 0 : HOLD); }, ms);
   };
   const restart = () => {
     clearTimeout(timer);
     gen += 1;
+    plays = 0;
+    resting = false;
+    fig.classList.remove("rest");
+    label();
     delete fig.dataset.reset;
     at = 0;
     place(STOPS[0]);
@@ -202,16 +226,20 @@ function heroFlow(animated) {
     running = visible;
     if (visible) { const g = gen; timer = setTimeout(() => next(g), 500); }
   };
-  flow.apply = restart;
+  // A new verdict while resting redraws the end state; while playing it starts over.
+  flow.apply = () => (resting ? rest() : restart());
+  fig.dataset.anim = "1";
+  label();
+  btn?.addEventListener("click", () => (resting ? restart() : rest()));
   place(STOPS[0]);
   show(0);
   watchers.add(() => {
     visible = inView(fig, 0.3);
-    if (visible && !running) { running = true; const g = gen; clearTimeout(timer); timer = setTimeout(() => next(g), 500); }
+    if (visible && !running && !resting) { running = true; const g = gen; clearTimeout(timer); timer = setTimeout(() => next(g), 500); }
   });
   queue();
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && visible && !running) { running = true; next(gen); }
+    if (document.visibilityState === "visible" && visible && !running && !resting) { running = true; next(gen); }
   });
   addEventListener("resize", () => place(STOPS[at]));
 }
