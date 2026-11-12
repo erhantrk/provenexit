@@ -1,6 +1,6 @@
 services:
   exit:
-    image: ghcr.io/erhantrk/provenexit-exit@sha256:7e53f383a6ea8ea8e537ad35c1d11665ca07540f537fe3d0c656879a92e61ad5
+    image: ghcr.io/erhantrk/provenexit-exit@sha256:74c6d1c52e2ce72698fb238e52e27d03eefe1770af00a1dae3405d3474f22785
     restart: always
     read_only: true
     cap_drop: [ALL]
