@@ -35,7 +35,7 @@ You see 16 `✔` lines and `✔ VERIFIED (FIXTURE REPLAY …)`. The full local d
 
 ## Tracks
 
-Proposed (Erhan confirms at submission): **Privacy & Private AI** (primary) · Open Innovation · AI Security & Defense
+Proposed (Erhan confirms at submission): **Privacy & Private AI** (primary) · AI Security & Defense
 
 ## What NEAR does here
 
@@ -316,6 +316,11 @@ Older history (commit timeline, multi-chain work, the October tour): [`docs/HIST
 `vitest`, `near-sdk` 5.29.1, the `dcap-qvl` 0.7.1 crate (MIT), `sha2`, `p256`, `ed25519-dalek`, `forge-std`.
 Test vectors from dcap-qvl's `sample/` (MIT). Infrastructure: Phala Cloud (dstack: the live exit and a test CVM), NEAR testnet,
 FASTNEAR RPC, Phala PCCS.
+
+## Other project by the same submitter (rule Q-015)
+
+Erhan also submits **ZeroInit**, an independent project that shares no code with this one (repository link added at
+submission).
 
 ## License
 
