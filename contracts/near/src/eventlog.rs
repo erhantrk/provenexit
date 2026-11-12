@@ -12,7 +12,7 @@ pub const EVENT_TYPE: u32 = 0x0800_0001;
 pub const EVENT_IMR: u64 = 3;
 pub const MAX_EVENTS: usize = 64;
 pub const MAX_EVENT_PAYLOAD: usize = 256;
-/// INTEL mode: dstack's `key-provider` payload is JSON (INTERFACES §0).
+/// INTEL mode: dstack's `key-provider` payload is JSON (SPEC-TDX §0).
 pub const DSTACK_MAX_EVENT_PAYLOAD: usize = 4096;
 pub const MAX_EVENT_NAME: usize = 128;
 pub const BOOT_SEQUENCE: [&str; 5] = ["system-preparing", "app-id", "compose-hash", "instance-id", "boot-mr-done"];
@@ -118,7 +118,7 @@ pub fn verify_event_log(events: &Value, rtmr3: &[u8; 48]) -> Result<BootInfo, Er
     Ok(BootInfo { compose_hash, app_id, instance_id })
 }
 
-/// Verifies a real dstack RTMR3 event log (INTERFACES §1.3, INTEL mode). Same shape, digest rule (V1 only), limits
+/// Verifies a real dstack RTMR3 event log (SPEC-TDX §1.3, INTEL mode). Same shape, digest rule (V1 only), limits
 /// and replay as [`verify_event_log`], with three differences: the boot events may sit anywhere in the log (dstack
 /// emits `key-provider`, `os-image-hash`, … around them), only their relative order is fixed; any other name may
 /// appear any number of times; and payloads may be up to [`DSTACK_MAX_EVENT_PAYLOAD`] bytes. There is no

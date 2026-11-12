@@ -21,7 +21,7 @@ import {
 } from "@plr/shared";
 import { fetchPccsCollateral } from "./pccs.js";
 
-/** `MAX_TDX_QUOTE_BYTES` (INTERFACES §0) in hex. */
+/** `MAX_TDX_QUOTE_BYTES` (SPEC-TDX §0) in hex. */
 const MAX_PCCS_QUOTE_HEX = 2 * 8192;
 
 /** A verified attestation plus the nonce it was verified with (the tunnel / session binds that nonce). */
@@ -91,7 +91,7 @@ export class AttestationCache {
   }
 
   /**
-   * INTERFACES §1.5 / TASKS T24: in INTEL mode with `pccsUrl` set, replace the exit's `collateral` with a fresh
+   * SPEC-TDX §1.5 / TASKS T24: in INTEL mode with `pccsUrl` set, replace the exit's `collateral` with a fresh
    * copy fetched from the PCCS (`getCollateral`) before verification. The fetch is async and runs here, so
    * `verifyAttestation` stays synchronous and receives the value through the bundle field. The exit's own copy is
    * untrusted anyway; a stale or missing one must not decide whether the client can verify.

@@ -6,9 +6,9 @@ export interface Attester {
   getQuote(reportData: Uint8Array): Promise<{ quote: Uint8Array; eventLog: TdxEvent[] }>;
 }
 
-/** Optional per-verification inputs (INTERFACES §3.1). MOCK mode ignores them. */
+/** Optional per-verification inputs (SPEC-TDX §3.1). MOCK mode ignores them. */
 export interface VerifyContext {
-  /** INTEL mode: canonical or raw collateral JSON (INTERFACES §1.2). */
+  /** INTEL mode: canonical or raw collateral JSON (SPEC-TDX §1.2). */
   collateral?: unknown;
   /** INTEL mode: verification time in Unix seconds (default: `floor(clock() / 1000)`). */
   nowSecs?: number;

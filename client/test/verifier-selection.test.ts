@@ -1,4 +1,4 @@
-// T15 / INTERFACES §3.2: "Pinning the Intel SGX Root CA is what selects INTEL mode. There is no new env var."
+// T15 / SPEC-TDX §3.2: "Pinning the Intel SGX Root CA is what selects INTEL mode. There is no new env var."
 // A wrong default is silent — an INTEL bundle verified with the MOCK verifier (or the reverse) — so both
 // constructors are pinned here: the verifier class selected, its rootKind, and the behaviour that follows from it
 // (the constructor is given no `verifier`, exactly like the CLI).

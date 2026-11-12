@@ -1,4 +1,4 @@
-//! INTEL-mode registration: on-chain Intel DCAP verification (dcap-qvl) + dstack event log (INTERFACES §2.3).
+//! INTEL-mode registration: on-chain Intel DCAP verification (dcap-qvl) + dstack event log (SPEC-TDX §2.3).
 
 use dcap_qvl::{verify::QuoteVerifier, QuoteCollateralV3};
 use near_sdk::serde_json::Value;
@@ -33,7 +33,7 @@ pub fn now_secs() -> u64 {
     }
 }
 
-/// Check 8 (INTERFACES §2.3): the Intel TCB status of the verified quote must be accepted.
+/// Check 8 (SPEC-TDX §2.3): the Intel TCB status of the verified quote must be accepted.
 pub fn check_tcb_status(status: &str) -> Result<(), Error> {
     if crate::ACCEPTED_TCB_STATUSES.contains(&status) {
         Ok(())
@@ -42,7 +42,7 @@ pub fn check_tcb_status(status: &str) -> Result<(), Error> {
     }
 }
 
-/// Runs INTERFACES §2.3 checks 5-7: registry root, INTEL structural parse, Intel DCAP signature.
+/// Runs SPEC-TDX §2.3 checks 5-7: registry root, INTEL structural parse, Intel DCAP signature.
 pub fn verify_registration_tdx(
     reg: &TdxRegistration<'_>,
     policy: &impl Policy,
@@ -76,7 +76,7 @@ pub fn verify_registration_tdx(
     Ok((v, report.status))
 }
 
-/// Runs INTERFACES §2.3 checks 8-13 on a structurally parsed quote whose Intel signature was already verified
+/// Runs SPEC-TDX §2.3 checks 8-13 on a structurally parsed quote whose Intel signature was already verified
 /// (checks 6-7): TCB status, DEBUG, dstack event log + RTMR3, compose hash, allowlists, report_data binding.
 /// No DCAP call, so it is unit-testable with a hand-built quote.
 pub fn verify_quote_tdx(

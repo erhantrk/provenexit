@@ -1,6 +1,6 @@
 # deploy/phala
 
-## `docker-compose.yml` — the measured exit config (INTERFACES §5.2)
+## `docker-compose.yml` — the measured exit config (SPEC-TDX §5.2)
 
 The dstack app-compose measured into RTMR3 when the VPN exit runs in INTEL/dstack mode. Fill-ins are the real
 public testnet values from `deploy/testnet/env.live`:
@@ -41,7 +41,7 @@ scripts/owner.sh allow_compose '{"hash":"<compose hash>"}'   # the exit retries 
 
 Use a production OS image (`phala os-images`, DEV `no`): the dev images allow SSH into the CVM.
 
-Policy check (INTERFACES §1.4: every image pinned by digest and not built, no `privileged`, service `exit` with
+Policy check (SPEC-TDX §1.4: every image pinned by digest and not built, no `privileged`, service `exit` with
 `logging.driver: none`):
 
 ```sh

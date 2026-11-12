@@ -156,7 +156,7 @@ const VPN_USAGE = `usage: plr vpn             verify the VPN exit, then serve a 
        plr vpn verify      print every attestation + registry check of the VPN exit (✔/✘); in two-hop mode both
                             hops and the operator-organization check
        plr vpn verify --fixture <dir>
-                            replay a captured fixture (INTERFACES §3.3); needs no network and runs the DCAP check
+                            replay a captured fixture (SPEC-TDX §3.3); needs no network and runs the DCAP check
                             at the capture time
        plr vpn inspect     INTEL checks 1–7b without the registry: compose hash, OS measurement, key hash, TCB and
                             images — the values the owner approves with allow_compose / allow_os
@@ -205,7 +205,7 @@ function trustedRootFrom(env: Record<string, string | undefined>): Uint8Array {
   return trustedRoot;
 }
 
-/** `PLR_PCCS_URL` (TASKS T24): unset ⇒ undefined (use the bundle's collateral); else an https URL (INTERFACES §4.1). */
+/** `PLR_PCCS_URL` (TASKS T24): unset ⇒ undefined (use the bundle's collateral); else an https URL (SPEC-TDX §4.1). */
 function pccsUrlFrom(env: Record<string, string | undefined>): string | undefined {
   const u = env.PLR_PCCS_URL || undefined;
   if (u !== undefined && !isPccsUrl(u)) throw new ConfigError("PLR_PCCS_URL must be an https URL (at most 2048 chars)");
@@ -478,12 +478,12 @@ function errCode(e: unknown): string {
   return isPlrError(e) ? e.code : e instanceof Error ? e.message : "error";
 }
 
-/** Root line of `plr verify` / `plr vpn verify` (INTERFACES §3.2). */
+/** Root line of `plr verify` / `plr vpn verify` (SPEC-TDX §3.2). */
 function rootLabel(kind: RootKind): string {
   return kind === "INTEL" ? "INTEL ROOT (Intel SGX Root CA)" : "MOCK ROOT (local test root, NOT Intel)";
 }
 
-/** Block-explorer line for a NEAR testnet registry (INTERFACES §3.2), else undefined. */
+/** Block-explorer line for a NEAR testnet registry (SPEC-TDX §3.2), else undefined. */
 function explorerLine(cfg: { chain: CliChain; rpcUrl: string; contractId: string }): string | undefined {
   if (cfg.chain !== "near" || !cfg.rpcUrl.includes("testnet")) return undefined;
   return `  explorer: https://testnet.nearblocks.io/address/${cfg.contractId}`;
@@ -570,7 +570,7 @@ function printVpnSummary(io: CliIo, s: Pick<AttestationSession, "verified" | "ap
   const v = s.verified;
   io.out(`${ind}root:            ${rootLabel(v.rootKind)}`);
   if (v.rootKind === "INTEL") {
-    // In INTEL mode the measured document is dstack's app-compose (INTERFACES §1.4), not the plr-vpn policy.
+    // In INTEL mode the measured document is dstack's app-compose (SPEC-TDX §1.4), not the plr-vpn policy.
     io.out(`${ind}tcb:             ${v.tcbStatus ?? "?"}`);
     for (const image of v.images ?? []) io.out(`${ind}image:           ${image}`);
   } else {
@@ -807,7 +807,7 @@ async function cmdVpnInspect(env: Record<string, string | undefined>, io: CliIo,
   return 0;
 }
 
-/** `plr vpn verify --fixture <dir>`: offline replay of a capture (INTERFACES §3.3). */
+/** `plr vpn verify --fixture <dir>`: offline replay of a capture (SPEC-TDX §3.3). */
 async function cmdVpnVerifyFixture(dir: string, io: CliIo): Promise<number> {
   io.out(`PLR VPN verify (fixture replay)`);
   io.out(`  fixture:  ${dir}`);

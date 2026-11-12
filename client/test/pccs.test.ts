@@ -24,7 +24,7 @@ import { AttestationCache, fetchPccsCollateral, isPccsUrl, loadConfig, loadVpnCo
 
 const VECTORS = new URL("../../packages/shared/test/vectors/dcap/", import.meta.url);
 const QUOTE = new Uint8Array(readFileSync(new URL("tdx_quote.bin", VECTORS)));
-/** dcap-qvl's sample collateral (INTERFACES TV-Q1), valid 2025-06-19..2025-07-19: verify at 2025-06-20T00:00:00Z. */
+/** dcap-qvl's sample collateral (SPEC-TDX TV-Q1), valid 2025-06-19..2025-07-19: verify at 2025-06-20T00:00:00Z. */
 const SAMPLE = JSON.parse(readFileSync(new URL("tdx_quote_collateral.json", VECTORS), "utf8")) as CollateralJson;
 const TV_Q1_NOW_MS = 1_750_377_600_000;
 

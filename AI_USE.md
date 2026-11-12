@@ -9,8 +9,8 @@ an account, a key or a payment.
 
 | area | assistant | what exactly |
 |---|---|---|
-| Planning | **Claude** (Anthropic) | a plan and a task list (not published), `docs/plan/INTERFACES.md` (the frozen formats) and the day-by-day plan, written 2026-11-08/09 from Erhan's repository and decisions; edited and approved by Erhan |
-| Specifications | **Claude Code** (Anthropic) | the pre-hackathon `SPEC.md`, `SPEC-VPN.md`, `SPEC-COMBO.md`, `SPEC-CHAINS.md` revisions and their locked tests, and this milestone's `SPEC-TDX.md` (a verbatim copy of the frozen `INTERFACES.md` §0–§4) |
+| Planning | **Claude** (Anthropic) | a plan and a task list (not published), `SPEC-TDX.md` (the frozen formats) and the day-by-day plan, written 2026-11-08/09 from Erhan's repository and decisions; edited and approved by Erhan |
+| Specifications | **Claude Code** (Anthropic) | the pre-hackathon `SPEC.md`, `SPEC-VPN.md`, `SPEC-COMBO.md`, `SPEC-CHAINS.md` revisions and their locked tests, and this milestone's `SPEC-TDX.md` (a verbatim copy of the frozen `SPEC-TDX.md` §0–§4) |
 | Code and tests | **Claude Code** and a **builder model** running the task list | the October 2026 baseline (mock-root protocol, NEAR registry, VPN exit, multi-chain registries), the November 2026 Intel/dstack path (`packages/shared`, `contracts/near`, `client`, `enclave`), and the tests — see "How the work was split" |
 | Testnet / cloud operations | **Claude** sessions acting as the "operator" | testnet account setup and the contract deploy/allowlist/signed calls (T04, T16, T17), and the harmless Phala Cloud quote-dump test CVM on 2026-11-09. Every owner transaction was signed from Erhan's near-cli-rs keychain; no key was ever printed or given to an AI |
 | Review | **Claude** | the strict review passes recorded as `fix: day1 review`, `fix: day2 review`, `fix: day3 review` in `git log` |
@@ -26,8 +26,8 @@ kept keys, mainnet and the submission out of the AI's hands.
 
 The hackathon tasks (T01–T30, from that unpublished task list) were executed by an AI **builder** model in
 a headless orchestrator (Conductor), one task per commit, each with its acceptance command run and quoted in the
-commit or in `NOTES-DECISIONS.md`. The builder worked from the frozen interfaces, not from a free hand: any real-world
-disagreement was recorded in `NOTES-DECISIONS.md` and escalated to Erhan instead of changing an interface.
+commit or in the build log (not published). The builder worked from the frozen interfaces, not from a free hand: any real-world
+disagreement was recorded in that log and escalated to Erhan instead of changing an interface.
 
 The builder's commits are the ones whose message starts with `T<nn>:`. Claude sessions wrote the plan and the earlier
 baseline, did the review passes, and ran the testnet/Phala operator work. Commits that are not task commits

@@ -1,4 +1,4 @@
-// T12: dstack mode (INTERFACES §4.4) — the same exit routes publish INTEL attestations with Intel collateral,
+// T12: dstack mode (SPEC-TDX §4.4) — the same exit routes publish INTEL attestations with Intel collateral,
 // served from a fake attester whose quote has the INTEL wire format and whose event log follows the dstack rules.
 // The wiring (collateral in the registration args, the NEAR method name it selects, selfCheckQuote's INTEL branch,
 // CollateralCache and DstackAttester) is exercised at the bottom of the file.
@@ -95,7 +95,7 @@ const DOCKER_COMPOSE = `services:
       PLR_VPN_POLICY_PATH: /app/vpn-policy.json
 `;
 
-/** The INTERFACES §1.4 app-compose (values illustrative, as in the policy tests). */
+/** The SPEC-TDX §1.4 app-compose (values illustrative, as in the policy tests). */
 const APP_COMPOSE = JSON.stringify({
   manifest_version: 2,
   name: "provenexit-exit",
@@ -112,7 +112,7 @@ const APP_COMPOSE = JSON.stringify({
 const APP_COMPOSE_BYTES = enc(APP_COMPOSE);
 const APP_COMPOSE_HASH = sha256(APP_COMPOSE_BYTES);
 
-/** The synthetic dstack log of INTERFACES §1.3 TV-E2 (built with `makeEvent`, as in T09). */
+/** The synthetic dstack log of SPEC-TDX §1.3 TV-E2 (built with `makeEvent`, as in T09). */
 const EVENT_LOG: TdxEvent[] = [
   makeEvent("key-provider", enc("{}")),
   makeEvent("system-preparing", EMPTY),
@@ -124,7 +124,7 @@ const EVENT_LOG: TdxEvent[] = [
 ];
 const RTMR3 = replayRtmr3(EVENT_LOG);
 
-/** The dcap-qvl sample collateral (INTERFACES §1.2), i.e. the real wire form the exit serves. */
+/** The dcap-qvl sample collateral (SPEC-TDX §1.2), i.e. the real wire form the exit serves. */
 const COLLATERAL: CollateralJson = canonicalCollateral(
   JSON.parse(readFileSync(new URL("../../packages/shared/test/vectors/dcap/tdx_quote_collateral.json", import.meta.url), "utf8")),
 );
@@ -174,7 +174,7 @@ async function startDstackExit(o: { collateral: (quote: Uint8Array) => Promise<C
   };
 }
 
-describe("exit in dstack mode (INTERFACES §1.5, §4.4)", () => {
+describe("exit in dstack mode (SPEC-TDX §1.5, §4.4)", () => {
   it("GET /v1/attestation publishes root_kind INTEL, the app-compose and the collateral", async () => {
     const asked: Uint8Array[] = [];
     const e = await startDstackExit({
@@ -334,7 +334,7 @@ describe("INTEL registration carries the collateral and selects register_instanc
 
     expect(nearCalls).toHaveLength(2);
     expect(nearCalls[0]).toEqual({ contractId: "vpnregistry.test.near", methodName: "register_instance", args, gas: GAS_300, deposit: DS_DEPOSIT });
-    // Same 300 Tgas and the same deposit: only the method name changes (INTERFACES §2.3).
+    // Same 300 Tgas and the same deposit: only the method name changes (SPEC-TDX §2.3).
     expect(nearCalls[1]).toEqual({
       contractId: "vpnregistry.test.near",
       methodName: "register_instance_tdx",
@@ -417,7 +417,7 @@ function codeOfEventLog(log: TdxEvent[]): string {
   }
 }
 
-describe("CollateralCache (INTERFACES §4.3)", () => {
+describe("CollateralCache (SPEC-TDX §4.3)", () => {
   beforeEach(() => {
     dcap.calls.length = 0;
     dcap.fail = null;
@@ -498,7 +498,7 @@ afterAll(() => {
   for (const d of sockDirs) rmSync(d, { recursive: true, force: true });
 });
 
-describe("DstackAttester (INTERFACES §4.2) against a dstack socket stub", () => {
+describe("DstackAttester (SPEC-TDX §4.2) against a dstack socket stub", () => {
   it("returns the real spike quote and only the IMR3 events; app-compose comes from /Info", async () => {
     const dir = mkdtempSync(join(HERE, "dstack-sock-"));
     sockDirs.push(dir);

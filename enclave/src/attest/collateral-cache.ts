@@ -1,4 +1,4 @@
-/** Intel collateral fetched from a PCCS and cached for the process (INTERFACES §4.3). */
+/** Intel collateral fetched from a PCCS and cached for the process (SPEC-TDX §4.3). */
 import dcap from "@phala/dcap-qvl";
 import { canonicalCollateral, type CollateralJson } from "@plr/shared";
 

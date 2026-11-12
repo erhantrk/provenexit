@@ -1,4 +1,4 @@
-/** dstack RTMR3 event log, INTEL mode (INTERFACES §1.3). V1 digests only. */
+/** dstack RTMR3 event log, INTEL mode (SPEC-TDX §1.3). V1 digests only. */
 import { sha384 } from "@noble/hashes/sha2.js";
 import { PlrError } from "../errors.js";
 import { concatBytes, equalBytes, fromHex, isBytes, isHex, isPlainObject, u32le, utf8 } from "../bytes.js";

@@ -50,8 +50,8 @@ function code(fn: () => unknown): string {
 
 const SPIKE = new URL("../../../fixtures/phala-spike/app_compose.json", import.meta.url);
 
-describe("checkDstackComposePolicy (INTERFACES §1.4)", () => {
-  it("accepts the INTERFACES §1.4 example and returns the image references", () => {
+describe("checkDstackComposePolicy (SPEC-TDX §1.4)", () => {
+  it("accepts the SPEC-TDX §1.4 example and returns the image references", () => {
     expect(checkDstackComposePolicy(appCompose(COMPOSE))).toEqual({ images: [IMAGE] });
   });
 

@@ -1,4 +1,4 @@
-// T15 — fixture replay (INTERFACES §3.3). A real capture needs a real Intel-signed quote, so until T19 records one
+// T15 — fixture replay (SPEC-TDX §3.3). A real capture needs a real Intel-signed quote, so until T19 records one
 // under fixtures/, the tests build a synthetic INTEL fixture from the T09 stub-verifier path. The stub keeps the
 // DCAP contract (it requires ctx.collateral and reports lastStatus); everything else goes through the real
 // verifyAttestation / MemoryRegistry code.
@@ -41,7 +41,7 @@ const COLLATERAL = {
   qe_identity_signature: "00",
 };
 
-/** INTERFACES §1.4 app-compose with one digest-pinned exit image and logging disabled. */
+/** SPEC-TDX §1.4 app-compose with one digest-pinned exit image and logging disabled. */
 function appCompose(image = IMAGE): string {
   const dockerComposeFile = `services:
   exit:
@@ -177,7 +177,7 @@ async function codeOf(p: Promise<unknown>): Promise<string> {
   return "NO_THROW";
 }
 
-/** First fixture directory under fixtures/ that has all four files of INTERFACES §3.3, if any (T19). */
+/** First fixture directory under fixtures/ that has all four files of SPEC-TDX §3.3, if any (T19). */
 function realCapture(): string | null {
   let names: string[];
   try {
@@ -213,7 +213,7 @@ describe("readFixture", () => {
   });
 });
 
-describe("verifyFixture (INTERFACES §3.3)", () => {
+describe("verifyFixture (SPEC-TDX §3.3)", () => {
   it("replays a synthetic INTEL fixture at the capture time and reports TCB + images", async () => {
     const f = syntheticFixture();
     const seen: Seen[] = [];
@@ -285,14 +285,14 @@ describe.skipIf(real === null)("recorded capture replay (T19)", () => {
 // ---------------------------------------------------------------------------------------------------------------
 // The default (real) verifier of verifyFixture. Every test above injects a stub, so the production path —
 // `new DcapQvlVerifier(INTEL_ROOT_P256, { clock: () => captured_at_ms })` — was never executed. These tests use
-// the real TV-Q1 quote and its real Intel collateral (INTERFACES §1.1): the DCAP call really happens.
+// the real TV-Q1 quote and its real Intel collateral (SPEC-TDX §1.1): the DCAP call really happens.
 // ---------------------------------------------------------------------------------------------------------------
 
 const TVQ1_QUOTE = new Uint8Array(readFileSync(new URL("../../packages/shared/test/vectors/dcap/tdx_quote.bin", import.meta.url)));
 const TVQ1_COLLATERAL = JSON.parse(
   readFileSync(new URL("../../packages/shared/test/vectors/dcap/tdx_quote_collateral.json", import.meta.url), "utf8"),
 ) as Record<string, unknown>;
-/** TV-Q1 collateral is valid 2025-06-19..2025-07-19 and expired at 2026-11-08 (INTERFACES §1.1). */
+/** TV-Q1 collateral is valid 2025-06-19..2025-07-19 and expired at 2026-11-08 (SPEC-TDX §1.1). */
 const TVQ1_CAPTURED_AT = 1_750_377_600_000;
 const TVQ1_EXPIRED_AT = 1_794_096_000_000;
 const TVQ1_MRTD = "91eb2b44d141d4ece09f0c75c2c53d247a3c68edd7fafe8a3520c942a604a407de03ae6dc5f87f27428b2538873118b7";

@@ -38,4 +38,3 @@ submission.
 
 - Testnet registry `pe-vpnreg-erhan.testnet`: init, operator approval, spike allowlist, revoke and re-allow txs are
   listed in the README section "NEAR contract details".
-- Decisions and findings per task (S1 Phala spike, S2 dcap-qvl in a contract, T03..T24): [`NOTES-DECISIONS.md`](../NOTES-DECISIONS.md).

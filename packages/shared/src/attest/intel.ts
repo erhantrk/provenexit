@@ -1,4 +1,4 @@
-/** Intel DCAP verification of real TDX v4 quotes (INTERFACES §1.1, §3.1). */
+/** Intel DCAP verification of real TDX v4 quotes (SPEC-TDX §1.1, §3.1). */
 import { createRequire } from "node:module";
 import { PlrError } from "../errors.js";
 import { equalBytes, fromHex, isBytes } from "../bytes.js";
@@ -23,13 +23,13 @@ function getDcap(): Dcap {
   return dcap;
 }
 
-/** Public key (`x‖y`) of `CN=Intel SGX Root CA` (INTERFACES §0). */
+/** Public key (`x‖y`) of `CN=Intel SGX Root CA` (SPEC-TDX §0). */
 export const INTEL_ROOT_P256 = fromHex(
   "0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f567918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394",
   64,
 );
 
-/** TCB statuses accepted by clients and the registry (project decision, INTERFACES §0). */
+/** TCB statuses accepted by clients and the registry (project decision, SPEC-TDX §0). */
 export const ACCEPTED_TCB_STATUSES: readonly string[] = Object.freeze(["UpToDate", "SWHardeningNeeded"]);
 
 /** True iff `r` is exactly the Intel SGX Root CA public key. */

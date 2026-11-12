@@ -1,4 +1,4 @@
-// INTERFACES §3.1 — the INTEL branch of verifyAttestation (dcap TCB, dstack log, compose policy).
+// SPEC-TDX §3.1 — the INTEL branch of verifyAttestation (dcap TCB, dstack log, compose policy).
 // Real Intel quotes cannot be minted for our report_data, so the DCAP call goes through a stub verifier that keeps
 // the same contract: it requires `ctx.collateral` and reports the accepted status in `lastStatus`.
 import { readFileSync } from "node:fs";
@@ -16,7 +16,7 @@ const EMPTY = new Uint8Array(0);
 const NOW_MS = 1_750_377_600_000;
 const OPERATOR = "op.test.near";
 
-/** Canonical wire form of the dcap-qvl sample collateral (INTERFACES §1.2). */
+/** Canonical wire form of the dcap-qvl sample collateral (SPEC-TDX §1.2). */
 const COLLATERAL = canonicalCollateral(
   JSON.parse(readFileSync(new URL("./vectors/dcap/tdx_quote_collateral.json", import.meta.url), "utf8")),
 );
@@ -42,7 +42,7 @@ const DOCKER_COMPOSE = `services:
       PLR_VPN_PORT: "18200"
 `;
 
-/** The INTERFACES §1.4 app-compose (values illustrative). */
+/** The SPEC-TDX §1.4 app-compose (values illustrative). */
 function appCompose(dockerComposeFile = DOCKER_COMPOSE): string {
   return JSON.stringify({
     manifest_version: 2,
@@ -154,7 +154,7 @@ function run(f: IntelFixture, bundle: AttestationBundle, nonce: Uint8Array, veri
   return verifyAttestation({ bundle, nonce, verifier, registry, trustedRoot: INTEL_ROOT_P256, now: NOW_MS });
 }
 
-describe("verifyAttestation — INTEL branch (INTERFACES §3.1)", () => {
+describe("verifyAttestation — INTEL branch (SPEC-TDX §3.1)", () => {
   it("passes { collateral, nowSecs } to the verifier and reports TCB, images and every check in order", async () => {
     const f = intelFixture();
     const n = randomBytes(32);
@@ -172,7 +172,7 @@ describe("verifyAttestation — INTEL branch (INTERFACES §3.1)", () => {
     expect(v.keyHash).toEqual(f.keyHash);
     expect(v.checks).toContain(CHECKS.TCB);
     expect(v.checks).toContain(CHECKS.COMPOSE_POLICY);
-    // TCB right after QUOTE_SIG, COMPOSE_POLICY right after COMPOSE (INTERFACES §3.1).
+    // TCB right after QUOTE_SIG, COMPOSE_POLICY right after COMPOSE (SPEC-TDX §3.1).
     expect(v.checks).toEqual([
       CHECKS.RESPONSE, CHECKS.QUOTE_FORMAT, CHECKS.TEE_TYPE, CHECKS.ROOT, CHECKS.QUOTE_SIG, CHECKS.TCB, CHECKS.DEBUG,
       CHECKS.REPORT_DATA_KEYS, CHECKS.NONCE, CHECKS.EVENT_LOG, CHECKS.RTMR3, CHECKS.COMPOSE, CHECKS.COMPOSE_POLICY,

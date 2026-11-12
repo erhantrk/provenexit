@@ -43,7 +43,7 @@ export class NearRegistryWriter implements RegistryWriter {
   }
 
   async registerInstance(args: RegisterArgs): Promise<void> {
-    // INTEL mode registers through the on-chain DCAP-verifying method (INTERFACES §2.3); same gas + deposit.
+    // INTEL mode registers through the on-chain DCAP-verifying method (SPEC-TDX §2.3); same gas + deposit.
     await this.#call(args.collateral ? "register_instance_tdx" : "register_instance", args, this.#deposit);
   }
 

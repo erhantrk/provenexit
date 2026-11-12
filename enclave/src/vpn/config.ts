@@ -3,7 +3,7 @@ import { HOST_RE, bad, intVar, loadRegistrySafe, type Env, type NearConfig, type
 
 /** SPEC-VPN §3 default exit port. */
 export const DEFAULT_EXIT_PORT = 18200;
-/** INTERFACES §0 `PCCS_URL`: dcap-qvl's default PCCS. */
+/** SPEC-TDX §0 `PCCS_URL`: dcap-qvl's default PCCS. */
 export const DEFAULT_PCCS_URL = "https://pccs.phala.network";
 
 export interface ExitConfig {

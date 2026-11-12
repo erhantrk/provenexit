@@ -15,7 +15,7 @@ export const QUOTE = Object.freeze({
   MOCK_LEN: 828,
   /** Upper bound for INTEL-mode quotes (QE report + PCK chain); anything larger is rejected. */
   MAX_LEN: 32 * 1024,
-  /** Upper bound for an INTEL-mode TDX quote v4 (INTERFACES §1.1). */
+  /** Upper bound for an INTEL-mode TDX quote v4 (SPEC-TDX §1.1). */
   MAX_INTEL_LEN: 8192,
   VERSION: 4,
   ATT_KEY_TYPE_ECDSA_P256: 2,
@@ -155,7 +155,7 @@ export function encodeQuote(
  *
  * MOCK mode (default): length exactly 828, `sig_data_len == 192`, `qe_vendor_id == MOCK_QE_VENDOR_ID`.
  * INTEL mode: `qe_vendor_id` = Intel, `sig_data_len` in `1..=len − 636`, ≤ {@link QUOTE.MAX_INTEL_LEN},
- * trailing bytes all zero (padding is normal), `mr_signer_seam` all zero (INTERFACES §1.1).
+ * trailing bytes all zero (padding is normal), `mr_signer_seam` all zero (SPEC-TDX §1.1).
  *
  * @throws PlrError E_QUOTE_FORMAT, or E_TEE_TYPE when the TEE type is not TDX.
  */

@@ -42,7 +42,7 @@ export async function bootExit(
   o: { dial?: Dialer; log?: Logger; /** Called after the exit stopped serving for good (the caller exits non-zero). */ onFatal?: () => void } = {},
 ): Promise<RunningExit> {
   const log = o.log ?? new Logger("plr-vpn");
-  // `PLR_ATTESTER` picks the quote source and with it the signature root the bundle publishes (INTERFACES §4.4).
+  // `PLR_ATTESTER` picks the quote source and with it the signature root the bundle publishes (SPEC-TDX §4.4).
   const rootKind: RootKind = cfg.attester === "dstack" ? "INTEL" : "MOCK";
   let attester: Attester;
   let composeBytes: Uint8Array;
@@ -64,7 +64,7 @@ export async function bootExit(
   const composeHash = sha256(composeBytes);
   const keys = VpnKeys.generate();
   await selfCheckQuote(attester, keys, composeHash, rootKind);
-  // One platform has one FMSPC: a single collateral value per process (INTERFACES §4.3).
+  // One platform has one FMSPC: a single collateral value per process (SPEC-TDX §4.3).
   const collateralCache = cfg.attester === "dstack" ? new CollateralCache(cfg.pccsUrl) : null;
   const collateral = collateralCache === null ? undefined : (q: Uint8Array) => collateralCache.get(q);
 

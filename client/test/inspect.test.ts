@@ -22,7 +22,7 @@ const IMAGE = `ghcr.io/erhantrk/provenexit-exit@sha256:${"ab".repeat(32)}`;
 /** Same image, unpinned: checkDstackComposePolicy must refuse it (E_COMPOSE_POLICY). */
 const UNPINNED = "ghcr.io/erhantrk/provenexit-exit:latest";
 
-/** INTERFACES §1.4 app-compose with one digest-pinned exit image and logging disabled. */
+/** SPEC-TDX §1.4 app-compose with one digest-pinned exit image and logging disabled. */
 function appCompose(image = IMAGE): string {
   const dockerComposeFile = `services:
   exit:

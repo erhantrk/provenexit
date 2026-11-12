@@ -80,9 +80,9 @@ pub fn parse_mock(q: &[u8]) -> Result<MockQuote<'_>, Error> {
     Ok(MockQuote { q })
 }
 
-// ---------- INTEL mode (INTERFACES §1.1): TDX quote v4 with a real Intel signature ----------
+// ---------- INTEL mode (SPEC-TDX §1.1): TDX quote v4 with a real Intel signature ----------
 
-/// `qe_vendor_id` of an Intel QE (INTERFACES §0; SPEC §2.1).
+/// `qe_vendor_id` of an Intel QE (SPEC-TDX §0; SPEC §2.1).
 pub const INTEL_QE_VENDOR_ID: [u8; 16] =
     [0x93, 0x9a, 0x72, 0x33, 0xf7, 0x9c, 0x4c, 0xa9, 0x94, 0x0a, 0x0d, 0xb3, 0x95, 0x7f, 0x06, 0x07];
 /// `MAX_TDX_QUOTE_BYTES`: real quotes are about 5 000 bytes, dstack's carry zero padding.
@@ -90,7 +90,7 @@ pub const MAX_INTEL_LEN: usize = 8192;
 /// `mr_signer_seam` (48 bytes): the TD is signed by the Intel TDX module, so the seam is zero.
 pub const MR_SIGNER_SEAM: usize = 112;
 
-/// Parses a quote in INTEL mode (INTERFACES §1.1): the same fixed v4 header/body offsets as [`parse_mock`], plus
+/// Parses a quote in INTEL mode (SPEC-TDX §1.1): the same fixed v4 header/body offsets as [`parse_mock`], plus
 /// the Intel QE vendor id, a bounded `sig_data` and its zero padding, and a zero `mr_signer_seam`. Every
 /// structural problem is `E_QUOTE_FORMAT`. The signature itself is checked by `dcap-qvl` (off-chain or T11).
 pub fn parse_intel(q: &[u8]) -> Result<MockQuote<'_>, Error> {

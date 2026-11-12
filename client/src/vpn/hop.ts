@@ -127,7 +127,7 @@ export class ExitHop {
     this.registry = o.registry;
     if (!isValidP256Pub(o.trustedRoot)) fail("E_ROOT_UNTRUSTED", "trustedRoot must be a valid 64-byte P-256 key");
     const trustedRoot = o.trustedRoot.slice();
-    // Pinning the Intel SGX Root CA is what selects INTEL mode (INTERFACES §3.2); no separate env var.
+    // Pinning the Intel SGX Root CA is what selects INTEL mode (SPEC-TDX §3.2); no separate env var.
     this.verifier = o.verifier ?? (isIntelRoot(trustedRoot) ? new DcapQvlVerifier(trustedRoot) : new MockVerifier(trustedRoot));
     if (o.lookup !== undefined && typeof o.lookup !== "function") fail("E_BAD_INPUT", "lookup must be a function");
     this.#target = { base: o.base, lookup: o.lookup, ...(o.createConnection !== undefined ? { createConnection: o.createConnection } : {}) };

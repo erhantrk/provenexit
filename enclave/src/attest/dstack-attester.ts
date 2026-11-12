@@ -1,4 +1,4 @@
-/** Real Intel TDX quotes from the dstack guest agent (INTERFACES §4.2). */
+/** Real Intel TDX quotes from the dstack guest agent (SPEC-TDX §4.2). */
 import { DstackClient } from "@phala/dstack-sdk";
 import { fromHex, PlrError, type Attester, type TdxEvent } from "@plr/shared";
 

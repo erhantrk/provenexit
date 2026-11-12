@@ -60,7 +60,7 @@ export class TracingRegistry implements RegistryReader {
 }
 
 /**
- * Checks that only an INTEL verification reports (INTERFACES §3.1): MOCK never pushes them, so the MOCK report
+ * Checks that only an INTEL verification reports (SPEC-TDX §3.1): MOCK never pushes them, so the MOCK report
  * keeps exactly the SPEC §9 list. INTEL pushes TCB right after QUOTE_SIG and COMPOSE_POLICY right after COMPOSE.
  */
 const INTEL_ONLY: ReadonlySet<CheckKey> = new Set<CheckKey>(["TCB", "COMPOSE_POLICY"]);
@@ -71,7 +71,7 @@ const INTEL_ORDER: CheckKey[] = MOCK_ORDER.flatMap((k) =>
   k === "QUOTE_SIG" ? [k, "TCB" as const] : k === "COMPOSE" ? [k, "COMPOSE_POLICY" as const] : [k],
 );
 
-/** SPEC §9 order for MOCK, plus the two INTEL-only steps at their INTERFACES §3.1 positions. */
+/** SPEC §9 order for MOCK, plus the two INTEL-only steps at their SPEC-TDX §3.1 positions. */
 function orderFor(o: { evidence?: boolean; intel?: boolean }): StepKey[] {
   const order: StepKey[] = [...(o.intel === true ? INTEL_ORDER : MOCK_ORDER)];
   if (o.evidence === true) order.push("REGISTRATION_EVIDENCE");
@@ -131,7 +131,7 @@ export interface CheckLine {
  * Per-check status. On success every check passed. On failure, `verifyAttestation` runs checks in the fixed
  * SPEC §9 order and stops at the first failure, so every earlier check passed and later ones did not run.
  * `o.evidence` (registries with `verifiesOnChain` false, SPEC-CHAINS §2) adds the registration-evidence step
- * after the instance check; `o.intel` (INTERFACES §3.1) adds the TCB and dstack-compose steps.
+ * after the instance check; `o.intel` (SPEC-TDX §3.1) adds the TCB and dstack-compose steps.
  */
 export function checkLines(
   err: unknown,

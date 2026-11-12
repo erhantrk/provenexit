@@ -18,10 +18,10 @@ export interface CommonRoutesOptions {
   keys: EnclaveKeys;
   composeBytes: Uint8Array;
   receipts: LeafLog;
-  /** The root published in the bundle (`root_kind`, INTERFACES §1.5). */
+  /** The root published in the bundle (`root_kind`, SPEC-TDX §1.5). */
   rootKind: RootKind;
   /**
-   * INTEL mode: the Intel collateral for the served quote (INTERFACES §1.5); a failure is `503 E_UPSTREAM`.
+   * INTEL mode: the Intel collateral for the served quote (SPEC-TDX §1.5); a failure is `503 E_UPSTREAM`.
    * Unset in MOCK mode (the bundle carries no `collateral`).
    */
   collateral?: (quote: Uint8Array) => Promise<CollateralJson>;

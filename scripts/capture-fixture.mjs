@@ -1,6 +1,6 @@
 // usage: node scripts/capture-fixture.mjs <exit_url> <registry_id> <out_dir> [registration_tx] [revocation_tx]
 //
-// Captures a `plr vpn verify --fixture <dir>` directory (INTERFACES §3.3) from a live exit plus the NEAR registry:
+// Captures a `plr vpn verify --fixture <dir>` directory (SPEC-TDX §3.3) from a live exit plus the NEAR registry:
 //   meta.json  nonce.hex  bundle.json  registry.json
 //
 // compose + OS hashes are passed in from `plr vpn inspect` (they come from the verified bundle) and must match what

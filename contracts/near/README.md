@@ -2,7 +2,7 @@
 
 Owner-governed allowlist of compose hashes and OS measurements, **on-chain verification of MOCK TDX
 registration quotes**, **on-chain Intel DCAP verification of real TDX quotes** (`register_instance_tdx`, INTEL mode,
-INTERFACES §2.3), and Ed25519-authorised Merkle anchoring of receipts.
+SPEC-TDX §2.3), and Ed25519-authorised Merkle anchoring of receipts.
 
 ## Build and test (the gate)
 
@@ -37,8 +37,8 @@ Without network, add `CARGO_NET_OFFLINE=true`.
 | `approve_operator(account_id, org_id)` / `revoke_operator(account_id)` | owner | SPEC §7 rev 1.2 operator organizations. `org_id` must match `^[a-z0-9][a-z0-9._-]{0,63}$` (ASCII), else `E_BAD_INPUT`. Re-approving changes the org. Revoking an unapproved account is a no-op. Events `operator_approved` `{account_id, org_id, previous_org_id}` / `operator_revoked` `{account_id, previous_org_id}`. Not payable: like the other owner methods, the entry's storage (≈ 110-240 bytes, ≤ 0.0024 NEAR) is paid from the contract balance and released on revoke. Owner-only, so it is not a drain vector |
 | `get_operator(account_id) → org_id \| null` | view | `null` if not approved or `account_id` is malformed |
 | `register_instance(quote, event_log, app_compose, x25519, ed25519) → key_hash` | anyone, `#[payable]` | SPEC §7 steps 1-7; storage deposit required (≈0.0035 NEAR used; ≈6.5 Tgas); excess becomes anchor credit (≤ 0.05 NEAR), the rest is refunded |
-| `register_instance_tdx(quote, collateral, event_log, app_compose, x25519, ed25519) → key_hash` | anyone, `#[payable]` | INTEL mode (INTERFACES §2.3): on-chain Intel DCAP + dstack event log; 13 ordered checks below; same deposit/refund rules as `register_instance` (attach 0.1 NEAR, 300 Tgas) |
-| `get_tdx_policy() → {intel_root_p256, accepted_tcb_statuses, dcap_qvl_version}` | view | INTERFACES §2.4; never panics |
+| `register_instance_tdx(quote, collateral, event_log, app_compose, x25519, ed25519) → key_hash` | anyone, `#[payable]` | INTEL mode (SPEC-TDX §2.3): on-chain Intel DCAP + dstack event log; 13 ordered checks below; same deposit/refund rules as `register_instance` (attach 0.1 NEAR, 300 Tgas) |
+| `get_tdx_policy() → {intel_root_p256, accepted_tcb_statuses, dcap_qvl_version}` | view | SPEC-TDX §2.4; never panics |
 | `anchor_receipts(key_hash, root, first_seq, count, sig) → anchor_id` | anyone, `#[payable]` | storage paid by the attached deposit (excess refunded) or the instance's prepaid anchor credit, else `E_DEPOSIT`; event `receipts_anchored` |
 | `migrate()` | contract account (`#[private]`) | rev 1.3 one-time upgrade of a rev 1.2 state; **empties the compose allowlist** (see below); event `compose_allowlist_reset` `{state_rev}` |
 | `get_state_rev() → u8` | view | `3` for the rev 1.3 layout |
@@ -101,8 +101,8 @@ Arguments (checks 1-4 concern them):
 | argument | type | rule |
 |---|---|---|
 | `quote` | lowercase hex string | TDX quote v4, ≤ 16 384 hex chars (8 192 bytes; real quotes ≈ 5 006) |
-| `collateral` | string | canonical collateral JSON (INTERFACES §1.2), ≤ 32 768 bytes |
-| `event_log` | JSON array | dstack IMR3 events, 5-64 entries (INTERFACES §1.3, V1 digests only) |
+| `collateral` | string | canonical collateral JSON (SPEC-TDX §1.2), ≤ 32 768 bytes |
+| `event_log` | JSON array | dstack IMR3 events, 5-64 entries (SPEC-TDX §1.3, V1 digests only) |
 | `app_compose` | string | the measured dstack app-compose text, 1-32 768 bytes |
 | `x25519`, `ed25519` | 32-byte lowercase hex | non-zero |
 
@@ -119,7 +119,7 @@ Checks, in this order (the first failure panics with the code, as everywhere els
 | 7 | `QuoteVerifier::new_prod().verify(&quote, &collateral, now_secs)` is `Ok(report)`; `now_secs = env::block_timestamp_ms() / 1000` (or `1_750_377_600` under `tdx-test-clock`) | `E_QUOTE_SIG` |
 | 8 | `report.status` ∈ `ACCEPTED_TCB_STATUSES` (`UpToDate`, `SWHardeningNeeded`) | `E_TCB_STATUS` |
 | 9 | DEBUG bit clear (byte 168) | `E_DEBUG_TD` |
-| 10 | `verify_event_log_dstack(event_log, rtmr3)` (INTERFACES §1.3) | `E_EVENT_LOG` / `E_RTMR3` |
+| 10 | `verify_event_log_dstack(event_log, rtmr3)` (SPEC-TDX §1.3) | `E_EVENT_LOG` / `E_RTMR3` |
 | 11 | `sha256(app_compose) == compose-hash payload` | `E_COMPOSE_MISMATCH` |
 | 12 | compose allowed, then OS measurement allowed (`os_measurement = SHA256(mr_td ‖ rtmr0 ‖ rtmr1 ‖ rtmr2)`) | `E_COMPOSE_NOT_ALLOWED` / `E_OS_NOT_ALLOWED` |
 | 13 | `report_data == key_hash(x25519, ed25519) ‖ registration_nonce(current_account_id, predecessor_account_id)` (the rev 1.3 binding: only the operator the enclave named can register) | `E_REPORT_DATA` |
@@ -162,8 +162,8 @@ problem incl. TEE type, bad hex, > 4096 hex chars in MOCK mode / > 16 384 in INT
 |---|---|
 | `src/lib.rs` | contract state, methods, argument validation, storage deposit/refund |
 | `src/verify.rs` | `register_instance` pipeline (SPEC §7 steps 1-7, in order) |
-| `src/verify_tdx.rs` | `register_instance_tdx` pipeline (INTERFACES §2.3 checks 5-13, in order) |
-| `src/quote.rs` | MOCK quote parsing (SPEC §2) and INTEL quote parsing (INTERFACES §1.1) |
+| `src/verify_tdx.rs` | `register_instance_tdx` pipeline (SPEC-TDX §2.3 checks 5-13, in order) |
+| `src/quote.rs` | MOCK quote parsing (SPEC §2) and INTEL quote parsing (SPEC-TDX §1.1) |
 | `src/ecdsa.rs` | P-256: low-S + range checks, on-curve check, compression, host `p256_verify` |
 | `src/eventlog.rs` | event-log verification and RTMR3 replay (SPEC §3), same rules as `@plr/shared` |
 | `src/binding.rs` | key hash, operator-bound registration nonce (rev 1.3), AK-cert and anchor message layouts |

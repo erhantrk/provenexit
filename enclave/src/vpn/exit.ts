@@ -34,9 +34,9 @@ export interface ExitOptions {
   receipts: VpnReceiptLog;
   /** The registration quote once registered, served in `/v1/attestation` (SPEC-CHAINS §4). */
   registrationQuote?: () => Uint8Array | null;
-  /** The root published in the bundle (`root_kind`, INTERFACES §1.5); default MOCK. */
+  /** The root published in the bundle (`root_kind`, SPEC-TDX §1.5); default MOCK. */
   rootKind?: RootKind;
-  /** INTEL mode: the Intel collateral served with the quote (INTERFACES §1.5); failure → 503 E_UPSTREAM. */
+  /** INTEL mode: the Intel collateral served with the quote (SPEC-TDX §1.5); failure → 503 E_UPSTREAM. */
   collateral?: (quote: Uint8Array) => Promise<CollateralJson>;
   /**
    * The enforced VPN policy. Default: the strict policy of `composeBytes`. In dstack mode `composeBytes` is the

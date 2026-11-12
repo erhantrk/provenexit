@@ -27,7 +27,7 @@ export interface AttestationBundle {
    */
   registration_quote?: string;
   /**
-   * INTEL mode only (INTERFACES §1.5): the canonical collateral JSON of the quote (§1.2). Required in INTEL mode,
+   * INTEL mode only (SPEC-TDX §1.5): the canonical collateral JSON of the quote (§1.2). Required in INTEL mode,
    * ignored or absent in MOCK mode. Intel signs it and the client freshness-checks it, so taking it from the
    * (untrusted) exit is safe.
    */
@@ -48,7 +48,7 @@ export interface VerifiedRouter {
    * tier-C reader keeps selecting the registration this evidence binds.
    */
   registrationQuote?: Uint8Array;
-  /** INTEL mode only: the DCAP TCB status the verifier accepted (INTERFACES §3.1). */
+  /** INTEL mode only: the DCAP TCB status the verifier accepted (SPEC-TDX §3.1). */
   tcbStatus?: string;
   /** INTEL mode only: the image references checkDstackComposePolicy extracted (§1.4). */
   images?: string[];
@@ -69,7 +69,7 @@ export interface VerifyAttestationParams {
 /** Max UTF-8 size of `app_compose` (matches the contract bound, SPEC §7). */
 export const MAX_APP_COMPOSE_BYTES = 8 * 1024;
 
-/** Max UTF-8 size of the dstack app-compose in INTEL mode (INTERFACES §0, §1.4). */
+/** Max UTF-8 size of the dstack app-compose in INTEL mode (SPEC-TDX §0, §1.4). */
 export const MAX_DSTACK_COMPOSE_BYTES = 32 * 1024;
 
 /** Names of the checks reported in {@link VerifiedRouter.checks}, in SPEC §9 order. */
@@ -153,7 +153,7 @@ function parseBundle(b: unknown, expectedKind: RootKind): ParsedBundle {
   const composeBytes = utf8(b.app_compose as string);
   const maxCompose = expectedKind === "INTEL" ? MAX_DSTACK_COMPOSE_BYTES : MAX_APP_COMPOSE_BYTES;
   if (composeBytes.length === 0 || composeBytes.length > maxCompose) bad("app_compose size");
-  // INTERFACES §1.5: collateral is required in INTEL mode (ignored or absent in MOCK mode).
+  // SPEC-TDX §1.5: collateral is required in INTEL mode (ignored or absent in MOCK mode).
   let collateral: Record<string, unknown> | undefined;
   if (expectedKind === "INTEL") {
     const c = b.collateral;
@@ -249,7 +249,7 @@ export async function verifyAttestation(p: VerifyAttestationParams): Promise<Ver
   if (!equalBytes(report.reportData.subarray(32, 64), sessionNonceDigest(nonce))) fail("E_NONCE");
   checks.push(CHECKS.NONCE);
 
-  // 6. event log, RTMR3 (INTEL mode: the dstack V1 log of INTERFACES §1.3)
+  // 6. event log, RTMR3 (INTEL mode: the dstack V1 log of SPEC-TDX §1.3)
   const ids = guard(
     () => (b.rootKind === "INTEL" ? verifyEventLogDstack : verifyEventLog)(b.eventLog, report.rtmr[3]),
     ["E_EVENT_LOG", "E_RTMR3"],
@@ -338,7 +338,7 @@ async function verifyRegistrationEvidence(p: {
   x25519: Uint8Array;
   ed25519: Uint8Array;
   rootKind: RootKind;
-  /** INTEL mode: same `{ collateral, nowSecs }` as the session quote (INTERFACES §3.1 step 7). */
+  /** INTEL mode: same `{ collateral, nowSecs }` as the session quote (SPEC-TDX §3.1 step 7). */
   ctx: VerifyContext;
 }): Promise<Uint8Array> {
   const E = "E_REGISTRATION_EVIDENCE" as const;

@@ -4,7 +4,7 @@ import { parseQuote, osMeasurement, toHex, PlrError } from "../src/index.js";
 
 const q = new Uint8Array(readFileSync(new URL("./vectors/dcap/tdx_quote.bin", import.meta.url)));
 
-describe("INTEL parseQuote (INTERFACES §1.1, TV-Q1)", () => {
+describe("INTEL parseQuote (SPEC-TDX §1.1, TV-Q1)", () => {
   it("parses the dcap-qvl sample with 70 zero padding bytes", () => {
     const p = parseQuote(q, "INTEL");
     expect(p.sigData.length).toBe(4300);

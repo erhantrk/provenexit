@@ -46,15 +46,15 @@ pub const MAX_ANCHOR_COUNT: u64 = 10_000;
 pub const MAX_ANCHOR_CREDIT_YOCTO: u128 = 50_000_000_000_000_000_000_000;
 /// Maximum `org_id` length (SPEC §7 rev 1.2: `^[a-z0-9][a-z0-9._-]{0,63}$`).
 pub const MAX_ORG_ID_LEN: usize = 64;
-/// Intel SGX Root CA public key, x‖y (INTERFACES §0). A registry with root_kind INTEL must store exactly this.
+/// Intel SGX Root CA public key, x‖y (SPEC-TDX §0). A registry with root_kind INTEL must store exactly this.
 pub const INTEL_ROOT_P256_HEX: &str = "0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f567918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394";
-/// `quote` argument bound of `register_instance_tdx`, in hex chars (INTERFACES §1.1: 8 192 bytes).
+/// `quote` argument bound of `register_instance_tdx`, in hex chars (SPEC-TDX §1.1: 8 192 bytes).
 pub const MAX_TDX_QUOTE_HEX_LEN: usize = 16_384;
-/// `collateral` argument bound of `register_instance_tdx`, in bytes of JSON text (INTERFACES §1.2).
+/// `collateral` argument bound of `register_instance_tdx`, in bytes of JSON text (SPEC-TDX §1.2).
 pub const MAX_COLLATERAL_LEN: usize = 32_768;
-/// `app_compose` argument bound of `register_instance_tdx`: the dstack app-compose text (INTERFACES §1.4).
+/// `app_compose` argument bound of `register_instance_tdx`: the dstack app-compose text (SPEC-TDX §1.4).
 pub const MAX_DSTACK_COMPOSE_LEN: usize = 32_768;
-/// Intel TCB statuses `register_instance_tdx` accepts (INTERFACES §0).
+/// Intel TCB statuses `register_instance_tdx` accepts (SPEC-TDX §0).
 pub const ACCEPTED_TCB_STATUSES: [&str; 2] = ["UpToDate", "SWHardeningNeeded"];
 
 #[derive(BorshStorageKey)]
@@ -125,7 +125,7 @@ pub struct RootView {
     pub p256: String,
 }
 
-/// `get_tdx_policy` view (INTERFACES §2.4): what `register_instance_tdx` enforces, whatever the stored root is.
+/// `get_tdx_policy` view (SPEC-TDX §2.4): what `register_instance_tdx` enforces, whatever the stored root is.
 #[near(serializers = [json])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TdxPolicyView {
@@ -477,7 +477,7 @@ impl Registry {
         encode_hex(&v.key_hash)
     }
 
-    /// Verifies an Intel DCAP (TDX) registration quote and records/refreshes the instance (INTERFACES §2.3).
+    /// Verifies an Intel DCAP (TDX) registration quote and records/refreshes the instance (SPEC-TDX §2.3).
     /// Checks 1-4 run here on the arguments, 5-13 in [`verify_registration_tdx`]. Same deposit and refund rules
     /// as [`Registry::register_instance`]. Returns the key hash (hex).
     #[payable]
@@ -626,7 +626,7 @@ impl Registry {
         RootView { kind: self.root_kind.as_str().to_string(), p256: encode_hex(&self.root_p256) }
     }
 
-    /// The INTEL-mode policy this code enforces (INTERFACES §2.4). Never panics.
+    /// The INTEL-mode policy this code enforces (SPEC-TDX §2.4). Never panics.
     pub fn get_tdx_policy(&self) -> TdxPolicyView {
         TdxPolicyView {
             intel_root_p256: INTEL_ROOT_P256_HEX.to_string(),

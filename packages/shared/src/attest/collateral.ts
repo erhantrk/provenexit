@@ -1,4 +1,4 @@
-/** Canonical collateral JSON for `@phala/dcap-qvl` (INTERFACES §1.2). */
+/** Canonical collateral JSON for `@phala/dcap-qvl` (SPEC-TDX §1.2). */
 import { PlrError } from "../errors.js";
 import { isPlainObject, toHex } from "../bytes.js";
 

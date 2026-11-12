@@ -2,11 +2,9 @@
 
 Status: FROZEN rev 1 (2026-11-10), INTEL/dstack mode.
 
-This document is §0–§4 of the frozen interface file the build followed, copied verbatim. It specifies the
-INTEL/dstack mode next to the existing MOCK mode of [`SPEC.md`](SPEC.md) and [`SPEC-VPN.md`](SPEC-VPN.md). §5 (Docker
-image and compose) and §6 (CLI output keywords) remain in the plan; the concrete files they describe are in
-[`deploy/phala/`](deploy/phala), and the byte formats here are the ones `packages/shared` and `contracts/near`
-implement.
+This document specifies the INTEL/dstack mode next to the existing MOCK mode of [`SPEC.md`](SPEC.md) and
+[`SPEC-VPN.md`](SPEC-VPN.md). The byte formats here are the ones `packages/shared` and `contracts/near` implement;
+the measured deployment files are in [`deploy/phala/`](deploy/phala).
 
 Notation as in SPEC.md: `‖` = concatenation, hex = lowercase, no `0x`, even length.
 
@@ -226,7 +224,7 @@ The feature set is the one dcap-qvl's own NEAR gas benchmark uses (`tests/near/c
 ### 2.2 New constants (`src/lib.rs`)
 
 ```rust
-/// Intel SGX Root CA public key, x‖y (INTERFACES §0). A registry with root_kind INTEL must store exactly this.
+/// Intel SGX Root CA public key, x‖y (SPEC-TDX §0). A registry with root_kind INTEL must store exactly this.
 pub const INTEL_ROOT_P256_HEX: &str = "0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f567918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394";
 pub const MAX_TDX_QUOTE_HEX_LEN: usize = 16_384;
 pub const MAX_COLLATERAL_LEN: usize = 32_768;
@@ -299,7 +297,7 @@ Never panics.
 ### 2.5 Rust skeleton for the new verification (`src/verify_tdx.rs`, new file)
 
 ```rust
-//! INTEL-mode registration: on-chain Intel DCAP verification (dcap-qvl) + dstack event log (INTERFACES §2.3).
+//! INTEL-mode registration: on-chain Intel DCAP verification (dcap-qvl) + dstack event log (SPEC-TDX §2.3).
 use dcap_qvl::{verify::QuoteVerifier, QuoteCollateralV3};
 use near_sdk::serde_json::Value;
 use crate::binding::{key_hash, registration_report_data};
@@ -382,7 +380,7 @@ export interface QuoteVerifier {
 }
 
 // packages/shared/src/attest/intel.ts — NEW
-export const INTEL_ROOT_P256: Uint8Array;                     // fromHex(INTERFACES §0)
+export const INTEL_ROOT_P256: Uint8Array;                     // fromHex(SPEC-TDX §0)
 export const ACCEPTED_TCB_STATUSES: readonly string[];        // ["UpToDate","SWHardeningNeeded"]
 export class DcapQvlVerifier implements QuoteVerifier {       // replaces the stub in attest/stubs.ts (delete the stub class; re-export from index.ts)
   readonly rootKind: "INTEL";
@@ -504,7 +502,7 @@ export class DstackAttester implements Attester {
 ```
 **UNVERIFIED until S1:** whether `r.quote` carries a `0x` prefix (handled either way), and whether `digest` and
 `event_payload` in `event_log` are lowercase hex without `0x`. If not, normalise them in the map
-(`.replace(/^0x/,"").toLowerCase()`) and note it in INTERFACES as an S1 finding.
+(`.replace(/^0x/,"").toLowerCase()`) and note it in SPEC-TDX as an S1 finding.
 
 ### 4.3 `CollateralCache` (`enclave/src/attest/collateral-cache.ts`, new)
 
@@ -549,3 +547,24 @@ gateway; the tunnel inside is end-to-end encrypted to the attested key, so the g
 Fallback if the gateway breaks the Upgrade (spike S1 step 6): `https://<app-id>-18443s.<gateway-domain>` (TLS passthrough),
 with the exit terminating TLS itself using a boot-time self-signed cert and the client env `PLR_VPN_TLS_VERIFY=0`.
 This is safe because nothing relies on TLS for authenticity.
+
+---
+
+## 5. Docker image and dstack compose
+
+The measured files are [`deploy/phala/Dockerfile`](deploy/phala/Dockerfile) and
+[`deploy/phala/docker-compose.yml`](deploy/phala/docker-compose.yml); the live values and deploy steps are in
+[`deploy/phala/README.md`](deploy/phala/README.md). Any change to the compose gives a new compose hash, which the owner
+must approve again (`allow_compose`).
+
+---
+
+## 6. CLI commands the demo uses (frozen output keywords)
+
+| command | must print (grep-able) |
+|---|---|
+| `node client/dist/cli.js vpn verify` (INTEL) | `✔ quote signature chain to root`, `✔ Intel TCB status accepted`, `✔ dstack compose: images pinned by digest, exit logging disabled`, `✔ compose hash allowed by registry`, `✔ instance registered with matching keys`, `✔ VERIFIED` |
+| same, after `revoke_compose` | `✘ E_COMPOSE_NOT_ALLOWED` |
+| `node client/dist/cli.js vpn verify --fixture fixtures/<name>` | `FIXTURE REPLAY`, `✔ VERIFIED` |
+| `node client/dist/cli.js vpn` | `✔ SOCKS5 proxy on socks5h://127.0.0.1:18180` |
+| `curl --proxy socks5h://127.0.0.1:18180 https://api.ipify.org` | an IP address that is **not** the laptop's |

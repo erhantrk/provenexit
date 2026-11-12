@@ -422,7 +422,7 @@ describe("client on a tier-C registry: registration evidence (SPEC-CHAINS §2)",
     const R = routerFor(inst);
     const c = new PrivateClient({ routerUrl: "http://router.test", registry: reader(z), trustedRoot: inst.root.publicKey, fetch: R.fetch });
     const v = await c.attest();
-    // TCB and COMPOSE_POLICY are INTEL-only (INTERFACES §3.1), so a MOCK verification never reports them.
+    // TCB and COMPOSE_POLICY are INTEL-only (SPEC-TDX §3.1), so a MOCK verification never reports them.
     const mockChecks = Object.entries(CHECKS).filter(([k]) => k !== "TCB" && k !== "COMPOSE_POLICY").map(([, name]) => name);
     expect(v.checks).toEqual([...mockChecks, REGISTRATION_EVIDENCE_CHECK]);
   });
@@ -604,7 +604,7 @@ describe("plr CLI with PLR_CHAIN=zcash", () => {
   });
 
   it("checkLines: the evidence step only for non-verifying registries; registry failures there are attributed to it", () => {
-    // MOCK report = SPEC §9 list: the two INTEL-only checks (INTERFACES §3.1) are never printed.
+    // MOCK report = SPEC §9 list: the two INTEL-only checks (SPEC-TDX §3.1) are never printed.
     const mockChecks = Object.keys(CHECKS).length - 2;
     expect(checkLines(undefined).length).toBe(mockChecks);
     expect(checkLines(undefined, undefined, { evidence: true }).length).toBe(mockChecks + 1);

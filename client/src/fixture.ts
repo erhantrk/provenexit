@@ -1,5 +1,5 @@
 /**
- * Fixture replay (INTERFACES §3.3): `plr vpn verify --fixture <dir>` re-verifies a recorded attestation bundle
+ * Fixture replay (SPEC-TDX §3.3): `plr vpn verify --fixture <dir>` re-verifies a recorded attestation bundle
  * against the recorded registry snapshot. The DCAP check runs at the capture time, so a fixture verifies
  * forever and needs no network. What it proves is that the recorded exit was genuine at capture time.
  */
@@ -21,7 +21,7 @@ import {
 } from "@plr/shared";
 import { isPlainObject } from "./util.js";
 
-/** `meta.json` of a fixture directory (INTERFACES §3.3). */
+/** `meta.json` of a fixture directory (SPEC-TDX §3.3). */
 export interface FixtureMeta {
   captured_at_ms: number;
   exit_url: string;
@@ -81,7 +81,7 @@ function parseMeta(v: unknown): FixtureMeta {
   };
 }
 
-/** Registry snapshot → {@link MemoryRegistryOptions}: tier A, clocked at the capture (INTERFACES §3.3). */
+/** Registry snapshot → {@link MemoryRegistryOptions}: tier A, clocked at the capture (SPEC-TDX §3.3). */
 function registryOptions(v: unknown, meta: FixtureMeta): MemoryRegistryOptions {
   if (!isPlainObject(v)) return bad("registry.json is not an object");
   const root = v.root;
@@ -124,7 +124,7 @@ export function readFixture(dir: string): Fixture {
 
 /**
  * The verifier {@link verifyFixture} uses by default: the real DCAP verifier pinned to the Intel root and clocked
- * at the capture time (INTERFACES §3.3), so a recorded bundle verifies forever. Exported so a test can pin the
+ * at the capture time (SPEC-TDX §3.3), so a recorded bundle verifies forever. Exported so a test can pin the
  * clock hook itself: `verify` without `ctx.nowSecs` must use `captured_at_ms`.
  */
 export function fixtureVerifier(meta: FixtureMeta): DcapQvlVerifier {
@@ -132,7 +132,7 @@ export function fixtureVerifier(meta: FixtureMeta): DcapQvlVerifier {
 }
 
 /**
- * INTERFACES §3.3: `verifyAttestation` over the recorded bundle, with the DCAP check at `captured_at_ms` and the
+ * SPEC-TDX §3.3: `verifyAttestation` over the recorded bundle, with the DCAP check at `captured_at_ms` and the
  * registry snapshot read through {@link MemoryRegistry} (`verifiesOnChain: true`, clock = `captured_at_ms`).
  * `verifier` exists for tests only: a synthetic fixture has no real Intel signature, so it needs a stub verifier.
  * @throws PlrError — the failing check's code (E_BAD_RESPONSE, E_QUOTE_*, E_COMPOSE_*, …)
@@ -149,7 +149,7 @@ export async function verifyFixture(dir: string, verifier?: QuoteVerifier): Prom
   });
 }
 
-/** Final line of a fixture replay (INTERFACES §3.3). */
+/** Final line of a fixture replay (SPEC-TDX §3.3). */
 export function fixtureReplayLine(meta: FixtureMeta): string {
   const captured = new Date(meta.captured_at_ms).toISOString();
   return `✔ VERIFIED (FIXTURE REPLAY of ${meta.exit_url}, captured ${captured}; registry snapshot of ${meta.registry}; registration tx ${meta.registration_tx})`;

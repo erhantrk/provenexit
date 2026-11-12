@@ -23,7 +23,7 @@ function code(fn: () => unknown): string {
   }
 }
 
-describe("DcapQvlVerifier (INTERFACES §3.1, TV-Q1)", () => {
+describe("DcapQvlVerifier (SPEC-TDX §3.1, TV-Q1)", () => {
   it("verifies the sample quote at 2025-06-20 and records lastStatus", () => {
     const v = new DcapQvlVerifier();
     const parsed = v.verify(q, { collateral, nowSecs: NOW });

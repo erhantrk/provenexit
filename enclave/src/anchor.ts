@@ -52,7 +52,7 @@ export interface AnchorerOptions {
   onOperatorMismatch?: () => void;
   /**
    * INTEL mode (dstack): every registration carries the Intel collateral of its quote, which turns the call into
-   * `register_instance_tdx` (INTERFACES §4.4). Unset in MOCK mode.
+   * `register_instance_tdx` (SPEC-TDX §4.4). Unset in MOCK mode.
    */
   collateral?: CollateralCache;
 }

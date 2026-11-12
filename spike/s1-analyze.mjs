@@ -1,5 +1,5 @@
 // usage: node spike/s1-analyze.mjs https://<app-id>-18300.<gateway-domain>
-//        node spike/s1-analyze.mjs docs/plan/spike-2026-11-09/fixtures/phala-dump.json   (offline, S1-F2)
+//        node spike/s1-analyze.mjs fixtures/phala-spike/phala-dump.json   (offline, S1-F2)
 import { createHash } from "node:crypto"; import { mkdirSync, readFileSync, writeFileSync } from "node:fs"; import tls from "node:tls";
 import { createRequire } from "node:module"; const require = createRequire(import.meta.url);
 const dcap = require("./node_modules/@phala/dcap-qvl");

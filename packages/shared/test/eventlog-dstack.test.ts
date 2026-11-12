@@ -1,4 +1,4 @@
-// INTERFACES §1.3 — dstack RTMR3 event log (INTEL mode, V1 digests).
+// SPEC-TDX §1.3 — dstack RTMR3 event log (INTEL mode, V1 digests).
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {

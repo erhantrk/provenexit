@@ -1244,7 +1244,7 @@ fn migrate_runs_once_and_only_on_a_rev_1_2_state() {
     fails_with(E_BAD_INPUT, Registry::migrate);
 }
 
-// ---------------- INTEL mode: `parse_intel` (INTERFACES §1.1) ----------------
+// ---------------- INTEL mode: `parse_intel` (SPEC-TDX §1.1) ----------------
 
 /// TV-Q1: `dcap-qvl` 0.7.1 `sample/tdx_quote`, a real Intel-signed TDX v4 quote (5 006 bytes, empty RTMR3; it is not
 /// a dstack quote, so it carries no event log).
@@ -1318,7 +1318,7 @@ fn parse_intel_rejects_every_structural_deviation() {
     }
 }
 
-// ---------------- INTEL mode: `verify_event_log_dstack` (INTERFACES §1.3) ----------------
+// ---------------- INTEL mode: `verify_event_log_dstack` (SPEC-TDX §1.3) ----------------
 
 const DSTACK_APP_ID: [u8; 20] = [0x11; 20];
 const DSTACK_INSTANCE_ID: [u8; 20] = [0x22; 20];
@@ -1481,7 +1481,7 @@ fn verify_event_log_dstack_accepts_the_real_phala_spike_log() {
     assert_eq!(encode_hex(&boot.compose_hash), encode_hex(&sha256(app_compose.as_bytes())), "compose-hash event");
 }
 
-// ---------------- INTEL mode: `register_instance_tdx` / `get_tdx_policy` (INTERFACES §2.3, §2.4) ----------------
+// ---------------- INTEL mode: `register_instance_tdx` / `get_tdx_policy` (SPEC-TDX §2.3, §2.4) ----------------
 //
 // Only check 7 (the Intel signature chain) needs real collateral and TV-Q1's validity instant, so only that test
 // is compiled with the test-only fixed clock (`--features tdx-test-clock`). The argument checks and the
