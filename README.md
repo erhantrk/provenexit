@@ -1,8 +1,30 @@
-# ProvenExit
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/logo-dark.png">
+  <img alt="ProvenExit" src="docs/img/logo-light.png" width="434">
+</picture>
+
+### Every VPN says "no logs". This one proves it.
+
+A VPN exit on Intel TDX whose approved, logging-off build is checked on NEAR before any byte leaves your machine.<br>
+Live exit on Phala Cloud (runs during judging) · NEAR **testnet only** · MIT
+
+[![exit](https://img.shields.io/badge/exit-Intel%20TDX%20%C2%B7%20Phala-111110?style=flat-square)](deploy/phala/README.md)
+[![on-chain checks](https://img.shields.io/badge/on--chain%20checks-13%2F13-3FB950?style=flat-square)](https://testnet.nearblocks.io/txns/HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8)
+[![network](https://img.shields.io/badge/network-NEAR%20testnet%20only-555?style=flat-square)](#limits-and-trust)
+[![tests](https://github.com/erhantrk/provenexit/actions/workflows/tests.yml/badge.svg)](https://github.com/erhantrk/provenexit/actions/workflows/tests.yml)
+[![license](https://img.shields.io/badge/license-MIT-555?style=flat-square)](LICENSE)
+
+[Try it](#try-it-in-2-minutes) · [What NEAR does](#what-near-does-here) · [Verify each claim](#how-to-verify-each-claim) · [How it works](#what-it-does) · [Limits](#limits-and-trust) · [AI use](#ai-use)
+
+</div>
+
+---
 
 **NEAR verifies Intel's TDX attestation on chain, and uses it as an allowlist for VPN exits. When the owner revokes a build on NEAR, the next connection is refused.**
 
-Every VPN says "no logs". ProvenExit's client checks, before it sends a byte, that the exit runs an approved build with logging off. The proof is an Intel-signed quote, checked against a NEAR registry. Built at NEAR HACKATHON (2026-11).
+ProvenExit's client checks, before it sends a byte, that the exit runs an approved build with logging off. The proof is an Intel-signed quote, checked against a NEAR registry. Built at NEAR HACKATHON (2026-11).
 
 > **Status:** a live exit runs on Intel TDX hardware (Phala Cloud, production OS `dstack-0.6.1`). The NEAR contract verified its quote on chain, all 13 checks, before listing its keys ([tx `HSQqnRMu…`](https://testnet.nearblocks.io/txns/HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8)). The full local demo (option 1) uses a mock root. Limits: [Limits and trust](#limits-and-trust).
 
