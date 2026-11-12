@@ -1,5 +1,5 @@
 {
-  "name": "private-llm-router",
+  "name": "provenexit",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -21,10 +21,10 @@
     "build:mcp": "tsc -b && node mcp/build.mjs"
   },
   "devDependencies": {
-    "typescript": "5.9.3",
-    "vitest": "^4.0.0",
     "@types/node": "^22.0.0",
     "esbuild": "^0.28.0",
-    "tsx": "^4.20.0"
+    "tsx": "^4.20.0",
+    "typescript": "5.9.3",
+    "vitest": "^4.0.0"
   }
 }

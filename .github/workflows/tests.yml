@@ -6,7 +6,7 @@ on:
 permissions:
   contents: read
 jobs:
-  # macOS: the local mock-TDX host measures the node runtime as a Mach-O binary (enclave/src/mock-tdx/runtime.ts)
+  # macOS: the enclave build and the mock-TDX host measure the node runtime as a Mach-O binary (enclave/src/mock-tdx/runtime.ts)
   suites:
     name: unit suites + live-exit replay
     runs-on: macos-latest
@@ -17,8 +17,6 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
-      - name: llama-server (measured by the enclave build for the LLM-router composes)
-        run: brew install llama.cpp
       - run: npx tsc -b
       - run: npm run build -w @plr/enclave
       - run: npm test

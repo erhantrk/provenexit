@@ -53,7 +53,7 @@ You see 16 `✔` lines and `✔ VERIFIED (FIXTURE REPLAY …)`. The full local d
 - **186.34 Tgas:** one NEAR transaction verified the live exit's real Intel TDX quote inside the contract, **all 13 checks** (DCAP signature, TCB, event log, compose, allowlists, key binding), then listed its keys ([tx `EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN)).
 - **0 access keys** on the registry contract, and it is a reproducible build of this repo (code hash `C1hvenbr…`): nobody can swap the code that checks the exits.
 - **1 live exit** on Intel TDX: TCB `UpToDate`, debug off, image pinned by digest, container logging off, only ports 80 and 443, at most 32 tunnels.
-- **299 client tests and 60 contract tests** pass (client suite; contract tests in [`contracts/near/README.md`](contracts/near/README.md)).
+- **552 unit tests, 58 e2e tests and 60 contract tests** pass (unit: shared 260, client 145, enclave 138, MCP 9; e2e on near-sandbox with the MOCK root; contract tests in [`contracts/near/README.md`](contracts/near/README.md)).
 - **Owner revoke and re-allow** transactions ran on the first testnet registry (on the test compose; a client refusing right after a revocation is shown on the local demo stack) ([revoke tx](https://testnet.nearblocks.io/txns/3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz), [re-allow tx](https://testnet.nearblocks.io/txns/642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV)).
 
 ## Tracks
@@ -80,7 +80,7 @@ A keyless NEAR contract on testnet ([`vpnreg.pe-owner-erhan.testnet`](https://te
 | the same, without network | `node client/dist/cli.js vpn verify --fixture fixtures/live-exit` | `✔ VERIFIED (FIXTURE REPLAY …)` |
 | NEAR verified Intel's signature itself | registration tx [`EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN) | success, 186.34 Tgas: all 13 checks ran in the contract |
 | the exit image is pinned and logging is off | `deploy/phala/docker-compose.yml`; `checkDstackComposePolicy` in [`packages/shared/src/attest/compose-policy.ts`](packages/shared/src/attest/compose-policy.ts) | image by digest, `logging.driver: none`; the same check rejects the real 2026-11-09 spike compose (`E_COMPOSE_POLICY`) |
-| image = this source | [`scripts/build-exit-image.sh`](scripts/build-exit-image.sh) builds it from the `vpn-honest` bundle and [`deploy/phala/Dockerfile`](deploy/phala/Dockerfile) | not reproducible yet: a rebuild is not shown to give the same digest (no build provenance) |
+| image = this source | [`scripts/build-exit-image.sh`](scripts/build-exit-image.sh) builds it from the `vpn-honest` bundle and [`deploy/phala/Dockerfile`](deploy/phala/Dockerfile) | not reproducible yet: a rebuild is not shown to give the same digest (no build provenance). The live image predates the 2026-11-12 removal of the router and non-NEAR code; built on the same machine, the `vpn-honest` bundle of this tree differs from that of the pre-removal tree (`00c910f`) because the removed chain writers are no longer bundled, so this tree does not rebuild the live bundle byte for byte |
 | revocation works | option 1 (MOCK stack) or the testnet revoke/re-allow txs above | `refused with E_COMPOSE_NOT_ALLOWED`, then restored by re-approval |
 | no destination in receipts | [`SPEC-VPN.md`](SPEC-VPN.md) §5; e2e scans the exits' output and run directory | only hashes, sequence numbers and timestamps |
 
@@ -89,13 +89,13 @@ A keyless NEAR contract on testnet ([`vpnreg.pe-owner-erhan.testnet`](https://te
 1. **Offline, ~2 minutes, no accounts** — the whole story on a local near-sandbox with the MOCK root:
 
    ```sh
-   npm ci && npx near-sandbox --version && npx tsc -b && npm run build -w @plr/enclave && (cd contracts/near && cargo near build non-reproducible-wasm --no-abi) && PLR_LLM=mock bash scripts/demo.sh
+   npm ci && npx near-sandbox --version && npx tsc -b && npm run build -w @plr/enclave && (cd contracts/near && cargo near build non-reproducible-wasm --no-abi) && bash scripts/demo.sh
    ```
 
-   - see: `✔ VERIFIED` (router and VPN exit), a fetch through the SOCKS5 proxy and the attested tunnel, the evil
-     builds refused with `E_COMPOSE_NOT_ALLOWED`, the MITM refused with `E_REPORT_DATA_KEYS`, owner revocation then
-     `refused with E_COMPOSE_NOT_ALLOWED` and a restore, and the final `✔ DEMO PASSED`, `✔ VPN PASSED`,
-     `✔ DNS + TWO-HOP PASSED`, `✔ COMBO PASSED`.
+   - see: `✔ VERIFIED` (the VPN exit), a fetch through the SOCKS5 proxy and the attested tunnel, the evil
+     exit refused with `E_COMPOSE_NOT_ALLOWED`, the MITM refused with `E_REPORT_DATA_KEYS`, owner revocation then
+     a refused connection and a restore, DoH-only DNS (resolver down ⇒ `E_DNS`), two-hop, and the final
+     `✔ VPN PASSED`, `✔ DNS + TWO-HOP PASSED`, `✔ DEMO PASSED`.
    - nothing is left running afterwards. Requires Node 22, Rust + `cargo-near`, and the npm lockfile's dependencies.
      The `npx near-sandbox --version` step is needed once per install: it downloads NEAR's sandbox binary (~70 MB)
      into `node_modules`, which the stack then runs (set `NEAR_SANDBOX_BIN_PATH` to reuse an existing binary).
@@ -194,7 +194,7 @@ A keyless NEAR contract on testnet ([`vpnreg.pe-owner-erhan.testnet`](https://te
 
 ## Limits and trust
 
-Every limit and disclosure from the earlier README is kept here.
+Every limit and disclosure from the earlier README that applies to the code in this tree is kept here (the ones about the removed LLM router are in [`docs/PLR-README-2026-10.md`](docs/PLR-README-2026-10.md)).
 
 ### Status of this snapshot
 
@@ -236,8 +236,7 @@ Every limit and disclosure from the earlier README is kept here.
   hardware**: whoever holds the mock root secret can forge quotes. The CLI says so on every verify
   (`MOCK ROOT (local test root, NOT Intel)`). Mock-host limits, which real TDX removes: the quote socket is a 0600
   Unix socket of the operator's uid (any same-uid process can obtain a genuine quote for **any** `report_data`), the
-  root secret is a 0600 file of the same uid, the TD is a set of same-uid processes, and a new ggml plugin file dropped
-  into a measured directory after measurement would still be found by its scan.
+  root secret is a 0600 file of the same uid, and the TD is a set of same-uid processes.
 - **Collateral freshness window (R7).** The exit serves the Intel collateral (PCK CRL, TCB info, QE identity) it
   fetched from a PCCS. `dcap-qvl` checks it against the client's clock, so it cannot be expired — but an exit can
   serve a CRL that is *stale yet unexpired* and hide a freshly revoked platform. Setting `PLR_PCCS_URL` on the client
@@ -271,6 +270,12 @@ Every limit and disclosure from the earlier README is kept here.
 - **Disclosed baseline:** commits `c2a35e4`..`9bd402e` (2026-10-23/24 — after the 2026-10-19 announcement, before the
   2026-11-01 start) built the mock-root protocol, the NEAR registry, the VPN exit and the multi-chain registries. They
   are prior work and are not claimed as hackathon-window work.
+- **Removed on 2026-11-12, to keep the submission VPN-only:** the October baseline also had a private LLM router
+  (PLR-v1: `plr verify` / `plr chat` / `plr proxy`, a mock LLM and llama.cpp builds, and a "combo" build running the
+  router and the VPN exit in one TD) and registries on EVM/Monad, Solana, Stellar and Zcash (`contracts/{evm,solana,stellar}`,
+  a Zcash record log, `SPEC-CHAINS.md`, `SPEC-COMBO.md`). They were removed from the tree on 2026-11-12 and remain in
+  the baseline commits `c2a35e4`..`9bd402e` (and in the history up to the removal). `SPEC.md` keeps only the base the
+  VPN uses (its section numbers are unchanged).
 - **Judged work:** `9bd402e`..`hackathon-submission` (from 2026-11-09): the real Intel TDX path (dstack event log,
   DCAP in the client and on-chain in the contract, compose policy, the Phala spike, the local stack, the exit image
   and the live TDX exit).
@@ -327,30 +332,25 @@ MOCK root in place of Intel.
 | path | what |
 |---|---|
 | [`packages/shared`](packages/shared) `@plr/shared` | protocol: quote parsing (MOCK + INTEL), dstack event log, DCAP verifier, collateral, compose policy, key binding, tunnel crypto, receipts, `verifyAttestation` |
-| [`client`](client) `@plr/client`, `plr` / `provenexit` CLI | `VpnClient` / `TwoHopClient`, `NearRegistry`, the SOCKS5 proxy, `vpn verify`, `vpn inspect`, `vpn verify --fixture` |
-| [`enclave`](enclave) `@plr/enclave` | exit bundle, `DstackAttester`, collateral cache, the mock TDX host, mock LLM, test-only logging builds |
+| [`client`](client) `@plr/client`, `plr` / `provenexit` CLI | `VpnClient` / `TwoHopClient`, `NearRegistry`, the SOCKS5 proxy, `vpn verify`, `vpn inspect`, `vpn verify --fixture`, the status bundle source |
+| [`enclave`](enclave) `@plr/enclave` | exit bundle, `DstackAttester`, collateral cache, the mock TDX host, the test-only logging exit build |
 | [`contracts/near`](contracts/near) | the registry: allowlists, `register_instance_tdx` (on-chain dcap-qvl), `anchor_receipts`, views |
+| [`SPEC.md`](SPEC.md), [`SPEC-VPN.md`](SPEC-VPN.md) | the base protocol (quote, event log, key binding, registry, receipts, verification order) and the VPN exit (tunnel, DoH, egress, two-hop) |
 | [`SPEC-TDX.md`](SPEC-TDX.md) | the frozen INTEL/dstack byte formats and the contract/client additions this code implements |
 | [`deploy/phala`](deploy/phala) | the measured exit compose (the live image, pinned by digest), its Dockerfile, and the spike compose |
 | [`fixtures/live-exit`](fixtures/live-exit) | the live exit's attestation bundle, nonce and registry snapshot (2026-11-12), replayed by `vpn verify --fixture` |
 | [`fixtures/phala-spike`](fixtures/phala-spike) | the real 2026-11-09 TDX dump, its parsed parts, and the SPEC-TDX §3.3 replay fixture |
-| [`e2e`](e2e) | the stack harness (near-sandbox, zebrad, anvil, Stellar, Solana), attacker scenarios, locked e2e tests |
-| [`scripts`](scripts) | `demo.sh` (option 1), `demo-live.sh`, `dev-up.sh` / `dev-down.sh`, `owner.sh`, `pccs-live-check.mjs` |
+| [`mcp`](mcp), [`status`](status) | the MCP server for AI agents and the self-contained status bundle (options 4 and 5) |
+| [`e2e`](e2e) | the stack harness (near-sandbox, the VPN registry, the mock TDX host), attacker scenarios, locked e2e tests |
+| [`scripts`](scripts) | `demo.sh` (option 1), `try-live.sh`, `demo-live.sh`, `dev-up.sh` / `dev-down.sh`, `owner.sh`, `pccs-live-check.mjs` |
 
-Elsewhere in the repo, not part of the NEAR submission (mentioned once, as the plan asks): the private LLM router
-(PLR-v1, `plr verify` / `plr chat` / `plr proxy`, still exercised by `scripts/demo.sh`) and the multi-chain registries
-([`SPEC-CHAINS.md`](SPEC-CHAINS.md): EVM/Monad, Stellar, Solana in `contracts/{evm,stellar,solana}`, Zcash record
-logs in `client/src/zcash-registry.ts`). They are pre-hackathon temo code (October 2026). `scripts/demo.sh` runs the
-NEAR path only by default; `PLR_DEMO_CHAINS=all PLR_LLM=mock bash scripts/demo.sh` also runs those older chain stages
-(each only when its node tools are installed).
-
-Older history (commit timeline, multi-chain work, the October tour): [`docs/HISTORY.md`](docs/HISTORY.md).
+Older history (commit timeline, the removed router and multi-chain code, the October tour): [`docs/HISTORY.md`](docs/HISTORY.md).
 
 ## Libraries
 
 `@noble/curves`, `@noble/hashes`, `@noble/ciphers`, `near-api-js`, `@phala/dcap-qvl` 0.7.1 (Apache-2.0),
-`@phala/dstack-sdk` 0.5.8 (Apache-2.0), `yaml` 2.8.1, `viem`, `@solana/web3.js`, `@stellar/stellar-sdk`, `esbuild`,
-`vitest`, `near-sdk` 5.29.1, the `dcap-qvl` 0.7.1 crate (MIT), `sha2`, `p256`, `ed25519-dalek`, `forge-std`.
+`@phala/dstack-sdk` 0.5.8 (Apache-2.0), `yaml` 2.8.1, `@modelcontextprotocol/sdk`, `zod`, `esbuild`,
+`vitest`, `near-sdk` 5.29.1, the `dcap-qvl` 0.7.1 crate (MIT), `sha2`, `p256`, `ed25519-dalek`.
 Test vectors from dcap-qvl's `sample/` (MIT). Infrastructure: Phala Cloud (dstack: the live exit and a test CVM), NEAR testnet,
 FASTNEAR RPC, Phala PCCS.
 
