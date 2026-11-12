@@ -1,7 +1,7 @@
 // operator one-off: build register_instance_tdx args from the 2026-11-09 Phala spike dump (S1-F2)
 import { readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-const R = "/Users/exampleuser/personal/web3/hackathons/provenexit";
+const R = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 const dcap = await import(R + "/node_modules/@phala/dcap-qvl/dist/index.js").catch(() => import(R + "/node_modules/@phala/dcap-qvl/index.js")).catch(async () => (await import("module")).createRequire(R + "/package.json")("@phala/dcap-qvl"));
 const shared = await import(R + "/packages/shared/dist/index.js");
 const d = JSON.parse(readFileSync(R + "/fixtures/phala-spike/phala-dump.json", "utf8"));
