@@ -99,7 +99,7 @@ In this order, before every new connection, as the client prints them. The first
 19. registry re-check before each connection (compose, OS, instance)
 20. destinations resolved by the exit (remote DNS); the client never resolves them
 
-The published `provenexit@0.1.1` prints check 10 as "report_data binds router keys".
+The published `provenexit@0.1.1` prints check 10 as "report_data binds router keys" and asks one RPC provider.
 
 The NEAR contract runs its own 13 checks when the exit registers (DCAP signature and TCB, event log, compose,
 allowlists, key binding). The two lists are separate: see [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md), which also
@@ -118,7 +118,7 @@ Each one in full in [docs/LIMITS.md](docs/LIMITS.md).
 - [Collateral freshness is bounded by Intel's CRL interval](docs/LIMITS.md#collateral-freshness).
 - [The OS measurement was observed, not reproduced](docs/LIMITS.md#the-os-measurement-was-observed-not-reproduced).
 - [A matching image digest does not prove the source is honest](docs/LIMITS.md#what-a-matching-image-digest-proves).
-- [One owner key decides the allowlist](docs/LIMITS.md#one-owner-key-decides-the-allowlist); [the registry RPC endpoint is trusted](docs/LIMITS.md#the-registry-rpc-endpoint-is-trusted).
+- [One owner key decides the allowlist](docs/LIMITS.md#one-owner-key-decides-the-allowlist); [registry answers are cross-checked between two RPC providers, not proven](docs/LIMITS.md#registry-answers-are-cross-checked-not-proven).
 - [Phala's gateway terminates TLS](docs/LIMITS.md#phalas-gateway-terminates-tls) (it sees only tunnel ciphertext).
 - [The fixture replay proves the past](docs/LIMITS.md#the-fixture-replay-proves-the-past), not the present.
 - [Intel, the dstack OS and side channels are trusted / out of scope](docs/LIMITS.md#tee-vendor-trust-and-side-channels).
