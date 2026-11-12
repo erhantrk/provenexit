@@ -4,7 +4,7 @@
  */
 import { toHex, type VerifiedRouter } from "@plr/shared";
 import { recheckRegistry, type AttestationSession } from "./attestation.js";
-import { TracingRegistry, checkLines, type CheckLine } from "./verify-report.js";
+import { TracingRegistry, checkLines, type CheckLine, type CodeHashState } from "./verify-report.js";
 import type { VpnClient } from "./vpn/client.js";
 import { isPlrError } from "@plr/shared";
 
@@ -40,12 +40,12 @@ const fromLine = (l: CheckLine): VerifyCheck => ({
 
 /**
  * Runs exactly what `plr vpn verify` runs (attest, registry re-check) and returns the ordered check list
- * (INTEL: 16 lines + re-check + remote DNS). Never throws.
+ * (INTEL: 16 lines, 17 with the registry code-hash line of a pinned registry, + re-check + remote DNS). Never throws.
  */
 export async function verifyVpnReport(client: VpnClient, registry: TracingRegistry): Promise<VerifyReport> {
   const root = client.rootKind;
   const intel = root === "INTEL";
-  const opts = { intel };
+  const opts = (): { intel: boolean; codeHash: CodeHashState } => ({ intel, codeHash: registry.codeHashState });
   const refused = (e: unknown, lines: CheckLine[], recheck: "skip" | "fail"): VerifyReport => {
     const code = errCode(e);
     const checks = lines.map(fromLine);
@@ -57,9 +57,9 @@ export async function verifyVpnReport(client: VpnClient, registry: TracingRegist
   try {
     session = await client.attestSession();
   } catch (e) {
-    return refused(e, checkLines(e, registry.lastCall, opts), "skip");
+    return refused(e, checkLines(e, registry.lastCall, opts()), "skip");
   }
-  const passed = checkLines(undefined, undefined, opts);
+  const passed = checkLines(undefined, undefined, opts());
   try {
     await recheckRegistry(registry, session.verified);
   } catch (e) {

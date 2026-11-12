@@ -13,6 +13,7 @@ const need = (k) => env[k] || (() => { throw new Error(`deploy/testnet/env.live:
 const defaults = {
   exitUrl: need("PLR_VPN_URL"),
   registry: need("PLR_VPN_REGISTRY"),
+  registryCodeHash: need("PLR_VPN_REGISTRY_CODE_HASH"),
   trustedRoot: need("PLR_TRUSTED_ROOT"),
   rpcUrl: need("PLR_NEAR_RPC"),
   operator: env.OPERATOR_ID,

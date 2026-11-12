@@ -430,6 +430,15 @@ export function isCollateralJson(c: unknown): c is CollateralJson;
   `image: <ref>` per image, and `explorer: https://testnet.nearblocks.io/address/<registry>` when `PLR_NEAR_RPC`
   contains `testnet`.
 - New CLI flag: `plr vpn verify --fixture <dir>` (§3.3).
+- Registry code-hash pin (client only, not one of the `CHECKS` of `verifyAttestation`): `NearRegistry` takes
+  `codeHash` (env `PLR_VPN_REGISTRY_CODE_HASH`, else the shipped pin of a known registry). Before each attestation
+  and each registry re-check (and again inside every view) it calls `view_account` and compares `code_hash` with
+  the pin; a difference refuses with `E_REGISTRY_CODE_HASH`. That code exists in `@plr/client` only:
+  `@plr/shared` is bundled into the measured exit image and is not changed. A passed check is reused for 30 s.
+  `plr vpn verify` prints it as its first check line,
+  `registry contract code hash matches the pinned build (view_account.code_hash)`; it runs before the exit is
+  asked for its attestation. INTEL mode with no pin is a config error; MOCK mode with no pin runs with a warning
+  and without that line. The fixture replay has no network and does not print it.
 - `client/package.json`: add `"bin": { "plr": "./dist/cli.js", "provenexit": "./dist/cli.js" }`.
 
 ### 3.3 Fixture / replay format (`fixtures/<name>/`)

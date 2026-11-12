@@ -8,6 +8,11 @@
  * base — whoever answers these calls decides checks 3, 8 and 9 of `verifyAttestation`. The network is
  * untrusted (SPEC §1), therefore the endpoint must be reached over an authenticated channel: `https:` for any
  * remote host; plain `http:` only to a loopback address (a local node / sandbox, or a local light client).
+ *
+ * CODE PIN: with `codeHash` set, the registry account's on-chain `code_hash` (`view_account`) must equal that pin
+ * before any view result is used; a different hash rejects with {@link RegistryCodeHashError}
+ * (`E_REGISTRY_CODE_HASH`). A passed check is reused for {@link CODE_HASH_TTL_MS}; a failed or unanswered one is
+ * never reused.
  */
 import { JsonRpcProvider } from "near-api-js";
 import {
@@ -36,6 +41,84 @@ export interface NearRegistryOptions {
    * by the very next request — SPEC demo scenario 5).
    */
   finality?: NearFinality;
+  /**
+   * Pinned `code_hash` of the registry account (base58, as `view_account` prints it). Set ⇒ checked before any
+   * view; unset ⇒ only the account id is pinned (local MOCK demo).
+   */
+  codeHash?: string;
+}
+
+/** The client-only error code of a registry account that does not run the pinned code. */
+export const E_REGISTRY_CODE_HASH = "E_REGISTRY_CODE_HASH";
+
+/**
+ * The registry account's `code_hash` differs from the pin. A `PlrError` whose `code` is `E_REGISTRY_CODE_HASH`.
+ * That code is deliberately NOT in `@plr/shared`'s `ERROR_CODES`: `@plr/shared` is bundled into the measured exit
+ * image, and this is a client-side check, so the exit's source (and its reproducible image digest) stays as it is.
+ */
+export class RegistryCodeHashError extends PlrError {
+  constructor() {
+    super("E_REGISTRY_UNAVAILABLE");
+    (this as { code: string }).code = E_REGISTRY_CODE_HASH;
+    this.message = `${E_REGISTRY_CODE_HASH}: registry account code hash differs from the pin`;
+  }
+}
+
+export function isRegistryCodeHashError(e: unknown): e is RegistryCodeHashError {
+  return e instanceof PlrError && (e.code as string) === E_REGISTRY_CODE_HASH;
+}
+
+/**
+ * The code-hash check of a registry reader that has one (a {@link NearRegistry}, also behind a wrapper that
+ * forwards `checkCodeHash`); a no-op for any other reader. Runs before the registry is used for a verification.
+ * @throws RegistryCodeHashError (different code); PlrError E_REGISTRY_UNAVAILABLE (account unreadable)
+ */
+export async function checkRegistryCode(registry: unknown): Promise<void> {
+  const f = (registry as { checkCodeHash?: unknown } | null)?.checkCodeHash;
+  if (typeof f !== "function") return;
+  try {
+    await (f as () => Promise<void>).call(registry);
+  } catch (e) {
+    if (isRegistryCodeHashError(e)) throw e;
+    throw new PlrError("E_REGISTRY_UNAVAILABLE", "view_account");
+  }
+}
+
+/** A passed code-hash check is reused for this long; a failed one is never reused. */
+export const CODE_HASH_TTL_MS = 30_000;
+
+/**
+ * Code hashes of the registries this client ships with: the reproducible build of `contracts/near` deployed at
+ * that account (README, "Run it yourself"). `PLR_VPN_REGISTRY_CODE_HASH` overrides / adds a pin.
+ */
+export const KNOWN_REGISTRY_CODE_HASHES: Readonly<Record<string, string>> = Object.freeze({
+  "vpnreg.pe-owner-erhan.testnet": "C1hvenbrzHKN1n1f2z63Duburr8YXLAKBescrEvarCGM",
+});
+
+const CODE_HASH_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+/** `code_hash` of an account with no contract (32 zero bytes): never a valid pin. */
+const NO_CODE_HASH = "1".repeat(32);
+
+/** True for a base58 SHA-256 as NEAR prints `code_hash` (and not the "no contract" value). */
+export function isCodeHash(v: unknown): v is string {
+  return typeof v === "string" && CODE_HASH_RE.test(v) && v !== NO_CODE_HASH;
+}
+
+/**
+ * The code-hash pin for a registry: `explicit` (`PLR_VPN_REGISTRY_CODE_HASH`) if set, else the shipped pin of a
+ * known registry. With neither: an INTEL verification refuses to start (throws), a MOCK one (local demo / tests,
+ * where the registry is a sandbox contract built on the spot) runs with the account id only and returns undefined.
+ * @throws Error — malformed pin, or no pin for a registry used with the Intel root
+ */
+export function resolveRegistryCodeHash(contractId: string, explicit: string | undefined, intel: boolean): string | undefined {
+  if (explicit !== undefined && explicit !== "") {
+    if (!isCodeHash(explicit)) throw new Error("PLR_VPN_REGISTRY_CODE_HASH must be the registry account's code hash (base58, as view_account prints it)");
+    return explicit;
+  }
+  const known = Object.hasOwn(KNOWN_REGISTRY_CODE_HASHES, contractId) ? KNOWN_REGISTRY_CODE_HASHES[contractId] : undefined;
+  if (known !== undefined) return known;
+  if (intel) throw new Error(`PLR_VPN_REGISTRY_CODE_HASH is required for registry ${contractId} (no shipped code-hash pin; INTEL mode refuses an unpinned registry)`);
+  return undefined;
 }
 
 /** Max size of a view result we are willing to parse. */
@@ -112,6 +195,10 @@ export class NearRegistry implements RegistryReader {
   readonly #provider: JsonRpcProvider;
   readonly #timeoutMs: number;
   readonly #finality: NearFinality;
+  /** The pinned `code_hash`, or undefined when only the account id is pinned. */
+  readonly pinnedCodeHash: string | undefined;
+  #codeOkUntil = 0;
+  #codePending: Promise<void> | undefined;
 
   constructor(o: NearRegistryOptions) {
     if (typeof o !== "object" || o === null) throw new PlrError("E_BAD_INPUT", "NearRegistry options required");
@@ -125,12 +212,61 @@ export class NearRegistry implements RegistryReader {
     this.contractId = o.contractId;
     this.#timeoutMs = timeoutMs;
     this.#finality = finality;
+    if (o.codeHash !== undefined && !isCodeHash(o.codeHash)) throw new PlrError("E_BAD_INPUT", "codeHash is not a base58 code hash");
+    this.pinnedCodeHash = o.codeHash;
     // Few, quick retries: the per-call timeout below bounds the total wait anyway.
     this.#provider = new JsonRpcProvider({ url: url.href }, { retries: 2, wait: 100, backoff: 1.5 });
   }
 
-  /** Raw view call: returns the JSON-decoded result. Rejects on any error or timeout. */
+  /** With a pin: true while the last code-hash check passed and is still fresh. Without a pin: undefined. */
+  get codeHashVerified(): boolean | undefined {
+    return this.pinnedCodeHash === undefined ? undefined : performance.now() < this.#codeOkUntil;
+  }
+
+  /**
+   * Checks the registry account's `code_hash` against the pin (no-op without one, or within the reuse window);
+   * concurrent callers share one `view_account`.
+   * @throws RegistryCodeHashError (different code); NearRegistryError (RPC failed / malformed / timeout)
+   */
+  async checkCodeHash(): Promise<void> {
+    if (this.pinnedCodeHash === undefined || performance.now() < this.#codeOkUntil) return;
+    this.#codePending ??= this.#fetchAndCompareCode().finally(() => {
+      this.#codePending = undefined;
+    });
+    return this.#codePending;
+  }
+
+  async #fetchAndCompareCode(): Promise<void> {
+    this.#codeOkUntil = 0;
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new NearRegistryError("view_account: timeout")), this.#timeoutMs);
+      timer.unref?.();
+    });
+    let hash: unknown;
+    try {
+      const acct: unknown = await Promise.race([
+        this.#provider.query({ request_type: "view_account", finality: this.#finality, account_id: this.contractId }),
+        timeout,
+      ]);
+      hash = typeof acct === "object" && acct !== null ? (acct as Record<string, unknown>).code_hash : undefined;
+    } catch (e) {
+      if (e instanceof NearRegistryError) throw e;
+      throw new NearRegistryError("view_account: RPC failed");
+    } finally {
+      clearTimeout(timer);
+    }
+    if (typeof hash !== "string" || !CODE_HASH_RE.test(hash)) throw new NearRegistryError("view_account: malformed reply");
+    if (hash !== this.pinnedCodeHash) throw new RegistryCodeHashError();
+    this.#codeOkUntil = performance.now() + CODE_HASH_TTL_MS;
+  }
+
+  /**
+   * Raw view call: returns the JSON-decoded result. Rejects on any error or timeout; with a code-hash pin, first
+   * rejects with {@link RegistryCodeHashError} when the account runs other code.
+   */
   async view(method: string, args: Record<string, unknown>): Promise<unknown> {
+    await this.checkCodeHash();
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new NearRegistryError(`${method}: timeout`)), this.#timeoutMs);

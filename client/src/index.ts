@@ -1,6 +1,6 @@
 export { verifyVpnReceiptAnchored, parseProofReply, type AnchoredReceipt, type ProofReply } from "./anchored.js";
-export { NearRegistry, NearRegistryError, isNearAccountId, isLoopbackHost, checkRpcUrl, type NearRegistryOptions, type NearFinality } from "./near-registry.js";
-export { TracingRegistry, checkLines, formatCheckLine, type CheckLine, type CheckStatus } from "./verify-report.js";
+export { NearRegistry, NearRegistryError, isNearAccountId, isLoopbackHost, checkRpcUrl, isCodeHash, resolveRegistryCodeHash, checkRegistryCode, isRegistryCodeHashError, RegistryCodeHashError, E_REGISTRY_CODE_HASH, KNOWN_REGISTRY_CODE_HASHES, CODE_HASH_TTL_MS, type NearRegistryOptions, type NearFinality } from "./near-registry.js";
+export { TracingRegistry, checkLines, formatCheckLine, REGISTRY_CODE_LINE, type CheckLine, type CheckStatus, type CheckLineOptions, type CodeHashState } from "./verify-report.js";
 export { runCli, loadVpnConfig, makeRegistry, ConfigError, inspectIntelBundle, type VpnCliConfig, type CliIo, type IntelInspection } from "./cli.js";
 export { AttestationCache, recheckRegistry, type AttestationSession, type AttestationCacheOptions } from "./attestation.js";
 export { fetchPccsCollateral, isPccsUrl } from "./pccs.js";

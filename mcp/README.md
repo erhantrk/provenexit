@@ -35,7 +35,7 @@ Claude Desktop, in `claude_desktop_config.json`:
 ```
 
 Configuration is optional. The defaults are the live testnet deployment (`deploy/testnet/env.live`, baked in at
-build time); override with `PLR_VPN_URL`, `PLR_VPN_REGISTRY`, `PLR_TRUSTED_ROOT`, `PLR_NEAR_RPC`.
+build time); override with `PLR_VPN_URL`, `PLR_VPN_REGISTRY`, `PLR_VPN_REGISTRY_CODE_HASH`, `PLR_TRUSTED_ROOT`, `PLR_NEAR_RPC`.
 
 ## Trust note
 

@@ -19,6 +19,7 @@ import {
   type VerifiedRouter,
 } from "@plr/shared";
 import { fetchPccsCollateral } from "./pccs.js";
+import { checkRegistryCode, isRegistryCodeHashError } from "./near-registry.js";
 
 /** `MAX_TDX_QUOTE_BYTES` (SPEC-TDX §0) in hex. */
 const MAX_PCCS_QUOTE_HEX = 2 * 8192;
@@ -68,6 +69,8 @@ export class AttestationCache {
   async attest(): Promise<AttestationSession> {
     const nonce = new Uint8Array(randomBytes(32));
     try {
+      // First of all: a registry whose account does not run the pinned code answers nothing we would trust.
+      await checkRegistryCode(this.#o.registry);
       const bundle = await this.#withFreshCollateral(await this.#o.fetchBundle(nonce));
       const verified = await verifyAttestation({
         bundle,
@@ -123,7 +126,8 @@ async function regCall<T>(f: () => Promise<unknown>, valid: (v: unknown) => v is
   let v: unknown;
   try {
     v = await f();
-  } catch {
+  } catch (e) {
+    if (isRegistryCodeHashError(e)) throw e;
     throw new PlrError("E_REGISTRY_UNAVAILABLE");
   }
   if (!valid(v)) throw new PlrError("E_REGISTRY_UNAVAILABLE", "malformed registry reply");
@@ -138,9 +142,11 @@ const isInstanceOrNull = (v: unknown): v is InstanceRecord | null => v === null 
  * hash and OS measurement are still allowed and the instance is still registered, unexpired, with exactly these
  * keys / compose / OS. Used on every new connection, even with a cached attestation, so an owner revocation
  * applies to the very next connection. Returns the live instance record (incl. its operator's `org_id`).
- * @throws PlrError E_COMPOSE_NOT_ALLOWED, E_OS_NOT_ALLOWED, E_INSTANCE_NOT_REGISTERED, E_REGISTRY_UNAVAILABLE
+ * @throws PlrError E_COMPOSE_NOT_ALLOWED, E_OS_NOT_ALLOWED, E_INSTANCE_NOT_REGISTERED, E_REGISTRY_UNAVAILABLE,
+ *         E_REGISTRY_CODE_HASH (a pinned registry whose account runs other code)
  */
 export async function recheckRegistry(registry: RegistryReader, v: VerifiedRouter, now: number = Date.now()): Promise<InstanceRecord> {
+  await checkRegistryCode(registry);
   const composeHex = toHex(v.composeHash);
   const osHex = toHex(v.osMeasurement);
   if (!(await regCall(() => registry.isComposeAllowed(composeHex), isBool))) throw new PlrError("E_COMPOSE_NOT_ALLOWED");

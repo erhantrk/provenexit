@@ -12,12 +12,13 @@ import { isIP } from "node:net";
 import {
   fromHex,
   isHex,
+  isIntelRoot,
   isValidP256Pub,
   keyHash,
   toHex,
   type QuoteVerifier,
 } from "@plr/shared";
-import { NearRegistry, checkRpcUrl, isNearAccountId } from "./near-registry.js";
+import { NearRegistry, checkRpcUrl, isNearAccountId, resolveRegistryCodeHash } from "./near-registry.js";
 import { TracingRegistry, checkLines } from "./verify-report.js";
 import { VpnClient } from "./vpn/client.js";
 import { composeFacts, verifyVpnReport, type ComposeFacts, type VerifyCheck } from "./vpn-report.js";
@@ -30,6 +31,8 @@ declare const __STATUS_REPLAY__: RawFixture | undefined;
 export interface StatusDefaults {
   exitUrl?: string;
   registry?: string;
+  /** deploy/testnet/env.live `PLR_VPN_REGISTRY_CODE_HASH`: the pinned code hash of that registry account. */
+  registryCodeHash?: string;
   trustedRoot?: string;
   rpcUrl?: string;
   /** deploy/testnet/env.live `OPERATOR_ID`. */
@@ -60,6 +63,11 @@ export interface StatusOptions {
   exitUrl?: string;
   /** VPN registry account id. */
   registry?: string;
+  /**
+   * Pinned code hash of the registry account (else `PLR_VPN_REGISTRY_CODE_HASH`, else the baked / shipped pin of
+   * that registry). Required with the Intel root; without one a MOCK root checks the account id only.
+   */
+  registryCodeHash?: string;
   /** Pinned root, 128 hex. */
   trustedRoot?: string;
   rpcUrl?: string;
@@ -354,6 +362,8 @@ interface Cfg {
   registry: string;
   trustedRoot: Uint8Array;
   rpcUrl: string;
+  /** Pinned code hash of the registry account; undefined only with a MOCK root and an unpinned registry. */
+  codeHash: string | undefined;
 }
 
 function resolveConfig(o: StatusOptions): Cfg {
@@ -370,7 +380,10 @@ function resolveConfig(o: StatusOptions): Cfg {
   if (!isValidP256Pub(trustedRoot)) throw new Error("PLR_TRUSTED_ROOT is not a valid P-256 public key");
   if (rpcUrl === undefined) throw new Error("NEAR RPC not configured (PLR_NEAR_RPC)");
   checkRpcUrl(rpcUrl);
-  return { exitUrl, registry, trustedRoot, rpcUrl };
+  // The baked pin belongs to the baked registry only: another registry needs its own (or a shipped) pin.
+  const explicit = o.registryCodeHash || env.PLR_VPN_REGISTRY_CODE_HASH || (registry === BAKED.registry ? BAKED.registryCodeHash : undefined);
+  const codeHash = resolveRegistryCodeHash(registry, explicit, isIntelRoot(trustedRoot));
+  return { exitUrl, registry, trustedRoot, rpcUrl, codeHash };
 }
 
 /**
@@ -393,7 +406,7 @@ export async function getStatus(opts: StatusOptions = {}): Promise<Status> {
   }
   status.exit.url = cfg.exitUrl;
   status.registry.account = cfg.registry;
-  const near = new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.registry, timeoutMs: T.chain });
+  const near = new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.registry, timeoutMs: T.chain, ...(cfg.codeHash !== undefined ? { codeHash: cfg.codeHash } : {}) });
   const tracing = new TracingRegistry(near);
   const nearBlocks = (opts.nearBlocksApi ?? DEFAULT_NEARBLOCKS).replace(/\/+$/, "");
   const archival = opts.archivalRpc ?? DEFAULT_ARCHIVAL;
@@ -578,13 +591,13 @@ export interface OpenedExit {
 
 /**
  * Builds the {@link VpnClient} for the configured exit (defaults baked at build time, overridable by `opts` and
- * `PLR_VPN_URL` / `PLR_VPN_REGISTRY` / `PLR_TRUSTED_ROOT` / `PLR_NEAR_RPC`).
+ * `PLR_VPN_URL` / `PLR_VPN_REGISTRY` / `PLR_VPN_REGISTRY_CODE_HASH` / `PLR_TRUSTED_ROOT` / `PLR_NEAR_RPC`).
  * @throws Error with a readable message when the configuration is invalid
  */
 export function openExit(opts: StatusOptions = {}): OpenedExit {
   const cfg = resolveConfig(opts);
   const T = { verify: 25_000, egress: 15_000, chain: 8_000, ...(opts.timeouts ?? {}) };
-  const registry = new TracingRegistry(new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.registry, timeoutMs: T.chain }));
+  const registry = new TracingRegistry(new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.registry, timeoutMs: T.chain, ...(cfg.codeHash !== undefined ? { codeHash: cfg.codeHash } : {}) }));
   const client = new VpnClient({
     exitUrl: cfg.exitUrl,
     registry,

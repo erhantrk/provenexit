@@ -3,7 +3,8 @@
  * `plr` CLI (SPEC-VPN §9.2): `plr vpn` (local SOCKS5 on 127.0.0.1:18180) | `plr vpn verify` |
  * `plr vpn verify --fixture <dir>` | `plr vpn inspect` (INTEL checks without the registry, for the owner's
  * allow_compose / allow_os).
- * Env: PLR_VPN_URL, PLR_VPN_REGISTRY, PLR_NEAR_RPC, PLR_TRUSTED_ROOT; optional PLR_VPN_SOCKS_PORT (default 18180),
+ * Env: PLR_VPN_URL, PLR_VPN_REGISTRY, PLR_NEAR_RPC, PLR_TRUSTED_ROOT; optional PLR_VPN_REGISTRY_CODE_HASH (pinned
+ * code hash of the registry account; shipped for the live registry), PLR_VPN_SOCKS_PORT (default 18180),
  * PLR_VPN_ATTEST_TTL_MS (default 60000), PLR_VPN_ENTRY_URL (set ⇒ two-hop, SPEC-VPN §10, with PLR_VPN_URL as the exit),
  * PLR_PCCS_URL (INTEL mode: fetch fresh Intel collateral from that PCCS instead of the exit's copy).
  */
@@ -20,6 +21,7 @@ import {
   isCollateralJson,
   isDebug,
   isHex,
+  isIntelRoot,
   isPlrError,
   isValidP256Pub,
   fromHex,
@@ -36,7 +38,7 @@ import {
   type RootKind,
   type VerifiedRouter,
 } from "@plr/shared";
-import { NearRegistry, checkRpcUrl } from "./near-registry.js";
+import { NearRegistry, checkRpcUrl, resolveRegistryCodeHash } from "./near-registry.js";
 import { TracingRegistry, checkLines, formatCheckLine } from "./verify-report.js";
 import { recheckRegistry, type AttestationSession } from "./attestation.js";
 import { isPccsUrl } from "./pccs.js";
@@ -59,6 +61,11 @@ export interface VpnCliConfig {
   rpcUrl: string;
   /** The NEAR VPN registry contract account id (PLR_VPN_REGISTRY). */
   contractId: string;
+  /**
+   * Pinned `code_hash` of the registry account (`PLR_VPN_REGISTRY_CODE_HASH`, else the shipped pin of a known
+   * registry). Undefined only with a MOCK root and an unknown registry (local demo): then only the id is pinned.
+   */
+  registryCodeHash: string | undefined;
   trustedRoot: Uint8Array;
   socksPort: number;
   attestTtlMs: number;
@@ -85,6 +92,10 @@ env:   PLR_VPN_URL       VPN exit URL (default ${DEFAULTS.vpnExit})
        PLR_VPN_ENTRY_URL entry exit URL; when set, traffic goes client → entry → exit (two-hop): the exit is
                             reached only through the entry and must belong to a different approved organization
        PLR_VPN_REGISTRY  NEAR VPN registry contract account id (required)
+       PLR_VPN_REGISTRY_CODE_HASH
+                         pinned code hash of that account (base58, view_account.code_hash); checked before any
+                            registry answer is used. Shipped for the live registry; required for any other
+                            registry with the Intel root; optional (warning) with a MOCK root
        PLR_NEAR_RPC      (default ${DEFAULTS.rpc}; https, or http to a loopback host only)
        PLR_TRUSTED_ROOT  pinned attestation root, 128 hex (required)
        PLR_PCCS_URL      fetch fresh Intel collateral from this PCCS instead of the exit's copy
@@ -127,8 +138,19 @@ function portFrom(env: Record<string, string | undefined>, name: string, dflt: n
 }
 
 /** The NEAR registry reader for a loaded config. */
-export function makeRegistry(cfg: { rpcUrl: string; contractId: string }): RegistryReader {
-  return new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.contractId });
+export function makeRegistry(cfg: { rpcUrl: string; contractId: string; registryCodeHash?: string | undefined }): RegistryReader {
+  return new NearRegistry({
+    rpcUrl: cfg.rpcUrl,
+    contractId: cfg.contractId,
+    ...(cfg.registryCodeHash !== undefined ? { codeHash: cfg.registryCodeHash } : {}),
+  });
+}
+
+/** `plr vpn verify` header line: the registry code-hash pin, or the warning that there is none (MOCK only). */
+function codePinLine(cfg: { registryCodeHash: string | undefined }): string {
+  return cfg.registryCodeHash !== undefined
+    ? `  pinned registry code hash: ${cfg.registryCodeHash}`
+    : "  ⚠ registry code hash NOT pinned (MOCK root, local demo): only the account id is checked; set PLR_VPN_REGISTRY_CODE_HASH";
 }
 
 /** `plr vpn verify` header line: who verified the registration quote. */
@@ -140,6 +162,12 @@ export function loadVpnConfig(env: Record<string, string | undefined>): VpnCliCo
   if (contractId === undefined || contractId === "") throw new ConfigError("PLR_VPN_REGISTRY is required");
   const rpcUrl = rpcUrlFrom(env);
   const trustedRoot = trustedRootFrom(env);
+  let registryCodeHash: string | undefined;
+  try {
+    registryCodeHash = resolveRegistryCodeHash(contractId, env.PLR_VPN_REGISTRY_CODE_HASH, isIntelRoot(trustedRoot));
+  } catch (e) {
+    throw new ConfigError(e instanceof Error ? e.message : "PLR_VPN_REGISTRY_CODE_HASH");
+  }
   const socksPort = portFrom(env, "PLR_VPN_SOCKS_PORT", DEFAULTS.vpnSocksPort);
   const ttlStr = env.PLR_VPN_ATTEST_TTL_MS ?? String(VPN_ATTEST_TTL_MS);
   if (!/^\d{1,7}$/.test(ttlStr) || Number(ttlStr) > 3_600_000) throw new ConfigError("PLR_VPN_ATTEST_TTL_MS must be 0..3600000");
@@ -147,7 +175,7 @@ export function loadVpnConfig(env: Record<string, string | undefined>): VpnCliCo
   const entryUrl = env.PLR_VPN_ENTRY_URL || undefined;
   if (!isHttpUrl(exitUrl)) throw new ConfigError("PLR_VPN_URL must be an http(s) URL");
   if (entryUrl !== undefined && !isHttpUrl(entryUrl)) throw new ConfigError("PLR_VPN_ENTRY_URL must be an http(s) URL");
-  return { exitUrl, entryUrl, rpcUrl, contractId, trustedRoot, socksPort, attestTtlMs: Number(ttlStr), pccsUrl: pccsUrlFrom(env) };
+  return { exitUrl, entryUrl, rpcUrl, contractId, registryCodeHash, trustedRoot, socksPort, attestTtlMs: Number(ttlStr), pccsUrl: pccsUrlFrom(env) };
 }
 
 function isHttpUrl(u: string): boolean {
@@ -237,18 +265,19 @@ async function cmdVpnVerify(cfg: VpnCliConfig, registry: TracingRegistry, client
   const explorer = explorerLine(cfg);
   if (explorer !== undefined) io.out(explorer);
   io.out(`  pinned root: ${client.rootKind} ROOT ${toHex(cfg.trustedRoot)}`);
+  io.out(codePinLine(cfg));
   io.out("");
   let session: AttestationSession;
   try {
     session = await client.attestSession();
   } catch (e) {
-    for (const l of checkLines(e, registry.lastCall, { intel })) io.out(formatCheckLine(l));
+    for (const l of checkLines(e, registry.lastCall, { intel, codeHash: registry.codeHashState })) io.out(formatCheckLine(l));
     io.out(`  · ${RECHECK_LINE}  (not checked)`);
     io.out("");
     io.out(`✘ REFUSED — ${errCode(e)}. No connection would be tunnelled through this exit.`);
     return 1;
   }
-  for (const l of checkLines(undefined, undefined, { intel })) io.out(formatCheckLine(l));
+  for (const l of checkLines(undefined, undefined, { intel, codeHash: registry.codeHashState })) io.out(formatCheckLine(l));
   try {
     await recheckRegistry(registry, session.verified);
     io.out(`  ✔ ${RECHECK_LINE}`);
@@ -279,12 +308,12 @@ async function verifyHop(
   try {
     session = await attest();
   } catch (e) {
-    for (const l of checkLines(e, registry.lastCall, { intel })) io.out(formatCheckLine(l));
+    for (const l of checkLines(e, registry.lastCall, { intel, codeHash: registry.codeHashState })) io.out(formatCheckLine(l));
     io.out(`  · ${RECHECK_LINE}  (not checked)`);
     for (const l of orgLines(undefined, undefined)) io.out(`  · ${l}  (not checked)`);
     return { error: e };
   }
-  for (const l of checkLines(undefined, undefined, { intel })) io.out(formatCheckLine(l));
+  for (const l of checkLines(undefined, undefined, { intel, codeHash: registry.codeHashState })) io.out(formatCheckLine(l));
   try {
     const org = await check(session);
     io.out(`  ✔ ${RECHECK_LINE}`);
@@ -319,6 +348,7 @@ async function cmdTwoHopVerify(cfg: VpnCliConfig, registry: TracingRegistry, cli
   const explorer = explorerLine(cfg);
   if (explorer !== undefined) io.out(explorer);
   io.out(`  pinned root: ${client.rootKind} ROOT ${toHex(cfg.trustedRoot)}`);
+  io.out(codePinLine(cfg));
   io.out("");
   const refused = (e: unknown): number => {
     io.out("");
@@ -480,7 +510,9 @@ async function cmdVpn(cfg: VpnCliConfig, client: VpnClient, io: CliIo, untilStop
   }
   const p = await serveSocks(cfg, client, io);
   if (p === undefined) return 1;
-  io.out(`✔ VPN exit verified (${session.verified.checks.length} checks against registry ${cfg.contractId}); every new connection re-checks the registry`);
+  const nChecks = session.verified.checks.length + (cfg.registryCodeHash !== undefined ? 1 : 0);
+  io.out(`✔ VPN exit verified (${nChecks} checks against registry ${cfg.contractId}); every new connection re-checks the registry`);
+  if (cfg.registryCodeHash === undefined) io.out(codePinLine(cfg));
   printVpnSummary(io, session);
   io.out(`✔ SOCKS5 proxy on ${p.url}`);
   io.out("  remote DNS, CONNECT only");
@@ -501,6 +533,7 @@ async function cmdTwoHop(cfg: VpnCliConfig, client: TwoHopClient, io: CliIo, unt
   const p = await serveSocks(cfg, client, io);
   if (p === undefined) return 1;
   io.out(`✔ two-hop VPN verified against registry ${cfg.contractId}: entry (${a.entryOrg}) → exit (${a.exitOrg}), different organizations`);
+  if (cfg.registryCodeHash === undefined) io.out(codePinLine(cfg));
   io.out(`  entry: ${client.entryUrl}  compose ${toHex(a.entry.composeHash)}`);
   io.out(`  exit:  ${client.exitUrl}  compose ${toHex(a.exit.composeHash)}  (reached only through the entry)`);
   io.out(`  every new connection re-checks both hops and the operator rules`);
