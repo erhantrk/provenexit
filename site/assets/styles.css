@@ -103,7 +103,7 @@ button { font: inherit; color: inherit; }
 .chip { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--rule); border-radius: 4px; font-size: 15px; font-weight: 600; text-decoration: none; white-space: nowrap; }
 .chip-dot { width: 10px; height: 10px; border: 2px solid var(--ink-2); border-radius: 50%; flex: none; }
 html[data-state="error"] .chip-dot, html[data-state="stale"] .chip-dot { height: 2px; border-width: 1px; border-radius: 0; background: var(--ink-2); }
-html[data-state="refused"] .chip-dot { border-radius: 0; }
+html[data-state="refused"][data-lit] .chip-dot { border-radius: 0; }
 .menu-btn { display: none; height: 34px; padding: 0 12px; background: none; border: 1px solid var(--ink); border-radius: 4px; font-size: 15px; font-weight: 600; cursor: pointer; }
 
 @media (max-width: 1180px) {
@@ -149,10 +149,10 @@ h1 { font-size: clamp(34px, 3.75vw, 54px); font-weight: 800; line-height: 1.05; 
 .plate-link { margin-top: 12px; font-weight: 600; font-size: 17px; }
 .plate-text, .plate-foot { position: relative; }
 .pips { display: flex; flex-wrap: wrap; gap: 6px; }
-.pip { display: block; position: relative; width: 22px; height: 30px; border: 2px solid var(--ink); border-radius: 2px; transition: background-color 120ms ease-out, opacity 120ms ease-out; }
+.pip { display: block; position: relative; width: clamp(16px, 1.6vw, 22px); height: 30px; border: 2px solid var(--ink); border-radius: 2px; transition: background-color 120ms ease-out, opacity 120ms ease-out; }
 .pip[data-ok="pass"] { background: var(--ink); }
 .pip[data-ok="fail"] { background: var(--ink); }
-.pip[data-ok="fail"]::before, .pip[data-ok="fail"]::after { content: ""; position: absolute; left: 50%; top: 50%; width: 18px; height: 2.5px; background: var(--face); transform: translate(-50%, -50%) rotate(52deg); }
+.pip[data-ok="fail"]::before, .pip[data-ok="fail"]::after { content: ""; position: absolute; left: 50%; top: 50%; width: 82%; height: 2.5px; background: var(--face); transform: translate(-50%, -50%) rotate(52deg); }
 .pip[data-ok="fail"]::after { transform: translate(-50%, -50%) rotate(-52deg); }
 .pip[data-ok="skip"] { opacity: .45; }
 .pip[data-ok="none"] { border-color: transparent; opacity: .55; }
@@ -176,7 +176,6 @@ h1 { font-size: clamp(34px, 3.75vw, 54px); font-weight: 800; line-height: 1.05; 
 @media (max-width: 520px) {
   .plate { min-height: 340px; padding: 36px 28px 30px; gap: 28px; }
   .pip { width: 18px; height: 26px; }
-  .pip[data-ok="fail"]::before, .pip[data-ok="fail"]::after { width: 15px; }
   .hero { padding-bottom: 72px; }
 }
 
@@ -410,10 +409,10 @@ h3 { font-size: 22px; font-weight: 800; line-height: 1.2; }
    their own row of the current response. Recorded blocks are never inside .live. */
 html[data-state="verified"] .plate[data-face="go"] { --face: var(--go); }
 html[data-state="refused"] .plate[data-face="stop"] { --face: var(--stop); }
-html[data-state="verified"] .brand-tick { stroke: var(--go-ink); }
-html[data-state="refused"] .brand-tick { stroke: var(--stop-ink); }
-html[data-state="verified"] .chip-dot { border-color: var(--go-ink); background: var(--go-ink); }
-html[data-state="refused"] .chip-dot { border-color: var(--stop-ink); background: var(--stop-ink); }
+html[data-state="verified"][data-lit] .brand-tick { stroke: var(--go-ink); }
+html[data-state="refused"][data-lit] .brand-tick { stroke: var(--stop-ink); }
+html[data-state="verified"][data-lit] .chip-dot { border-color: var(--go-ink); background: var(--go-ink); }
+html[data-state="refused"][data-lit] .chip-dot { border-color: var(--stop-ink); background: var(--stop-ink); }
 
 html[data-state="verified"] .live .mk[data-ok="pass"],
 html[data-state="refused"] .live .mk[data-ok="pass"] { color: var(--go-ink); }

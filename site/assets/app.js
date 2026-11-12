@@ -135,7 +135,7 @@ function underPlate(state) {
 
 function renderHero(state, animate) {
   const face = state === "verified" ? "go" : state === "refused" ? "stop" : "unlit";
-  put("chip-text", state === "verified" && checkedAt() ? `Verified <span class="chip-time">${esc(fmtHM(checkedAt()))}</span>` : WORDS[state]);
+  const chip = () => put("chip-text", state === "verified" && checkedAt() ? `Verified <span class="chip-time">${esc(fmtHM(checkedAt()))}</span>` : WORDS[state]);
   put("platform", platformItems(json?.exit?.platform).map((p) => `<li>${esc(p)}</li>`).join(""));
   put("under-plate", underPlate(state));
   const plate = $("plate");
@@ -143,6 +143,8 @@ function renderHero(state, animate) {
   const finish = () => {
     holdPlate = false;
     plate.dataset.face = face;
+    document.documentElement.dataset.lit = "1";
+    chip();
     put("plate-text", plateText(state));
     $("live").textContent = `Status: ${WORDS[state]}.`;
   };
@@ -150,10 +152,13 @@ function renderHero(state, animate) {
     put("pips", pipsHtml(state));
     if (!holdPlate) {
       plate.dataset.face = face;
+      document.documentElement.dataset.lit = "1";
+      chip();
       put("plate-text", plateText(state));
     }
     return;
   }
+  delete document.documentElement.dataset.lit;
   // The sign lights: pips resolve in the order of the checks, then the face takes the verdict.
   const token = ++lighting;
   holdPlate = true;
