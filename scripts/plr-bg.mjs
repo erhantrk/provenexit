@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Runs a long-lived `plr` command (`plr vpn`, `plr proxy`) — the very same `runCli` as client/dist/cli.js — with a
+ * Runs a long-lived `plr` command (`plr vpn`) — the very same `runCli` as client/dist/cli.js — with a
  * signal-free stop, for scripts/demo.sh:
  *
  *   node scripts/plr-bg.mjs --stop-file <path> -- vpn
@@ -39,6 +39,6 @@ const untilStopped = () =>
   });
 
 const io = { out: (s) => console.log(s), err: (s) => console.error(s) };
-const code = await runCli(cliArgs, process.env, io, (s) => void process.stdout.write(s), undefined, untilStopped);
+const code = await runCli(cliArgs, process.env, io, untilStopped);
 rmSync(stopFile, { force: true });
 process.exit(code);
