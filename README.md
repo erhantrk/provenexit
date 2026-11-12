@@ -11,7 +11,7 @@ A VPN exit on Intel TDX whose approved, logging-off build is checked on NEAR bef
 Live exit on Phala Cloud (runs during judging) · NEAR **testnet only** · MIT
 
 [![exit](https://img.shields.io/badge/exit-Intel%20TDX%20%C2%B7%20Phala-111110?style=flat-square)](deploy/phala/README.md)
-[![on-chain checks](https://img.shields.io/badge/on--chain%20checks-13%2F13-3FB950?style=flat-square)](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN)
+[![on-chain checks](https://img.shields.io/badge/on--chain%20checks-13%2F13-3FB950?style=flat-square)](https://testnet.nearblocks.io/txns/6yBT47ijg4AgqpYGUk6dUw9tdD3kRFw4iScL7aaSBCp)
 [![network](https://img.shields.io/badge/network-NEAR%20testnet%20only-555?style=flat-square)](#limits-and-trust)
 [![tests](https://github.com/erhantrk/provenexit/actions/workflows/tests.yml/badge.svg)](https://github.com/erhantrk/provenexit/actions/workflows/tests.yml)
 [![license](https://img.shields.io/badge/license-MIT-555?style=flat-square)](LICENSE)
@@ -26,7 +26,7 @@ Live exit on Phala Cloud (runs during judging) · NEAR **testnet only** · MIT
 
 ProvenExit's client checks, before it sends a byte, that the exit runs an approved build with logging off. The proof is an Intel-signed quote, checked against a NEAR registry. Built at NEAR HACKATHON (2026-11).
 
-> **Status:** a live exit runs on Intel TDX hardware (Phala Cloud, production OS `dstack-0.6.1`). The NEAR contract verified its quote on chain, all 13 checks, before listing its keys ([tx `EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN)). The full local demo (option 1) uses a mock root. Limits: [Limits and trust](#limits-and-trust).
+> **Status:** a live exit runs on Intel TDX hardware (Phala Cloud, production OS `dstack-0.6.1`). The NEAR contract verified its quote on chain, all 13 checks, before listing its keys ([tx `6yBT47ij…`](https://testnet.nearblocks.io/txns/6yBT47ijg4AgqpYGUk6dUw9tdD3kRFw4iScL7aaSBCp)). Since 2026-11-12 20:05 UTC it runs an image that rebuilds from this repo to the same digest ([how to check](#how-to-verify-each-claim)). The full local demo (option 1) uses a mock root. Limits: [Limits and trust](#limits-and-trust).
 
 Demo video: (link added at submission)
 
@@ -40,7 +40,7 @@ npm ci && npx tsc -b && scripts/try-live.sh
 
 It prints every check of the live exit (`✔ VERIFIED`), starts a local SOCKS5 proxy on `127.0.0.1:18180`, and shows your IP next to the IP a website sees through the exit (the Phala machine). It changes no system settings, needs no sudo, and nothing else on the machine uses the proxy. Run non-interactively (CI, an AI agent) it stops by itself; in a terminal the proxy stays up for a browser until Ctrl-C.
 
-Offline (no network): the same exit's quote and registry state, captured 2026-11-12, replayed:
+Offline (no network): the same exit's quote and registry state, captured 2026-11-12 20:13 UTC, replayed:
 
 ```sh
 npm ci && npx tsc -b && node client/dist/cli.js vpn verify --fixture fixtures/live-exit
@@ -50,11 +50,12 @@ You see 16 `✔` lines and `✔ VERIFIED (FIXTURE REPLAY …)`. The full local d
 
 ## Numbers
 
-- **186.34 Tgas:** one NEAR transaction verified the live exit's real Intel TDX quote inside the contract, **all 13 checks** (DCAP signature, TCB, event log, compose, allowlists, key binding), then listed its keys ([tx `EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN)).
+- **186.76 Tgas:** one NEAR transaction verified the live exit's real Intel TDX quote inside the contract, **all 13 checks** (DCAP signature, TCB, event log, compose, allowlists, key binding), then listed its keys ([tx `6yBT47ij…`](https://testnet.nearblocks.io/txns/6yBT47ijg4AgqpYGUk6dUw9tdD3kRFw4iScL7aaSBCp)). The registration of the earlier image on the same registry took 186.34 Tgas ([tx `EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN)).
 - **0 access keys** on the registry contract, and it is a reproducible build of this repo (code hash `C1hvenbr…`): nobody can swap the code that checks the exits.
 - **1 live exit** on Intel TDX: TCB `UpToDate`, debug off, image pinned by digest, container logging off, only ports 80 and 443, at most 32 tunnels.
+- **1 image digest from 2 fresh clones:** the exit image `sha256:74c6d1c5…2785` came out the same from two builds with the pinned builder on one machine, and it is the image the live exit runs (`scripts/verify-exit-image.sh`, see below).
 - **552 unit tests, 58 e2e tests and 60 contract tests** pass (unit: shared 260, client 145, enclave 138, MCP 9; e2e on near-sandbox with the MOCK root; contract tests in [`contracts/near/README.md`](contracts/near/README.md)).
-- **Owner revoke and re-allow** transactions ran on the first testnet registry (on the test compose; a client refusing right after a revocation is shown on the local demo stack) ([revoke tx](https://testnet.nearblocks.io/txns/3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz), [re-allow tx](https://testnet.nearblocks.io/txns/642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV)).
+- **Owner revoke and re-allow** transactions ran on the first testnet registry (on the test compose; a client refusing right after a revocation is shown on the local demo stack) ([revoke tx](https://testnet.nearblocks.io/txns/3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz), [re-allow tx](https://testnet.nearblocks.io/txns/642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV)). On the current registry the owner revoked the previous exit compose `9411d0f7…` after the redeploy ([revoke tx](https://testnet.nearblocks.io/txns/9HhvupZAQWnrdFtXDMUuA4w6sVYfzHPF8Mtk4VXuhNVx)); no exit ran that compose any more, so no client refusal was observed for it.
 
 ## Tracks
 
@@ -78,9 +79,9 @@ A keyless NEAR contract on testnet ([`vpnreg.pe-owner-erhan.testnet`](https://te
 |---|---|---|
 | the live exit is real Intel TDX, approved and registered | `scripts/try-live.sh` (or `vpn verify` with `deploy/testnet/env.live`) | every check `✔`, `✔ VERIFIED`, then a different IP through the exit |
 | the same, without network | `node client/dist/cli.js vpn verify --fixture fixtures/live-exit` | `✔ VERIFIED (FIXTURE REPLAY …)` |
-| NEAR verified Intel's signature itself | registration tx [`EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN) | success, 186.34 Tgas: all 13 checks ran in the contract |
+| NEAR verified Intel's signature itself | registration tx [`6yBT47ij…`](https://testnet.nearblocks.io/txns/6yBT47ijg4AgqpYGUk6dUw9tdD3kRFw4iScL7aaSBCp) | success, 186.76 Tgas: all 13 checks ran in the contract |
 | the exit image is pinned and logging is off | `deploy/phala/docker-compose.yml`; `checkDstackComposePolicy` in [`packages/shared/src/attest/compose-policy.ts`](packages/shared/src/attest/compose-policy.ts) | image by digest, `logging.driver: none`; the same check rejects the real 2026-11-09 spike compose (`E_COMPOSE_POLICY`) |
-| image = this source | [`scripts/build-exit-image.sh`](scripts/build-exit-image.sh) builds it from the `vpn-honest` bundle and [`deploy/phala/Dockerfile`](deploy/phala/Dockerfile) | not reproducible yet: a rebuild is not shown to give the same digest (no build provenance). The live image predates the 2026-11-12 removal of the router and non-NEAR code; built on the same machine, the `vpn-honest` bundle of this tree differs from that of the pre-removal tree (`00c910f`) because the removed chain writers are no longer bundled, so this tree does not rebuild the live bundle byte for byte |
+| image = this source | `scripts/verify-exit-image.sh` in a clean checkout (git and Docker with buildx; [`deploy/phala/README.md`](deploy/phala/README.md#reproduce-the-exit-image)) | `MATCH`: the rebuilt digest is the one [`deploy/phala/docker-compose.yml`](deploy/phala/docker-compose.yml) pins, `sha256:74c6d1c5…2785`, which `vpn verify` shows as the live exit's image. It proves the image is byte for byte what this checkout builds; it does not prove the source is honest (read it), and says nothing about the base image beyond its digest or the npm packages beyond the lockfile. Run so far on one machine only (two fresh clones, same digest); the image before 2026-11-12 20:05 UTC (`7e53f383…`) was not reproducible |
 | revocation works | option 1 (MOCK stack) or the testnet revoke/re-allow txs above | `refused with E_COMPOSE_NOT_ALLOWED`, then restored by re-approval |
 | no destination in receipts | [`SPEC-VPN.md`](SPEC-VPN.md) §5; e2e scans the exits' output and run directory | only hashes, sequence numbers and timestamps |
 
@@ -127,8 +128,10 @@ A keyless NEAR contract on testnet ([`vpnreg.pe-owner-erhan.testnet`](https://te
    file (Node 22, no install). `node provenexit-status.mjs` prints the status JSON of the live testnet deployment
    (the same ordered checks as `vpn verify`, the exit's egress IP fetched through the attested tunnel, the NEAR registry's owner,
    code hash and event history, the embedded offline replay of `fixtures/live-exit`); `import { getStatus }` from it in a
-   serverless function. Rebuild with `npm run build:status`. [`status/sample-offline.json`](status/sample-offline.json) is
-   a real run while the exit was stopped.
+   serverless function. Rebuild with `npm run build:status`. [`status/sample-online.json`](status/sample-online.json) is
+   a live run of 2026-11-12 20:14 UTC; [`status/sample-offline.json`](status/sample-offline.json) is a run one minute later with
+   the exit made unreachable for that process (the exit itself stayed up; chain data is live). An earlier offline
+   sample, from a run while the exit was stopped, is in git history (`34e6d0c`).
 
 5. **MCP server for AI agents:** [`mcp/dist/provenexit-mcp.mjs`](mcp/dist/provenexit-mcp.mjs) (tools `verify_exit`,
    `fetch_via_exit`, `registry_status`; `fetch_via_exit` refuses unless every check passes and fetches only through the
@@ -163,7 +166,7 @@ A keyless NEAR contract on testnet ([`vpnreg.pe-owner-erhan.testnet`](https://te
   TCB status, dstack event log, compose hash, allowlists, `report_data` binding) before an exit's keys are listed. It
   is payable (0.1 NEAR) and called with 300 Tgas. Measured: **179.63 Tgas** to DCAP-verify dcap-qvl's sample quote
   in a near-sandbox spike (test-clock build); on testnet, the live exit's registration passed all 13 checks for
-  **186.34 Tgas** ([tx `EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN)).
+  **186.76 Tgas** ([tx `6yBT47ij…`](https://testnet.nearblocks.io/txns/6yBT47ijg4AgqpYGUk6dUw9tdD3kRFw4iScL7aaSBCp); the earlier image's registration: 186.34 Tgas, [tx `EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN)).
 - **Reproducible and keyless.** Built with `cargo near build reproducible-wasm` (image
   `sourcescan/cargo-near:0.23.0-rust-1.99.1`, pinned by digest in `contracts/near/Cargo.toml`): 617 739 bytes,
   SHA-256 `a39ed48c2c7cdad5d5b732031db1f115cb6569400bcb7521c81061368d8a0d9e`, on-chain code hash
@@ -173,9 +176,13 @@ A keyless NEAR contract on testnet ([`vpnreg.pe-owner-erhan.testnet`](https://te
   [`58sZ72Aa…`](https://testnet.nearblocks.io/txns/58sZ72Aa7aAtCFjYQnKxxkcZ2PbGoS6D1yhBam343kiz): the code can never change.
 - Owner calls on it: operator `pe-op-erhan.testnet` approved as organization `erhan-demo`
   [`4Jxoaw46…`](https://testnet.nearblocks.io/txns/4Jxoaw46DokBTCHWXTsToD2ZiFRSaqXCzefkKuo1Ajox); OS measurement `821d442f…d323d` (production
-  `dstack-0.6.1`) allowed [`61pQhJr3…`](https://testnet.nearblocks.io/txns/61pQhJr3dbHZTmk9NVquB5yKu6xz18mLWRTD5iRYf722); the live exit's compose hash
-  `9411d0f7…c85c` allowed [`HeP6W5LM…`](https://testnet.nearblocks.io/txns/HeP6W5LMo9bnGAi9mTF4aoeEQSJrxJvdmcybE6cBRdFx). The exit then
-  registered itself ([`EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN)). It re-registers every 6 h (records expire after 24 h) and
+  `dstack-0.6.1`) allowed [`61pQhJr3…`](https://testnet.nearblocks.io/txns/61pQhJr3dbHZTmk9NVquB5yKu6xz18mLWRTD5iRYf722); the first live exit compose
+  `9411d0f7…c85c` (image `7e53f383…`) allowed [`HeP6W5LM…`](https://testnet.nearblocks.io/txns/HeP6W5LMo9bnGAi9mTF4aoeEQSJrxJvdmcybE6cBRdFx); that exit
+  registered itself ([`EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN)).
+- Redeploy from the reproducible image, 2026-11-12 (UTC): compose hash `2f4100e6…dabf` (image `74c6d1c5…2785`) allowed
+  20:05:57 [`GdY61VR2…`](https://testnet.nearblocks.io/txns/GdY61VR2ZBFR9SpgwVCmb7e6AN7Mx5PRt59XmKio9HhD); the exit registered itself
+  20:06:19 ([`6yBT47ij…`](https://testnet.nearblocks.io/txns/6yBT47ijg4AgqpYGUk6dUw9tdD3kRFw4iScL7aaSBCp), key hash `9f7434d4…bba8f`); the old compose `9411d0f7…` revoked
+  20:06:50 [`9HhvupZA…`](https://testnet.nearblocks.io/txns/9HhvupZAQWnrdFtXDMUuA4w6sVYfzHPF8Mtk4VXuhNVx). The exit re-registers every 6 h (records expire after 24 h) and
   anchors receipt roots on the same contract. Only the live exit's compose is allowed here (no test composes).
 - **The first registry, `pe-vpnreg-erhan.testnet` (retired 2026-11-12).** Same code, but a non-reproducible build
   (622 282 bytes, SHA-256 `e2864a9c…`) with a full-access key left on it. History on it: init
@@ -199,10 +206,11 @@ Every limit and disclosure from the earlier README that applies to the code in t
 ### Status of this snapshot
 
 - **The live exit runs on Intel TDX** on Phala Cloud (instance `tdx.small`, production OS `dstack-0.6.1`, not the
-  SSH-enabled dev OS), from the image `ghcr.io/erhantrk/provenexit-exit@sha256:7e53f383…1ad5` pinned in
+  SSH-enabled dev OS), from the image `ghcr.io/erhantrk/provenexit-exit@sha256:74c6d1c5…2785` pinned in
   [`deploy/phala/docker-compose.yml`](deploy/phala/docker-compose.yml). The NEAR contract verified its quote on chain
-  (all 13 checks) before listing its keys ([tx `EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN)). It is paid by the hour on Phala; it runs through
-  judging and may be stopped afterwards. [`fixtures/live-exit/`](fixtures/live-exit) keeps a replayable capture.
+  (all 13 checks) before listing its keys ([tx `6yBT47ij…`](https://testnet.nearblocks.io/txns/6yBT47ijg4AgqpYGUk6dUw9tdD3kRFw4iScL7aaSBCp)). It is paid by the hour on Phala; it runs through
+  judging and may be stopped afterwards. [`fixtures/live-exit/`](fixtures/live-exit) keeps a replayable capture
+  (taken 2026-11-12 20:13 UTC from this image; the earlier capture, of the `7e53f383…` image, is in git history before `d47bbe8`).
 - **Safeguards in the measured compose:** the exit dials only ports 80 and 443 (`PLR_VPN_ALLOWED_PORTS`) and serves at
   most 32 tunnels at once (`PLR_VPN_MAX_TUNNELS`). Both are part of the compose hash the owner approved.
 - **The local demo stack (option 1) runs on the MOCK root** — the pre-existing mode, unchanged. It exercises the real
@@ -210,7 +218,10 @@ Every limit and disclosure from the earlier README that applies to the code in t
 - **History:** until 2026-11-12 the plan's fallback S1-F2 applied (no exit on Phala); the only real quote was a
   2026-11-09 test VM ([`fixtures/phala-spike/`](fixtures/phala-spike)), which passed checks 1–12 on chain (tx
   [`9AUTujEQ…`](https://testnet.nearblocks.io/txns/9AUTujEQv8p1R1z7SKEpNa5BYFw3a9ZZerkKmpQb5NRB)) and stopped at
-  check 13 because it never bound an exit's keys. On 2026-11-12 the exit image was built (T13) and deployed.
+  check 13 because it never bound an exit's keys. On 2026-11-12 the exit image was built (T13) and deployed
+  (image `7e53f383…`, built on the host, not reproducible). The same day at 20:05 UTC the same CVM (same app id and
+  URL) was updated to the image `74c6d1c5…2785`, built reproducibly from commit `6740b3f`; the exit got new keys,
+  registered again and the old compose was revoked (txs in [NEAR contract details](#near-contract-details)).
 
 ### What it does not prove
 
@@ -245,6 +256,10 @@ Every limit and disclosure from the earlier README that applies to the code in t
   `SHA256(mr_td ‖ rtmr0 ‖ rtmr1 ‖ rtmr2)` of the dstack OS image that booted, read from the quote. It was not
   re-derived with `dstack-mr` from the dstack release. The owner approves the value they saw, not one computed from
   source.
+- **The image rebuild was shown on one machine.** `scripts/verify-exit-image.sh` rebuilds the exit image and compares
+  it with the pinned digest. Run so far: two fresh clones on one machine with the pinned BuildKit gave the same
+  digest, the one pushed and deployed. Not run: a build on a second machine. A `MATCH` says the image is what this source builds, not that the source is honest; the base image
+  is trusted by its digest and the npm packages by the lockfile's hashes.
 - **A single owner key decides the allowlist (R12).** `pe-owner-erhan.testnet` is one NEAR account: whoever holds that
   key can allow or revoke builds and operators. The client pins the Intel root and the registry contract, not the
   owner. Multisig / a DAO (e.g. Sputnik) is future work.
@@ -338,7 +353,7 @@ MOCK root in place of Intel.
 | [`SPEC.md`](SPEC.md), [`SPEC-VPN.md`](SPEC-VPN.md) | the base protocol (quote, event log, key binding, registry, receipts, verification order) and the VPN exit (tunnel, DoH, egress, two-hop) |
 | [`SPEC-TDX.md`](SPEC-TDX.md) | the frozen INTEL/dstack byte formats and the contract/client additions this code implements |
 | [`deploy/phala`](deploy/phala) | the measured exit compose (the live image, pinned by digest), its Dockerfile, and the spike compose |
-| [`fixtures/live-exit`](fixtures/live-exit) | the live exit's attestation bundle, nonce and registry snapshot (2026-11-12), replayed by `vpn verify --fixture` |
+| [`fixtures/live-exit`](fixtures/live-exit) | the live exit's attestation bundle, nonce and registry snapshot (2026-11-12 20:13 UTC, image `74c6d1c5…`), replayed by `vpn verify --fixture` |
 | [`fixtures/phala-spike`](fixtures/phala-spike) | the real 2026-11-09 TDX dump, its parsed parts, and the SPEC-TDX §3.3 replay fixture |
 | [`mcp`](mcp), [`status`](status) | the MCP server for AI agents and the self-contained status bundle (options 4 and 5) |
 | [`e2e`](e2e) | the stack harness (near-sandbox, the VPN registry, the mock TDX host), attacker scenarios, locked e2e tests |

@@ -51,3 +51,12 @@ The registry was redeployed as `vpnreg.pe-owner-erhan.testnet` from a `cargo nea
 non-reproducible build" limit of `pe-vpnreg-erhan.testnet`. The live exit's compose (now naming the new registry)
 was allowed and the exit registered 13/13 again (tx `EZDveHx5…`). The first registry is retired.
 
+## 2026-11-12, 20:05 UTC: the exit redeployed from a reproducible image
+
+The exit image build was made reproducible (commit `6740b3f`: multi-stage Dockerfile, constant `SOURCE_DATE_EPOCH`,
+pinned BuildKit v0.34.2). Two fresh clones built the same digest, `sha256:74c6d1c5…2785`; it was pushed, pinned in
+`deploy/phala/docker-compose.yml` (`9b3571d`) and the Phala CVM (same app id and URL) was updated to it. New compose
+hash `2f4100e6…dabf` allowed (tx `GdY61VR2…`), the exit registered 13/13 with new keys (tx `6yBT47ij…`, 186.76 Tgas),
+and the previous compose `9411d0f7…` (image `7e53f383…`, registration `EZDveHx5…`) was revoked (tx `9HhvupZA…`).
+`fixtures/live-exit`, the status and MCP bundles and the status samples were re-recorded from the new exit at
+20:13–20:15 UTC; the earlier capture is in git history before `d47bbe8`.
