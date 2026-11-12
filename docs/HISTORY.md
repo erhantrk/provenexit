@@ -26,8 +26,8 @@ From `git log` (commit dates, converted to UTC).
 
 | date | commits | what |
 |---|---|---|
-| 2026-10-23 | `c2a35e4`..`977c648` | PLR-v1 spec and build (NEAR registry, TEE router, client SDK, e2e, demo); PLR-VPN-v1 (SOCKS5 proxy, no-logs exit); VPN milestone 2 (forward-secret tunnel v2, DoH-only exit DNS, two-hop with on-chain operator organizations) |
-| 2026-10-24 | `34900ba`..`9bd402e` | Combo milestone (LLM router and VPN exit in one TD); registries on other chains: a Zcash record log, EVM/Monad (Solidity), Stellar (Soroban), Solana |
+| 2026-10-23 | `c2a35e4`..`de44d25` | PLR-v1 spec and build (NEAR registry, TEE router, client SDK, e2e, demo); PLR-VPN-v1 (SOCKS5 proxy, no-logs exit); VPN milestone 2 (forward-secret tunnel v2, DoH-only exit DNS, two-hop with on-chain operator organizations); the combo milestone (LLM router and VPN exit in one TD) and the multi-chain spec |
+| 2026-10-24 | `4172f40`..`9bd402e` | Registries on other chains: a Zcash record log, EVM/Monad (Solidity), Stellar (Soroban), Solana |
 | 2026-11-11 | `fdecb3c`..`a1f69b9` | the 2026-11-09 Phala spike fixture, then the Intel/dstack path task by task (DCAP in the contract, compose policy, testnet registry, client fixture replay), review fixes, README and AI_USE |
 | 2026-11-12 | `1c60ead`.. | VPN-only cleanup (below), the live exit, the keyless registry, the reproducible image, the status site, the npm package, the code-hash pin and fresh collateral |
 

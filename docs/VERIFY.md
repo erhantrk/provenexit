@@ -92,7 +92,7 @@ Counted 2026-11-13 on the owner's machine, all passing:
 
 | suite | command | tests |
 |---|---|---|
-| shared, client, enclave, MCP | `npx tsc -b && npm run build -w @plr/enclave && npm test` | 260, 181, 155 (+1 skipped), 9 |
+| shared, client, enclave, MCP | `npx tsc -b && npm run build -w @plr/enclave && npm test` | 260, 182, 155 (+1 skipped), 9 |
 | contract | `cd contracts/near && cargo test --release` | 60 |
 | e2e (near-sandbox, MOCK root) | `npm run e2e` (after the near-sandbox and contract build steps of option 5) | 58 |
 | site | `cd site && npm test` | 24 |
