@@ -59,7 +59,7 @@
         "detail": "not checked"
       },
       {
-        "name": "report_data binds router keys",
+        "name": "report_data binds the exit's keys",
         "ok": false,
         "detail": "not checked"
       },
@@ -169,7 +169,7 @@
         "detail": ""
       },
       {
-        "name": "report_data binds router keys",
+        "name": "report_data binds the exit's keys",
         "ok": true,
         "detail": ""
       },

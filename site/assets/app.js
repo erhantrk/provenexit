@@ -11,7 +11,7 @@ const FETCH_TIMEOUT_MS = 70_000;
 const HISTORY_SHOWN = 3;
 const CMD_LIVE = "npm ci && npx tsc -b && scripts/try-live.sh";
 const CMD_REPLAY = "npm ci && npx tsc -b && node client/dist/cli.js vpn verify --fixture fixtures/live-exit";
-const KEY_CHECKS = ["report_data binds router keys", "instance registered with matching keys"];
+const KEY_CHECKS = ["report_data binds the exit's keys", "instance registered with matching keys"];
 
 const $ = (id) => document.getElementById(id);
 const reduced = matchMedia("(prefers-reduced-motion: reduce)");

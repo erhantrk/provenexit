@@ -1,4 +1,4 @@
-// Builds status/provenexit-status.mjs: the UI-BRIEF §4 status bundle as ONE self-contained ESM file (Node >= 22, no
+// Builds status/provenexit-status.mjs: the status bundle as ONE self-contained ESM file (Node >= 22, no
 // node_modules). Defaults (exit URL, registry, Intel root, RPC) come from deploy/testnet/env.live at build time; the
 // offline replay fixture (fixtures/live-exit) is embedded. Run `npx tsc -b` first.
 //   node scripts/build-status.mjs

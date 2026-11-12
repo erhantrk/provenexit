@@ -101,10 +101,12 @@ function orderFor(o: CheckLineOptions): StepKey[] {
 }
 
 /**
- * CLI wording where it says more than the `CHECKS` name. SPEC §5 rev 1.3: a session quote carries
+ * Client wording where it says more than the `CHECKS` name, or says it better. SPEC §5 rev 1.3: a session quote carries
  * `SHA256("PLR-v1/session-nonce" ‖ nonce)`, never the raw nonce, so it can never double as a registration quote.
  */
 const LABELS: Partial<Record<CheckKey, string>> = {
+  // the `CHECKS` name still says "router keys" (the wording of the earlier LLM router); the keys are the exit's
+  REPORT_DATA_KEYS: "report_data binds the exit's keys",
   NONCE: `report_data binds client nonce as a session quote (SHA256("PLR-v1/session-nonce" ‖ nonce))`,
 };
 const label = (k: StepKey): string =>

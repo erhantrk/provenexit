@@ -68,7 +68,7 @@
         "detail": ""
       },
       {
-        "name": "report_data binds router keys",
+        "name": "report_data binds the exit's keys",
         "ok": true,
         "detail": ""
       },
@@ -252,7 +252,7 @@
         "detail": ""
       },
       {
-        "name": "report_data binds router keys",
+        "name": "report_data binds the exit's keys",
         "ok": true,
         "detail": ""
       },

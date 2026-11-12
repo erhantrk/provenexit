@@ -1,4 +1,4 @@
-// Status bundle (UI-BRIEF §3-§4) against local stubs: a fake exit, a fake NEAR RPC + archival RPC, a fake NearBlocks v3.
+// Status bundle against local stubs: a fake exit, a fake NEAR RPC + archival RPC, a fake NearBlocks v3.
 // No real network.
 import { describe, it, expect, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
@@ -92,7 +92,7 @@ const rawFixture = () => {
   return { meta: JSON.parse(rd("meta.json")) as unknown, nonce_hex: rd("nonce.hex").trim(), bundle: JSON.parse(rd("bundle.json")) as unknown, registry: JSON.parse(rd("registry.json")) as unknown };
 };
 
-/** UI-BRIEF §4: every field name, in every state. */
+/** The status bundle's output: every field name, in every state. */
 function expectBriefShape(s: Status): void {
   expect(Object.keys(s).sort()).toEqual(["checked_at", "error", "exit", "instance", "links", "receipts", "registry", "replay", "verify"]);
   expect(new Date(s.checked_at).toISOString()).toBe(s.checked_at);

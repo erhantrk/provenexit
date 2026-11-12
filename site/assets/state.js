@@ -77,7 +77,7 @@ export const STAGES = [
     title: "Keys and freshness",
     line: "The exit's keys and your nonce are inside the quote",
     names: [
-      "report_data binds router keys",
+      "report_data binds the exit's keys",
       'report_data binds client nonce as a session quote (SHA256("PLR-v1/session-nonce" ‖ nonce))',
     ],
   },

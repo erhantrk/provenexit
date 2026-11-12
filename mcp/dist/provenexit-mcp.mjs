@@ -76489,6 +76489,8 @@ function orderFor(o) {
   return o.codeHash === void 0 ? base : ["REGISTRY_CODE", ...base];
 }
 var LABELS = {
+  // the `CHECKS` name still says "router keys" (the wording of the earlier LLM router); the keys are the exit's
+  REPORT_DATA_KEYS: "report_data binds the exit's keys",
   NONCE: `report_data binds client nonce as a session quote (SHA256("PLR-v1/session-nonce" ‖ nonce))`
 };
 var label = (k) => k === "REGISTRY_CODE" ? REGISTRY_CODE_LINE : k === "COLLATERAL" ? COLLATERAL_LINE : LABELS[k] ?? CHECKS[k];

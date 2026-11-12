@@ -1,6 +1,6 @@
 /**
- * The status bundle (`getStatus()`): everything the demo site shows about the live exit, as one JSON object
- * (UI-BRIEF §4). Verification is the exact code `plr vpn verify` runs (`verifyVpnReport`), the replay is the
+ * The status bundle (`getStatus()`): everything the demo site shows about the live exit, as one JSON object.
+ * Verification is the exact code `plr vpn verify` runs (`verifyVpnReport`), the replay is the
  * offline `--fixture` verification of the embedded capture, and everything about the chain is read from NEAR
  * (RPC views + the public NearBlocks API v3 for transaction lists, archival RPC `tx` for gas / call arguments).
  *
