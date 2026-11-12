@@ -54,7 +54,7 @@ You see 16 `✔` lines and `✔ VERIFIED (FIXTURE REPLAY …)`. The full local d
 - **0 access keys** on the registry contract, and it is a reproducible build of this repo (code hash `C1hvenbr…`): nobody can swap the code that checks the exits.
 - **1 live exit** on Intel TDX: TCB `UpToDate`, debug off, image pinned by digest, container logging off, only ports 80 and 443, at most 32 tunnels.
 - **1 image digest from 2 fresh clones:** the exit image `sha256:74c6d1c5…2785` came out the same from two builds with the pinned builder on one machine, and it is the image the live exit runs (`scripts/verify-exit-image.sh`, see below).
-- **552 unit tests, 58 e2e tests and 60 contract tests** pass (unit: shared 260, client 145, enclave 138, MCP 9; e2e on near-sandbox with the MOCK root; contract tests in [`contracts/near/README.md`](contracts/near/README.md)).
+- **569 unit tests, 58 e2e tests and 60 contract tests** pass (unit: shared 260, client 145, enclave 155, MCP 9, counted 2026-11-12; e2e on near-sandbox with the MOCK root; contract tests in [`contracts/near/README.md`](contracts/near/README.md)).
 - **Owner revoke and re-allow** transactions ran on the first testnet registry (on the test compose; a client refusing right after a revocation is shown on the local demo stack) ([revoke tx](https://testnet.nearblocks.io/txns/3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz), [re-allow tx](https://testnet.nearblocks.io/txns/642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV)). On the current registry the owner revoked the previous exit compose `9411d0f7…` after the redeploy ([revoke tx](https://testnet.nearblocks.io/txns/9HhvupZAQWnrdFtXDMUuA4w6sVYfzHPF8Mtk4VXuhNVx)); no exit ran that compose any more, so no client refusal was observed for it.
 
 ## Tracks
@@ -241,6 +241,10 @@ Every limit and disclosure from the earlier README that applies to the code in t
   padded, no cover traffic; only the CONNECT / CONNECT_ERR payloads have fixed sizes). With one hop, your own IP is visible to the exit operator's network.
 - **Proxy mode only.** Only what you send through the SOCKS5 proxy is protected: TCP CONNECT, no UDP (no QUIC,
   no WebRTC media, no system-wide tunnel). Use `socks5h` (or "proxy DNS") so names are not resolved locally.
+- **Direct connection only.** The client opens its own TLS connections to the exit and does not use `HTTP_PROXY` /
+  `HTTPS_PROXY`. On a network that only lets traffic out through an HTTP(S) proxy, `vpn verify` and
+  `scripts/try-live.sh` stop at the first check with `E_BAD_RESPONSE` (exit unreachable) although the exit is up. The
+  offline replay (`vpn verify --fixture fixtures/live-exit`) needs no network.
 - **MOCK ROOT, not Intel, for the local demo stack (option 1).** Its quote is signed by a locally generated test root
   through a per-boot attestation key, and the "TD" is a Node process supervised by a mock TDX host. The byte layouts,
   hashes, event log and verification logic are the real TDX/dstack ones, but **a MOCK root attests nothing about
