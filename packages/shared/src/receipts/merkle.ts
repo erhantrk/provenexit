@@ -1,4 +1,4 @@
-/** RFC 6962 §2.1 Merkle tree over pre-hashed 32-byte leaves (see `receiptLeaf`). */
+/** RFC 6962 §2.1 Merkle tree over pre-hashed 32-byte leaves (see `vpnReceiptLeaf`). */
 import { sha256 } from "@noble/hashes/sha2.js";
 import { PlrError } from "../errors.js";
 import { concatBytes, equalBytes, isBytes, isUint } from "../bytes.js";

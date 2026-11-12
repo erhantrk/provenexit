@@ -1,6 +1,6 @@
 /** Chain-agnostic registry reader contract (SPEC §7, §10) and an in-memory implementation for tests. */
 import { PlrError } from "./errors.js";
-import { fromHex, isHex, isPlainObject, isUint } from "./bytes.js";
+import { isHex, isPlainObject, isUint } from "./bytes.js";
 import type { RootKind } from "./tdx/quote.js";
 
 export interface RegistryRoot {
@@ -29,11 +29,6 @@ export interface AnchorRecord {
   first_seq: number;
   count: number;
   at_ms: number;
-  /**
-   * SPEC-CHAINS §2: tier B/C registries store the instance's Ed25519 anchor signature (64 bytes, 128 lowercase hex)
-   * over SPEC §7 `anchorMessage`; clients verify it. Absent on tier A (the contract verified it).
-   */
-  sig?: string;
 }
 
 export interface RegistryReader {
@@ -45,16 +40,6 @@ export interface RegistryReader {
   /** null if unknown or expired */
   getInstance(keyHash: string): Promise<InstanceRecord | null>;
   getAnchor(id: number): Promise<AnchorRecord | null>;
-  /**
-   * SPEC-CHAINS §2 (rev 1.4): true only for tier-A registries that verify the registration quote on-chain. When false,
-   * clients require registration evidence ({@link RegistryReader.getRegistrationQuote}) after SPEC §9 step 9.
-   */
-  readonly verifiesOnChain: boolean;
-  /**
-   * SPEC-CHAINS §2: the registration quote of `keyHash`. Tier B: the quote stored on-chain (`offered` ignored);
-   * tier C: `offered` iff its SHA-256 equals the on-chain commitment, else null; tier A may return null.
-   */
-  getRegistrationQuote(keyHash: string, offered?: Uint8Array): Promise<Uint8Array | null>;
 }
 
 const ZERO32 = "00".repeat(32);
@@ -101,8 +86,7 @@ export function isAnchorRecord(v: unknown): v is AnchorRecord {
     isHex(v.root, 32) &&
     isUint(v.first_seq) &&
     isUint(v.count) &&
-    isUint(v.at_ms) &&
-    (v.sig === undefined || isHex(v.sig, 64))
+    isUint(v.at_ms)
   );
 }
 
@@ -122,10 +106,6 @@ export interface MemoryRegistryOptions {
    * value as `org_id`; otherwise the record's own `org_id` is returned unchanged.
    */
   operators?: Record<string, string>;
-  /** SPEC-CHAINS §2: whether the registry verified registration quotes on-chain (tier A). Default true. */
-  verifiesOnChain?: boolean;
-  /** SPEC-CHAINS §2: keyHash → registration quote (hex), returned by `getRegistrationQuote`. */
-  registrationQuotes?: Record<string, string>;
 }
 
 function bad(what: string): never {
@@ -139,9 +119,7 @@ function bad(what: string): never {
 export class MemoryRegistry implements RegistryReader {
   readonly chain: string;
   readonly contractId: string;
-  readonly verifiesOnChain: boolean;
   #root: RegistryRoot;
-  readonly #regQuotes = new Map<string, Uint8Array>();
   readonly #compose = new Set<string>();
   readonly #os = new Set<string>();
   readonly #instances = new Map<string, InstanceRecord>();
@@ -157,12 +135,6 @@ export class MemoryRegistry implements RegistryReader {
     this.chain = o.chain ?? "memory";
     this.contractId = o.contractId ?? "registry.memory";
     this.#now = o.now ?? Date.now;
-    if (o.verifiesOnChain !== undefined && typeof o.verifiesOnChain !== "boolean") bad("bad verifiesOnChain");
-    this.verifiesOnChain = o.verifiesOnChain ?? true;
-    if (o.registrationQuotes !== undefined) {
-      if (!isPlainObject(o.registrationQuotes)) bad("bad registrationQuotes");
-      for (const [k, q] of Object.entries(o.registrationQuotes)) this.setRegistrationQuote(k, q);
-    }
     this.#root = { kind: o.root.kind, p256: o.root.p256 };
     for (const h of o.compose) this.allowCompose(h);
     for (const h of o.os) this.allowOs(h);
@@ -217,12 +189,6 @@ export class MemoryRegistry implements RegistryReader {
   async getOperator(account: string): Promise<string | null> {
     return typeof account === "string" ? (this.#operators.get(account) ?? null) : null;
   }
-  /** Sets (or replaces) the registration quote returned for `keyHash`. */
-  setRegistrationQuote(keyHash: string, quoteHex: string): void {
-    if (!isHash32(keyHash)) bad("bad key hash");
-    if (!isHex(quoteHex) || quoteHex.length === 0) bad("bad registration quote");
-    this.#regQuotes.set(keyHash, fromHex(quoteHex));
-  }
   /** Appends an anchor; its `id` must equal the current anchor count. */
   addAnchor(a: AnchorRecord): void {
     if (!isAnchorRecord(a) || a.id !== this.#anchors.length) bad("bad anchor");
@@ -251,12 +217,6 @@ export class MemoryRegistry implements RegistryReader {
     if (!isUint(id)) return null;
     const a = this.#anchors[id];
     return a === undefined ? null : { ...a };
-  }
-  /** Returns the configured registration quote for `keyHash` (ignores `offered`), or null. */
-  async getRegistrationQuote(keyHash: string, _offered?: Uint8Array): Promise<Uint8Array | null> {
-    if (!isHash32(keyHash)) return null;
-    const q = this.#regQuotes.get(keyHash);
-    return q === undefined ? null : q.slice();
   }
   async anchorCount(): Promise<number> {
     return this.#anchors.length;

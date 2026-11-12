@@ -11,13 +11,18 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { PlrError, type PlrErrorCode } from "../errors.js";
 import { concatBytes, equalBytes, isAllZero, isBytes, utf8 } from "../bytes.js";
-import { ecdh, type SessionKeys } from "../crypto/session.js";
+import { ecdh } from "../crypto/ecdh.js";
 import { TUNNEL } from "./constants.js";
 
 const TUNNEL_LABEL = utf8("PLR-VPN-v2/tunnel");
 const KEYS_INFO = utf8("PLR-VPN-v2/keys");
 
-export type TunnelKeys = SessionKeys;
+/** Tunnel keys: transcript hash and one ChaCha20-Poly1305 key per direction. */
+export interface TunnelKeys {
+  th: Uint8Array;
+  kC2s: Uint8Array;
+  kS2c: Uint8Array;
+}
 
 /** Client handshake state returned by {@link tunnelClientStart}. */
 export interface TunnelClientHandshake {

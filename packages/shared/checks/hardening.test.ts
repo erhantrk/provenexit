@@ -7,9 +7,8 @@ import {
   fromHex, toHex, PlrError, verifyAttestation, MockVerifier, MockRoot, MockTdxAttester, MemoryRegistry, keyHash,
   reportData, registrationNonce, registrationReportData,
   osMeasurement, mockOsReport, verifyEventLog, bootEvents, replayRtmr3, makeEvent, merkleRoot, merkleProof,
-  verifyMerkleProof, DcapQvlVerifier, DstackAttester, parseQuote, encodeQuote, INTEL_QE_VENDOR_ID, FrameReader,
-  sealFrame, receiptLeaf, isReceipt, CHECKS, type RegistryReader, type InstanceRecord, type AttestationBundle,
-  type Receipt,
+  verifyMerkleProof, DcapQvlVerifier, DstackAttester, parseQuote, encodeQuote, INTEL_QE_VENDOR_ID, CHECKS,
+  type RegistryReader, type InstanceRecord, type AttestationBundle,
 } from "../src/index.js";
 
 const code = async (fn: () => unknown) => {
@@ -177,24 +176,5 @@ describe("merkle extra", () => {
     expect(verifyMerkleProof(ls[0]!, 0.5, 1000, merkleProof(ls, 0), root)).toBe(false);
     expect(verifyMerkleProof(ls[0]!, 0, 1000, "x" as never, root)).toBe(false);
     expect(() => merkleRoot([new Uint8Array(31)])).toThrow(PlrError);
-  });
-});
-
-describe("frames / receipts extra", () => {
-  it("FrameReader failure is sticky", async () => {
-    const k = randomBytes(32), th = randomBytes(32);
-    const r = new FrameReader(k, th);
-    expect(await code(() => r.push(0, randomBytes(40)))).toBe("E_DECRYPT");
-    expect(await code(() => r.push(0, sealFrame(k, th, 0, true, enc("x"))))).toBe("E_DECRYPT");
-    expect(await code(() => r.end())).toBe("E_TRUNCATED");
-  });
-
-  it("receipts with extra or malformed fields are rejected", async () => {
-    const r: Receipt = { v: 1, th: "a1".repeat(32), req_hash: "b2".repeat(32), resp_hash: "c3".repeat(32), compose_hash: "d4".repeat(32), key_hash: "e5".repeat(32), seq: 0, ts_ms: 1 };
-    expect(isReceipt(r)).toBe(true);
-    expect(isReceipt({ ...r, extra: 1 })).toBe(false);
-    expect(isReceipt({ ...r, seq: -1 })).toBe(false);
-    expect(isReceipt({ ...r, th: "A1".repeat(32) })).toBe(false);
-    expect(await code(() => receiptLeaf({ ...r, seq: 1.5 }))).toBe("E_BAD_INPUT");
   });
 });

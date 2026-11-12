@@ -9,9 +9,8 @@ export const ERROR_CODES = [
   "E_BAD_HEX",
   "E_BAD_INPUT",
   "E_NOT_IMPLEMENTED",
-  // router HTTP API (§6)
+  // HTTP API (§6.2, §6.4)
   "E_BAD_REQUEST",
-  "E_TOO_LARGE",
   "E_NOT_ANCHORED",
   // receipt inclusion proof disagrees with the on-chain anchor (§8)
   "E_ANCHOR_MISMATCH",
@@ -31,7 +30,7 @@ export const ERROR_CODES = [
   "E_OS_NOT_ALLOWED",
   "E_INSTANCE_NOT_REGISTERED",
   "E_REGISTRY_UNAVAILABLE",
-  // streaming (§6.3, §9)
+  // tunnel and receipts (SPEC-VPN §4, §5); E_UPSTREAM: 503 from the exit (quote / collateral service, tunnel limit)
   "E_DECRYPT",
   "E_TRUNCATED",
   "E_RECEIPT_SIG",
@@ -49,8 +48,6 @@ export const ERROR_CODES = [
   // two-hop operator organizations (SPEC-VPN §8, §10 rev 2)
   "E_OPERATOR_UNAPPROVED",
   "E_SAME_OPERATOR",
-  // rev 1.4 registration evidence for registries that do not verify quotes on-chain (SPEC-CHAINS §2)
-  "E_REGISTRATION_EVIDENCE",
   // INTEL / dstack mode (SPEC-TDX §0)
   "E_TCB_STATUS",
   "E_COMPOSE_POLICY",

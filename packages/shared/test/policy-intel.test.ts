@@ -98,7 +98,7 @@ interface IntelFixture {
   registrationQuote(): Uint8Array;
 }
 
-function intelFixture(o: { compose?: string; verifiesOnChain?: boolean } = {}): IntelFixture {
+function intelFixture(o: { compose?: string } = {}): IntelFixture {
   const compose = o.compose ?? appCompose();
   const composeHash = sha256(enc(compose));
   const xs = x25519.utils.randomSecretKey();
@@ -135,8 +135,6 @@ function intelFixture(o: { compose?: string; verifiesOnChain?: boolean } = {}): 
     instances: { [hex(kh)]: record },
     contractId,
     now: () => NOW_MS,
-    verifiesOnChain: o.verifiesOnChain ?? true,
-    registrationQuotes: { [hex(kh)]: hex(registrationQuote) },
   });
   return {
     registry, contractId, keyHash: kh, x25519: xp, ed25519: ep, composeHash, osHash: os,
@@ -246,16 +244,15 @@ describe("verifyAttestation — INTEL branch (SPEC-TDX §3.1)", () => {
     }))).toBe("E_EVENT_LOG");
   });
 
-  it("verifies the registration quote with the same { collateral, nowSecs }", async () => {
-    const f = intelFixture({ verifiesOnChain: false });
+  it("accepts a served registration_quote and never verifies it (the NEAR registry did, on-chain)", async () => {
+    const f = intelFixture();
     const n = randomBytes(32);
-    const seen: Seen[] = [];
-    const v = await run(f, f.bundle(n), n, stubVerifier(seen));
-    expect(seen).toHaveLength(2);
-    expect(seen[1]!.collateral).toEqual(COLLATERAL);
-    expect(seen[1]!.nowSecs).toBe(NOW_MS / 1000);
-    expect(toHex(v.registrationQuote!)).toBe(hex(f.registrationQuote()));
-    expect(v.checks.at(-1)).toBe("registration quote: same boot, bound to (registry, operator)");
+    for (const rq of [hex(f.registrationQuote()), "not hex"]) {
+      const seen: Seen[] = [];
+      const v = await run(f, { ...f.bundle(n), registration_quote: rq }, n, stubVerifier(seen));
+      expect(seen).toHaveLength(1);
+      expect(v.checks.at(-1)).toBe(CHECKS.INSTANCE);
+    }
   });
 });
 

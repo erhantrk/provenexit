@@ -1,42 +1,7 @@
-// LOCKED — SPEC §7 (anchor), §8
+// LOCKED — SPEC §7 (anchor), §8 (Merkle)
 import { describe, it, expect } from "vitest";
-import { ed25519 } from "@noble/curves/ed25519.js";
-import {
-  receiptMessage, signReceipt, verifyReceipt, receiptLeaf, merkleRoot, merkleProof, verifyMerkleProof,
-  anchorMessage, type Receipt,
-} from "../src/index.js";
+import { merkleRoot, merkleProof, verifyMerkleProof, anchorMessage } from "../src/index.js";
 import { sha256, enc, cat, u64be, hex, unhex, randomBytes } from "./helpers.js";
-
-const R = (seq = 3): Receipt => ({
-  v: 1, th: "a1".repeat(32), req_hash: "b2".repeat(32), resp_hash: "c3".repeat(32),
-  compose_hash: "d4".repeat(32), key_hash: "e5".repeat(32), seq, ts_ms: 1_700_000_000_123,
-});
-
-describe("receipts", () => {
-  it("receiptMessage has the §8 binary layout", () => {
-    const r = R();
-    expect(receiptMessage(r)).toEqual(cat(
-      enc("PLR-v1/receipt"), unhex(r.th), unhex(r.req_hash), unhex(r.resp_hash), unhex(r.compose_hash),
-      unhex(r.key_hash), u64be(3), u64be(1_700_000_000_123),
-    ));
-    expect(receiptLeaf(r)).toEqual(sha256(cat(new Uint8Array([0]), receiptMessage(r))));
-  });
-
-  it("sign/verify with Ed25519, detects any field change", () => {
-    const sk = ed25519.utils.randomSecretKey(), pk = ed25519.getPublicKey(sk);
-    const r = R();
-    const sig = signReceipt(r, sk);
-    expect(sig).toMatch(/^[0-9a-f]{128}$/);
-    expect(ed25519.verify(unhex(sig), receiptMessage(r), pk)).toBe(true);
-    expect(verifyReceipt(r, sig, pk)).toBe(true);
-    for (const k of ["th", "req_hash", "resp_hash", "compose_hash", "key_hash"] as const)
-      expect(verifyReceipt({ ...r, [k]: "00".repeat(32) }, sig, pk)).toBe(false);
-    expect(verifyReceipt({ ...r, seq: 4 }, sig, pk)).toBe(false);
-    expect(verifyReceipt({ ...r, ts_ms: r.ts_ms + 1 }, sig, pk)).toBe(false);
-    expect(verifyReceipt(r, sig, ed25519.getPublicKey(ed25519.utils.randomSecretKey()))).toBe(false);
-    expect(verifyReceipt(r, "zz", pk)).toBe(false);
-  });
-});
 
 // Independent RFC 6962 reference.
 const node = (l: Uint8Array, r: Uint8Array) => sha256(cat(new Uint8Array([1]), l, r));
