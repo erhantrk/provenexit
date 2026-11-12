@@ -1,6 +1,6 @@
 {
   "name": "provenexit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Check a VPN exit before you use it: Intel TDX attestation, verified against a NEAR registry (testnet).",
   "type": "module",
   "bin": {
