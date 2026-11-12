@@ -11,13 +11,9 @@
     "@plr/client": "*",
     "@plr/enclave": "*",
     "@plr/shared": "*",
-    "@solana/web3.js": "^1.99.0",
-    "@stellar/stellar-sdk": "^17.3.0",
-    "near-api-js": "^7.3.1",
-    "viem": "^2.57.10"
+    "near-api-js": "^7.3.1"
   },
   "devDependencies": {
-    "near-sandbox": "^0.3.4",
-    "openai": "^7.43.0"
+    "near-sandbox": "^0.3.4"
   }
 }

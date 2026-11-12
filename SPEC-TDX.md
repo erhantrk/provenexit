@@ -185,7 +185,7 @@ SPEC §6.2 shape plus one field. `root_kind` becomes `"INTEL"`, `app_compose` is
   "x25519": "<64 hex>",
   "ed25519": "<64 hex>",
   "collateral": { "pck_crl_issuer_chain": "...", "root_ca_crl": "<hex>", "...": "... (§1.2)" },
-  "registration_quote": "<hex, optional, unchanged SPEC-CHAINS §4>"
+  "registration_quote": "<hex, optional, unchanged SPEC §6.2>"
 }
 ```
 
@@ -453,7 +453,7 @@ now: meta.captured_at_ms })`. It prints every check and a final line
 It needs **no network**. The DCAP check runs at `captured_at` time, so a fixture verifies forever. The README states this
 honestly ("proves the recorded exit was genuine at capture time").
 
-Mock-mode fixture: none needed. `bash scripts/demo.sh` with `PLR_LLM=mock` is the fully offline judge path.
+Mock-mode fixture: none needed. `bash scripts/demo.sh` is the fully offline judge path.
 
 ---
 

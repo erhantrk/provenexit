@@ -1,7 +1,7 @@
 /**
- * NEAR chain driver (tier A, SPEC-CHAINS §1): a fresh near-sandbox under the stack's run dir with the LLM registry
- * and a second, independent VPN registry deployed (same wasm, same owner and MOCK root). Accounts: registry +
- * vpnregistry (contracts), owner, operator, operator2, stranger — each with its own fresh key.
+ * NEAR chain driver: a fresh near-sandbox under the stack's run dir with the VPN registry deployed (the
+ * contracts/near wasm, MOCK root). Accounts: vpnregistry (the contract), owner, operator, operator2, stranger — each
+ * with its own fresh key.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -10,7 +10,7 @@ import { Account, JsonRpcProvider, KeyPair, KeyPairSigner, type KeyPairString } 
 import { toHex } from "@plr/shared";
 import { NearRegistry } from "@plr/client";
 import { startSandbox, type SandboxNode } from "../sandbox.js";
-import { OPERATORS, type CallFn, type ChainAdmin, type ChainDriver, type DriverOptions, type OperatorAccount, type RegistryName, type Signer } from "./driver.js";
+import { OPERATORS, type CallFn, type ChainAdmin, type ChainDriver, type DriverOptions, type OperatorAccount, type Signer } from "./driver.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 export const REGISTRY_WASM = join(REPO_ROOT, "contracts", "near", "target", "near", "plr_registry.wasm");
@@ -27,7 +27,6 @@ export async function startNearDriver(o: DriverOptions): Promise<ChainDriver> {
     const rootAcct = new Account(node.rootAccountId, provider, KeyPairSigner.fromSecretKey(node.rootKey));
 
     const names = {
-      registry: `registry.${node.rootAccountId}`,
       vpnregistry: `vpnregistry.${node.rootAccountId}`,
       owner: `owner.${node.rootAccountId}`,
       operator: `operator.${node.rootAccountId}`,
@@ -39,32 +38,28 @@ export async function startNearDriver(o: DriverOptions): Promise<ChainDriver> {
     for (const [role, accountId] of Object.entries(names)) {
       const kp = KeyPair.fromRandom("ed25519");
       keys.set(role, kp);
-      const isContract = role === "registry" || role === "vpnregistry";
+      const isContract = role === "vpnregistry";
       await rootAcct.createAccount({ newAccountId: accountId, publicKey: kp.getPublicKey().toString(), nearToTransfer: (isContract ? 50n : 100n) * NEAR });
     }
     const acct = (role: Role) => new Account(names[role], provider, KeyPairSigner.fromSecretKey(keys.get(role)!.toString() as KeyPairString));
     const signers: Record<Signer, Account> = { owner: acct("owner"), operator: acct("operator"), operator2: acct("operator2"), stranger: acct("stranger") };
-    const contractId = names.registry;
     const vpnContractId = names.vpnregistry;
 
-    // Both registries: the same wasm, owner and MOCK root; independent allowlists, instances and anchors.
+    // The registry: the contracts/near wasm, the stack owner and the MOCK root.
     const wasm = new Uint8Array(readFileSync(REGISTRY_WASM));
-    for (const role of ["registry", "vpnregistry"] as const) {
-      const a = acct(role);
-      await a.deployContract(wasm);
-      await a.callFunction({
-        contractId: names[role],
-        methodName: "new",
-        args: { owner_id: names.owner, root_kind: "MOCK", root_p256: toHex(o.trustedRoot), instance_ttl_ms: o.instanceTtlMs },
-        gas: DEFAULT_GAS,
-      });
-    }
+    const reg = acct("vpnregistry");
+    await reg.deployContract(wasm);
+    await reg.callFunction({
+      contractId: vpnContractId,
+      methodName: "new",
+      args: { owner_id: names.owner, root_kind: "MOCK", root_p256: toHex(o.trustedRoot), instance_ttl_ms: o.instanceTtlMs },
+      gas: DEFAULT_GAS,
+    });
 
-    const registry = new NearRegistry({ rpcUrl, contractId });
     const vpnRegistry = new NearRegistry({ rpcUrl, contractId: vpnContractId });
 
-    const view = async <T>(method: string, args: object): Promise<T> => {
-      const raw = await provider.callFunctionRaw({ contractId, method, args: args as Record<string, unknown>, blockQuery: { finality: "optimistic" } });
+    const viewVpn = async <T>(method: string, args: object): Promise<T> => {
+      const raw = await provider.callFunctionRaw({ contractId: vpnContractId, method, args: args as Record<string, unknown>, blockQuery: { finality: "optimistic" } });
       const bytes = new Uint8Array(raw.result);
       if (bytes.length === 0) return undefined as T;
       return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as T;
@@ -87,16 +82,15 @@ export async function startNearDriver(o: DriverOptions): Promise<ChainDriver> {
         throw err;
       }
     };
-    const call = callOn(contractId);
     const callVpn = callOn(vpnContractId);
 
     const operatorId = (account: OperatorAccount): string => {
       if (!OPERATORS.includes(account)) throw new Error(`unknown operator account: ${String(account)}`);
       return names[account];
     };
-    const adminOf = new WeakMap<ChainAdmin, RegistryName>();
-    const makeAdmin = (reg: RegistryName, signer: Signer): ChainAdmin => {
-      const c = reg === "llm" ? call : callVpn;
+    const admins = new WeakSet<ChainAdmin>();
+    const makeAdmin = (signer: Signer): ChainAdmin => {
+      const c = callVpn;
       const a: ChainAdmin = {
         allowCompose: async (h) => void (await c(signer, "allow_compose", { hash: h })),
         revokeCompose: async (h) => void (await c(signer, "revoke_compose", { hash: h })),
@@ -105,47 +99,39 @@ export async function startNearDriver(o: DriverOptions): Promise<ChainDriver> {
         approveOperator: async (account, orgId) => void (await c(signer, "approve_operator", { account_id: operatorId(account), org_id: orgId })),
         revokeOperator: async (account) => void (await c(signer, "revoke_operator", { account_id: operatorId(account) })),
       };
-      adminOf.set(a, reg);
+      admins.add(a);
       return a;
     };
-    const admin = makeAdmin("llm", "owner");
-    const vpnAdmin = makeAdmin("vpn", "owner");
+    const vpnAdmin = makeAdmin("owner");
 
     let stopped: Promise<void> | null = null;
     return {
-      chain: "near",
       rpcUrl,
-      contractId,
       vpnContractId,
-      registry,
       vpnRegistry,
       accounts: { owner: names.owner, operator: names.operator, operator2: names.operator2, stranger: names.stranger },
-      admin,
       vpnAdmin,
       asStranger: (a) => {
-        const reg = adminOf.get(a);
-        if (reg === undefined) throw new Error("asStranger: not an admin of this stack");
-        return makeAdmin(reg, "stranger");
+        if (!admins.has(a)) throw new Error("asStranger: not an admin of this stack");
+        return makeAdmin("stranger");
       },
-      view,
-      call,
+      viewVpn,
       callVpn,
-      instanceEnv: async (op, registries) => {
+      instanceEnv: async (op) => {
         // A dedicated full-access key per TD on the operator account: no nonce races between TDs or with the
-        // harness's own operator calls (a combo's two services share it; near-api-js retries InvalidNonce).
+        // harness's own operator calls (near-api-js retries InvalidNonce).
         // Function-call keys cannot attach the storage deposit. PLR_OPERATOR_ID is the account the enclave binds
         // into its registration quote (SPEC §5 rev 1.3): only that account can submit it.
         const instanceKey = KeyPair.fromRandom("ed25519");
         await signers[op].addFullAccessKey(instanceKey.getPublicKey().toString());
         return {
           PLR_NEAR_RPC: rpcUrl,
-          ...(registries.includes("llm") ? { PLR_REGISTRY: contractId } : {}),
-          ...(registries.includes("vpn") ? { PLR_VPN_REGISTRY: vpnContractId } : {}),
+          PLR_VPN_REGISTRY: vpnContractId,
           PLR_OPERATOR_ID: operatorId(op),
           PLR_OPERATOR_KEY: instanceKey.toString(),
         };
       },
-      clientEnvLines: () => [`PLR_NEAR_RPC=${rpcUrl}`, `PLR_REGISTRY=${contractId}`, `PLR_VPN_REGISTRY=${vpnContractId}`],
+      clientEnvLines: () => [`PLR_NEAR_RPC=${rpcUrl}`, `PLR_VPN_REGISTRY=${vpnContractId}`],
       ownerFile: () => ({ account_id: names.owner, secret_key: keys.get("owner")!.toString() }),
       exportSigner: (signer) => {
         const kp = keys.get(signer);

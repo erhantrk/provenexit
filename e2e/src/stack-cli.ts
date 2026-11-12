@@ -2,15 +2,12 @@
 /**
  * Long-running local stack for manual use and the demo (scripts/dev-up.sh, scripts/demo.sh).
  *
- *   node e2e/dist/stack-cli.js up [--chain near|evm|stellar|solana|zcash] [--llm llama|mock] [--rpc-port N] [--router-port N] [--exit-port N] [--id <id>] [--combo <variant>]
- *                                 [--extra evil-logger,mitm-key,vpn-honest-test,vpn-evil-logger,…] [--destination]
- *                                 [--env-out .run/stack.env] [--dns-down-file <path>]
- *       Starts the chain (near-sandbox; `--chain evm|stellar|solana`: anvil / a Stellar quickstart container /
- *       solana-test-validator, SPEC-CHAINS §9-§11, tier B; `--chain zcash`: a zebrad regtest node, §5, tier C) + both
- *       registries (LLM + VPN) + the test builds' DoH resolver (127.0.0.1:18253),
- *       approves and launches the honest router and the honest PRODUCTION VPN exit (SPEC-VPN; `vpn-honest`,
- *       approved on the VPN registry, registered by `operator`) (+ extra variants: router attacks, and VPN
- *       builds/attacks — `vpn-evil-logger` is never approved).
+ *   node e2e/dist/stack-cli.js up [--rpc-port N] [--exit-port N] [--id <id>]
+ *                                 [--extra vpn-honest-test,vpn-evil-logger,vpn-mitm-key,…] [--destination]
+ *                                 [--env-out .run/stack.env] [--dns-down-file <path>] [--evil-entry]
+ *       Starts near-sandbox + the VPN registry + the test builds' DoH resolver (127.0.0.1:18253), approves and
+ *       launches the honest PRODUCTION VPN exit (SPEC-VPN; `vpn-honest`, registered by `operator`) (+ extra
+ *       variants: VPN builds and network attacks — `vpn-evil-logger` is never approved).
  *       Two-hop (SPEC-VPN §10): the owner approves `operator` as org-a and `operator2` as org-b; a second
  *       production exit (`vpn-honest`, registered by `operator2`, PLR_VPN2_URL) and a two-hop ENTRY (registered by
  *       `operator2`, PLR_VPN_ENTRY_URL) are launched. The entry is the approved TEST build: a production entry
@@ -20,31 +17,19 @@
  *       port in PLR_DEST_PORT, name PLR_DEST_HOST=dest.plr.test known only to the local DoH resolver).
  *       Writes the env file (PLR_* client config incl. PLR_VPN_URL, PLR_VPN_ENTRY_URL, PLR_VPN_REGISTRY,
  *       PLR_VPN_COMPOSE_HASH) and the owner key file (0600), then runs until SIGINT/SIGTERM, when it
- *       stops everything and removes both files. Router/host output is teed to <logs>/<variant>.log
- *       (content-free for honest builds; the evil build would print what it steals there).
+ *       stops everything and removes both files. Exit/host output is teed to <logs>/<variant>.log
+ *       (content-free for honest builds; the evil build would print what it sees there).
  *       `--dns-down-file <path>`: while <path> exists the DoH resolver answers HTTP 503 (demo: "resolver down").
  *       `--evil-entry`: ⚠️ also a `vpn-evil-logger` instance registered by `operator` (org-a) for the demo's
  *       separation-of-knowledge step (PLR_VPN_EVIL_ENTRY_URL): the owner approves the evil build just long enough
  *       for it to register, then revokes it again (PLR_VPN_EVIL_COMPOSE_HASH; the demo re-approves it briefly).
  *       Shutdown triggers: `--stop-file <path>` (the file appears; dev-down.sh, demo.sh), `--parent-pid <pid>`
  *       (that process is gone, however it ended), SIGINT/SIGTERM. Shutdown is idempotent and bounded: every
- *       router subtree and the chain get SIGTERM to their process group, SIGKILL after 10 s, and the CLI exits
+ *       exit subtree and the chain get SIGTERM to their process group, SIGKILL after 10 s, and the CLI exits
  *       within 20 s whatever happens. (A named FIFO on stdin is NOT used: on macOS Node never sees its EOF.)
- *       Combo (SPEC-COMBO): `--combo combo|combo-test` starts ONE combo TD (LLM + router + VPN exit as three processes,
- *       one measurement; production `combo` or loopback-allowing `combo-test`) INSTEAD of the separate router and exits
- *       (no two-hop, no router/exit extras, no evil entry): the owner approves the combo compose on both registries, the
- *       router registers on the LLM registry and the exit on the VPN registry (both by `operator`), on --router-port /
- *       --exit-port. The env file carries the same PLR_ROUTER_URL / PLR_VPN_URL / PLR_COMPOSE_HASH / PLR_VPN_COMPOSE_HASH
- *       (both = the combo compose hash) plus PLR_COMBO=<variant>, so every `plr` command works unchanged.
- *       Extras `combo` / `combo-test` (demo): an ADDITIONAL combo TD next to the full stack, approved on both registries,
- *       on ephemeral ports; env PLR_<VARIANT>_ROUTER_URL, _VPN_URL, _COMPOSE_HASH, _ROUTER_PORT, _ROUTER_KEY_HASH,
- *       _VPN_KEY_HASH (e.g. PLR_COMBO_TEST_ROUTER_URL); output in <logs>/<variant>.log.
- *   node e2e/dist/stack-cli.js owner <method> '<json args>' [--vpn] [--env-out .run/stack.env]
- *       Calls a registry owner method (allow_compose, revoke_compose, …) with the stack's owner key, on the LLM
- *       registry or (with --vpn) on the VPN registry. On a Zcash stack this posts the owner record (OP_RETURN) and waits
- *       until it is mined (`approve_operator` / `revoke_operator` take the operator's t-address as `account_id`). On
- *       EVM / Stellar / Solana it sends the owner transaction and waits until it is included (`account_id` = the
- *       chain's operator id: 0x address, G… strkey, base58 pubkey).
+ *   node e2e/dist/stack-cli.js owner <method> '<json args>' [--env-out .run/stack.env]
+ *       Calls a registry owner method (allow_compose, revoke_compose, …) on the VPN registry with the stack's owner
+ *       key. (`--vpn` is accepted for compatibility and changes nothing: there is one registry.)
  */
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
@@ -52,23 +37,9 @@ import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { Account, JsonRpcProvider, KeyPairSigner, type KeyPairString } from "near-api-js";
 import { toHex } from "@plr/shared";
-import { postOwnerRecord } from "./chains/zcash.js";
-import { postEvmOwnerCall } from "./chains/evm.js";
-import { postStellarOwnerCall } from "./chains/stellar.js";
-import { postSolanaOwnerCall } from "./chains/solana.js";
-import {
-  CHAINS, COMBO_VARIANTS, REPO_ROOT, VARIANTS, runRoot, VPN_VARIANTS, startStack, type ComboHandle, type ComboVariant, type Destination, type DevStack, type ExitHandle,
-  type Chain, type RouterHandle, type Variant, type VpnVariant,
-} from "./harness.js";
+import { REPO_ROOT, runRoot, VPN_VARIANTS, startStack, type Destination, type DevStack, type ExitHandle, type VpnVariant } from "./harness.js";
 import { signalAllManaged } from "./procs.js";
 
-const NODE_NAMES: Record<Chain, string> = {
-  near: "near-sandbox",
-  evm: "anvil",
-  stellar: "Stellar quickstart container",
-  solana: "solana-test-validator",
-  zcash: "zebrad regtest",
-};
 const DEFAULT_ENV_FILE = join(REPO_ROOT, ".run", "stack.env");
 const GAS = 300_000_000_000_000n;
 const SHUTDOWN_DEADLINE_MS = 20_000;
@@ -78,18 +49,8 @@ function die(msg: string): never {
   process.exit(1);
 }
 
-const envPrefix = (v: Variant | VpnVariant | ComboVariant) => `PLR_${v.toUpperCase().replace(/-/g, "_")}`;
-const envVarName = (v: Variant | VpnVariant) => `${envPrefix(v)}_URL`;
-const isComboVariant = (e: string): e is ComboVariant => (COMBO_VARIANTS as readonly string[]).includes(e);
-/** The env lines of an extra combo TD (demo). */
-const comboEnvLines = (v: ComboVariant, c: ComboHandle): string[] => [
-  `${envPrefix(v)}_ROUTER_URL=${c.routerUrl}`,
-  `${envPrefix(v)}_VPN_URL=${c.vpnUrl}`,
-  `${envPrefix(v)}_COMPOSE_HASH=${c.composeHash}`,
-  `${envPrefix(v)}_ROUTER_PORT=${c.routerPort}`,
-  `${envPrefix(v)}_ROUTER_KEY_HASH=${c.routerKeyHash}`,
-  `${envPrefix(v)}_VPN_KEY_HASH=${c.vpnKeyHash}`,
-];
+const envPrefix = (v: VpnVariant) => `PLR_${v.toUpperCase().replace(/-/g, "_")}`;
+const envVarName = (v: VpnVariant) => `${envPrefix(v)}_URL`;
 /** The local destination's name: only the stack's DoH resolver knows it (`.test` never resolves publicly). */
 const DEST_NAME = "dest.plr.test";
 /** Operator organizations of the dev stack (SPEC §7 rev 1.2): entry and exit belong to different orgs. */
@@ -111,23 +72,11 @@ function port(v: string | undefined): number | undefined {
 }
 
 async function up(values: Record<string, string | boolean | undefined>): Promise<void> {
-  const llm = (values.llm as string | undefined) ?? "llama";
-  if (llm !== "mock" && llm !== "llama") die("--llm must be mock or llama");
-  const chain = (values.chain as string | undefined) || "near";
-  if (!(CHAINS as readonly string[]).includes(chain)) die(`--chain must be one of ${CHAINS.join(", ")}`);
   const extras = ((values.extra as string | undefined) ?? "").split(",").filter(Boolean);
-  const isRouterVariant = (e: string): e is Variant => (VARIANTS as readonly string[]).includes(e) && e !== "honest";
   const isExitVariant = (e: string): e is VpnVariant => (VPN_VARIANTS as readonly string[]).includes(e) && e !== "vpn-honest";
-  for (const e of extras) if (!isRouterVariant(e) && !isExitVariant(e) && !isComboVariant(e)) die(`unknown extra variant: ${e}`);
+  for (const e of extras) if (!isExitVariant(e)) die(`unknown extra variant: ${e}`);
   if (new Set(extras).size !== extras.length) die("duplicate extra variant");
-  const routerExtras = extras.filter(isRouterVariant);
   const exitExtras = extras.filter(isExitVariant);
-  const comboExtras = extras.filter(isComboVariant);
-  const comboMode = values.combo as string | undefined;
-  if (comboMode !== undefined) {
-    if (!isComboVariant(comboMode)) die(`--combo must be one of ${COMBO_VARIANTS.join(", ")}`);
-    if (extras.length > 0 || values["evil-entry"] === true) die("--combo runs one TD only: no --extra / --evil-entry");
-  }
   const envFile = resolve((values["env-out"] as string | undefined) ?? DEFAULT_ENV_FILE);
   const ownerFile = ownerFileOf(envFile);
   const id = (values.id as string | undefined) ?? `dev-${Date.now().toString(36)}`;
@@ -184,37 +133,18 @@ async function up(values: Record<string, string | boolean | undefined>): Promise
   setInterval(() => undefined, 1 << 30);
   try {
     const rpcPort = port(values["rpc-port"] as string | undefined);
-    const routerPort = port(values["router-port"] as string | undefined);
     const exitPort = port(values["exit-port"] as string | undefined);
     if (exitPort !== undefined && exitPort !== 0 && exitPort === rpcPort) throw new Error("exit and rpc ports must differ");
-    for (const [what, p] of [["rpc", rpcPort], ["router", routerPort], ["exit", exitPort]] as const) {
+    for (const [what, p] of [["rpc", rpcPort], ["exit", exitPort]] as const) {
       if (p !== undefined && p !== 0 && !(await portFree(p))) throw new Error(`${what} port ${p} is already in use`);
     }
-    process.stdout.write(`stack-cli: starting ${NODE_NAMES[chain as Chain]} + registries (llm=${llm}, id=${id})…\n`);
+    process.stdout.write(`stack-cli: starting near-sandbox + the VPN registry (id=${id})…\n`);
     stack = await startStack({
-      llm,
-      chain: chain as Chain,
       id,
       ...(rpcPort !== undefined ? { rpcPort } : {}),
-      onRouterOutput: (v, chunk) => appendFileSync(join(logDir, `${v}.log`), chunk, { mode: 0o600 }),
+      onOutput: (v, chunk) => appendFileSync(join(logDir, `${v}.log`), chunk, { mode: 0o600 }),
     });
-    process.stdout.write(`stack-cli: registry ${stack.contractId} + VPN registry ${stack.vpnContractId} at ${stack.rpcUrl}\n`);
-    if (comboMode !== undefined) {
-      await upCombo(stack, comboMode as ComboVariant, { llm, logDir, envFile, ownerFile, routerPort, exitPort, destination: values.destination === true });
-      return;
-    }
-    await approveLlmOperators(stack);
-    const approved = await stack.approveBuild("honest");
-    process.stdout.write(`stack-cli: owner approved honest build compose=${approved.composeHash} os=${approved.osMeasurement}\n`);
-    process.stdout.write(`stack-cli: launching honest router via the mock TDX host${llm === "llama" ? " (loading Qwen 0.5B)" : ""}…\n`);
-    const routers: Partial<Record<Variant, RouterHandle>> = {};
-    routers.honest = await stack.startRouter("honest", routerPort !== undefined ? { port: routerPort } : {});
-    process.stdout.write(`stack-cli: honest router ${routers.honest.url} key_hash=${routers.honest.keyHash}\n`);
-    for (const e of routerExtras) {
-      routers[e] = await stack.startRouter(e);
-      process.stdout.write(`stack-cli: ${e} router ${routers[e]!.url} compose=${routers[e]!.composeHash}\n`);
-    }
-
+    process.stdout.write(`stack-cli: VPN registry ${stack.vpnContractId} at ${stack.rpcUrl}\n`);
     // VPN (SPEC-VPN): the honest production exit on the VPN registry, plus any requested exit variants.
     const vpnApproved = await stack.approveVpnBuild("vpn-honest");
     process.stdout.write(`stack-cli: owner approved vpn-honest build on the VPN registry compose=${vpnApproved.composeHash} os=${vpnApproved.osMeasurement}\n`);
@@ -236,13 +166,6 @@ async function up(values: Record<string, string | boolean | undefined>): Promise
     for (const e of exitExtras) {
       exits[e] = await stack.startExit(e);
       process.stdout.write(`stack-cli: ${e} exit ${exits[e]!.url} compose=${exits[e]!.composeHash}\n`);
-    }
-    const combos: Partial<Record<ComboVariant, ComboHandle>> = {};
-    for (const v of comboExtras) {
-      const a = await stack.approveComboBuild(v);
-      process.stdout.write(`stack-cli: owner approved ${v} build on BOTH registries (router role: LLM registry, exit role: VPN registry) compose=${a.composeHash}\n`);
-      combos[v] = await stack.startCombo(v);
-      process.stdout.write(`stack-cli: ${v} TD: router ${combos[v]!.routerUrl} key_hash=${combos[v]!.routerKeyHash} + exit ${combos[v]!.vpnUrl} key_hash=${combos[v]!.vpnKeyHash}\n`);
     }
     let evilEntry: { url: string; composeHash: string } | null = null;
     if (values["evil-entry"] === true) {
@@ -275,16 +198,12 @@ async function up(values: Record<string, string | boolean | undefined>): Promise
 
     const lines = [
       `# PLR local stack (${new Date().toISOString()}), written by e2e/src/stack-cli.ts; removed by dev-down.sh`,
-      `PLR_ROUTER_URL=${routers.honest.url}`,
       ...stack.clientEnvLines(),
       `PLR_TRUSTED_ROOT=${toHex(stack.trustedRoot)}`,
-      `PLR_COMPOSE_HASH=${approved.composeHash}`,
-      `PLR_OS_MEASUREMENT=${approved.osMeasurement}`,
       `PLR_OWNER_ID=${stack.accounts.owner}`,
       `PLR_STACK_RUN_DIR=${stack.runDir}`,
       `PLR_STACK_LOG_DIR=${logDir}`,
       `PLR_STACK_PID=${process.pid}`,
-      ...routerExtras.map((e) => `${envVarName(e)}=${routers[e]!.url}`),
       `PLR_VPN_URL=${exits["vpn-honest"].url}`,
       `# two-hop (SPEC-VPN §10): with PLR_VPN_ENTRY_URL set, \`plr vpn\` routes client → entry → PLR_VPN_URL; unset it for one hop`,
       `PLR_VPN_ENTRY_URL=${entry.url}`,
@@ -299,7 +218,6 @@ async function up(values: Record<string, string | boolean | undefined>): Promise
       `PLR_DOH_URL=http://127.0.0.1:18253/dns-query`,
       ...exitExtras.map((e) => `${envVarName(e)}=${exits[e]!.url}`),
       ...(evilEntry ? [`PLR_VPN_EVIL_ENTRY_URL=${evilEntry.url}`, `PLR_VPN_EVIL_COMPOSE_HASH=${evilEntry.composeHash}`] : []),
-      ...comboExtras.flatMap((v) => comboEnvLines(v, combos[v]!)),
       ...(dest ? [`PLR_DEST_PORT=${dest.port}`, `PLR_DEST_HOST=${DEST_NAME}`] : []),
     ];
     writeReady(stack, envFile, ownerFile, lines);
@@ -331,69 +249,6 @@ function writeReady(stack: DevStack, envFile: string, ownerFile: string, lines: 
   process.stdout.write(`stack-cli: READY — env in ${envFile}\n`);
 }
 
-/**
- * `up --combo <variant>` (SPEC-COMBO): one TD runs the LLM, the router and the VPN exit — the cheapest deployment
- * (one confidential VM). Same env variables as the separate stack, so `plr verify`, `plr chat`, `plr vpn` work unchanged.
- */
-async function upCombo(
-  stack: DevStack,
-  v: ComboVariant,
-  o: { llm: string; logDir: string; envFile: string; ownerFile: string; routerPort: number | undefined; exitPort: number | undefined; destination: boolean },
-): Promise<void> {
-  await approveLlmOperators(stack);
-  const approved = await stack.approveComboBuild(v);
-  process.stdout.write(`stack-cli: owner approved ${v} build on the LLM registry (router role) and the VPN registry (exit role) compose=${approved.composeHash} os=${approved.osMeasurement}\n`);
-  await stack.approveOperator("operator", ORGS.operator);
-  process.stdout.write(`stack-cli: owner approved operator ${stack.accounts.operator} as organization ${ORGS.operator}\n`);
-  process.stdout.write(`stack-cli: launching ONE ${v} TD via the mock TDX host (LLM + router + VPN exit as three processes)${o.llm === "llama" ? " (loading Qwen 0.5B)" : ""}…\n`);
-  const c = await stack.startCombo(v, {
-    operator: "operator",
-    ...(o.routerPort !== undefined ? { routerPort: o.routerPort } : {}),
-    ...(o.exitPort !== undefined ? { exitPort: o.exitPort } : {}),
-  });
-  process.stdout.write(`stack-cli: ${v} router ${c.routerUrl} key_hash=${c.routerKeyHash}\n`);
-  process.stdout.write(`stack-cli: ${v} exit   ${c.vpnUrl} key_hash=${c.vpnKeyHash}\n`);
-  let dest: Destination | null = null;
-  if (o.destination) {
-    dest = await stack.startDestination();
-    stack.dns.set(DEST_NAME, [dest.host]);
-    process.stdout.write(`stack-cli: local HTTP destination on 127.0.0.1:${dest.port} (${DEST_NAME} in the local DoH resolver)\n`);
-  }
-  writeReady(stack, o.envFile, o.ownerFile, [
-    `# PLR local stack, COMBO mode (${new Date().toISOString()}): one ${v} TD runs the router and the VPN exit; removed by dev-down.sh`,
-    `PLR_COMBO=${v}`,
-    `PLR_ROUTER_URL=${c.routerUrl}`,
-    ...stack.clientEnvLines(),
-    `PLR_TRUSTED_ROOT=${toHex(stack.trustedRoot)}`,
-    `PLR_COMPOSE_HASH=${approved.composeHash}`,
-    `PLR_OS_MEASUREMENT=${approved.osMeasurement}`,
-    `PLR_OWNER_ID=${stack.accounts.owner}`,
-    `PLR_STACK_RUN_DIR=${stack.runDir}`,
-    `PLR_STACK_LOG_DIR=${o.logDir}`,
-    `PLR_STACK_PID=${process.pid}`,
-    `PLR_VPN_URL=${c.vpnUrl}`,
-    `PLR_VPN_ORG=${ORGS.operator}`,
-    `PLR_OPERATOR_ID=${stack.accounts.operator}`,
-    `PLR_VPN_COMPOSE_HASH=${approved.composeHash}`,
-    `PLR_VPN_OS_MEASUREMENT=${approved.osMeasurement}`,
-    `PLR_COMBO_ROUTER_PORT=${c.routerPort}`,
-    `PLR_DOH_URL=http://127.0.0.1:18253/dns-query`,
-    ...(dest ? [`PLR_DEST_PORT=${dest.port}`, `PLR_DEST_HOST=${DEST_NAME}`] : []),
-  ]);
-}
-
-/**
- * Tier B/C (SPEC-CHAINS §1): instance records count only from operators the owner approved on THAT registry, so on
- * those chains the LLM registry's owner approves both operators before any router registers (NEAR: unchanged).
- */
-async function approveLlmOperators(stack: DevStack): Promise<void> {
-  if (stack.chain === "near") return;
-  for (const [account, org] of Object.entries(ORGS) as Array<[keyof typeof ORGS, string]>) {
-    await stack.admin.approveOperator(account, org);
-    process.stdout.write(`stack-cli: owner approved operator ${stack.accounts[account]} as organization ${org} on the LLM registry\n`);
-  }
-}
-
 function readEnvFile(path: string): Record<string, string> {
   if (!existsSync(path)) die(`${path} not found — start a stack first (scripts/dev-up.sh)`);
   const out: Record<string, string> = {};
@@ -406,7 +261,7 @@ function readEnvFile(path: string): Record<string, string> {
 
 const OWNER_METHODS = new Set(["allow_compose", "revoke_compose", "allow_os", "revoke_os", "approve_operator", "revoke_operator"]);
 
-async function owner(method: string | undefined, argsJson: string | undefined, envFile: string, vpn: boolean): Promise<void> {
+async function owner(method: string | undefined, argsJson: string | undefined, envFile: string): Promise<void> {
   if (!method || !OWNER_METHODS.has(method)) die(`owner: method must be one of ${[...OWNER_METHODS].join(", ")}`);
   let args: unknown;
   try {
@@ -416,12 +271,9 @@ async function owner(method: string | undefined, argsJson: string | undefined, e
   }
   if (typeof args !== "object" || args === null || Array.isArray(args)) die("owner: args must be a JSON object");
   const env = readEnvFile(envFile);
-  const file = JSON.parse(readFileSync(ownerFileOf(envFile), "utf8")) as Record<string, unknown>;
-  if (file.chain === "zcash") return zcashOwner(method, args as object, file, vpn);
-  if (file.chain === "evm" || file.chain === "stellar" || file.chain === "solana") return tierBOwner(method, args as object, file, vpn);
-  const key = file as { account_id: string; secret_key: string };
-  const contractId = vpn ? env.PLR_VPN_REGISTRY : env.PLR_REGISTRY;
-  if (!contractId) die(`owner: ${vpn ? "PLR_VPN_REGISTRY" : "PLR_REGISTRY"} missing in ${envFile}`);
+  const key = JSON.parse(readFileSync(ownerFileOf(envFile), "utf8")) as { account_id: string; secret_key: string };
+  const contractId = env.PLR_VPN_REGISTRY;
+  if (!contractId) die(`owner: PLR_VPN_REGISTRY missing in ${envFile}`);
   const provider = new JsonRpcProvider({ url: env.PLR_NEAR_RPC! });
   const acct = new Account(key.account_id, provider, KeyPairSigner.fromSecretKey(key.secret_key as KeyPairString));
   try {
@@ -432,55 +284,6 @@ async function owner(method: string | undefined, argsJson: string | undefined, e
   process.stdout.write(`${method} ✔ on ${contractId} (signed by ${key.account_id})\n`);
 }
 
-/** `owner` on a Zcash stack: the owner record, signed by the LLM or VPN registry's owner address, mined. */
-async function zcashOwner(method: string, args: object, file: Record<string, unknown>, vpn: boolean): Promise<void> {
-  const who = (vpn ? file.vpn_owner : file.owner) as { address?: unknown; secret_key?: unknown } | undefined;
-  if (typeof file.rpc_url !== "string" || typeof file.network !== "string" || typeof who?.address !== "string" || typeof who.secret_key !== "string") {
-    die("owner: malformed Zcash owner file");
-  }
-  try {
-    const r = await postOwnerRecord(file.rpc_url, who.secret_key, method, args);
-    if (r.signer !== who.address) die("owner: owner file key does not match its address");
-    process.stdout.write(`${method} ✔ on zcash:${file.network}:${who.address} (record tx ${r.txid}, block ${r.height})\n`);
-  } catch (e) {
-    die(`${method} failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
-}
-
-/** `owner` on an EVM / Stellar / Solana stack: one owner transaction on the LLM or VPN registry, included. */
-async function tierBOwner(method: string, args: object, file: Record<string, unknown>, vpn: boolean): Promise<void> {
-  const str = (v: unknown): string => {
-    if (typeof v !== "string" || v === "") die(`owner: malformed ${String(file.chain)} owner file`);
-    return v;
-  };
-  const registry = str(vpn ? file.vpn_registry : file.registry);
-  try {
-    let signer: string;
-    let where: string;
-    if (file.chain === "evm") {
-      const who = file.owner as { address?: unknown; secret_key?: unknown } | undefined;
-      const chainId = file.chain_id;
-      if (typeof chainId !== "number" || !Number.isSafeInteger(chainId) || chainId < 1) die("owner: malformed evm owner file");
-      ({ signer } = await postEvmOwnerCall({ rpcUrl: str(file.rpc_url), chainId, registry, secretKey: str(who?.secret_key) }, method, args));
-      if (signer.toLowerCase() !== str(who?.address).toLowerCase()) die("owner: owner file key does not match its address");
-      where = `evm:${chainId}:${registry.toLowerCase()}`;
-    } else if (file.chain === "stellar") {
-      const who = file.owner as { account_id?: unknown; secret_key?: unknown } | undefined;
-      ({ signer } = await postStellarOwnerCall({ rpcUrl: str(file.rpc_url), networkPassphrase: str(file.network_passphrase), registry, secretKey: str(who?.secret_key) }, method, args));
-      if (signer !== str(who?.account_id)) die("owner: owner file key does not match its account");
-      where = `stellar:${registry}`;
-    } else {
-      const who = (vpn && file.vpn_owner !== undefined ? file.vpn_owner : file.owner) as { address?: unknown; secret_key?: unknown } | undefined;
-      ({ signer } = await postSolanaOwnerCall({ rpcUrl: str(file.rpc_url), programId: str(file.program_id), registry, secretKey: str(who?.secret_key) }, method, args));
-      if (signer !== str(who?.address)) die("owner: owner file key does not match its address");
-      where = `solana:${registry}`;
-    }
-    process.stdout.write(`${method} ✔ on ${where} (signed by ${signer})\n`);
-  } catch (e) {
-    die(`${method} failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
-}
-
 const argv = process.argv.slice(2);
 const cmd = argv[0];
 const { values, positionals } = parseArgs({
@@ -488,14 +291,10 @@ const { values, positionals } = parseArgs({
   allowPositionals: true,
   strict: true,
   options: {
-    llm: { type: "string" },
-    chain: { type: "string" },
     "rpc-port": { type: "string" },
-    "router-port": { type: "string" },
     "exit-port": { type: "string" },
     destination: { type: "boolean" },
     "evil-entry": { type: "boolean" },
-    combo: { type: "string" },
     vpn: { type: "boolean" },
     id: { type: "string" },
     extra: { type: "string" },
@@ -506,5 +305,5 @@ const { values, positionals } = parseArgs({
   },
 });
 if (cmd === "up") await up(values);
-else if (cmd === "owner") await owner(positionals[0], positionals[1], resolve(values["env-out"] ?? DEFAULT_ENV_FILE), values.vpn === true);
-else die("usage: stack-cli up [...] | stack-cli owner <method> '<json>' [--vpn]");
+else if (cmd === "owner") await owner(positionals[0], positionals[1], resolve(values["env-out"] ?? DEFAULT_ENV_FILE));
+else die("usage: stack-cli up [...] | stack-cli owner <method> '<json>'");

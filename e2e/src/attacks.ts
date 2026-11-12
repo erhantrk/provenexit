@@ -15,7 +15,7 @@ export interface AttackProxy {
   close(): Promise<void>;
 }
 
-/** Bounds: the router accepts ≤ 1 MiB requests; attestation responses are a few KiB. */
+/** Bound: attestation responses are a few KiB (INTEL bundles with collateral stay far below this). */
 export const MAX_ATTESTATION = 256 * 1024;
 const HOP_BY_HOP = new Set(["connection", "keep-alive", "transfer-encoding", "upgrade", "proxy-connection", "te", "trailer", "host", "content-length"]);
 

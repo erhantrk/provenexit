@@ -1,9 +1,10 @@
 # PLR-VPN-v1 — Provably No-Logs VPN Exit: Protocol Specification
 
 Status: **FROZEN**, rev 2 (2026-10-23): tunnel handshake v2 with exit ephemeral keys (§4.1), encrypted DNS (§2, §6.1),
-two-hop routing with on-chain operator organizations (§10). Rev 1 handshake and the interim hello replay guard are removed. Builds on `SPEC.md` (PLR-v1, rev 1.1): quote format (§2), event log (§3),
-compose measurement rules (§4), key binding (§5), registry contract (§7, deployed a second time, unchanged),
-receipt anchoring (§7/§8 Merkle + `anchor_receipts`), client verification order (§9). Notation as SPEC.md.
+two-hop routing with on-chain operator organizations (§10). Rev 1 handshake and the interim hello replay guard are removed. Builds on `SPEC.md` (PLR-v1 rev 1.3, trimmed on 2026-11-12 to this shared base): quote format (§2), event log (§3),
+compose measurement rules (§4), key binding (§5), attestation and proof endpoints (§6.2, §6.4), registry contract
+(§7, unchanged), receipt anchoring (§7/§8 Merkle + `anchor_receipts`), client verification order (§9). Notation as
+SPEC.md. INTEL/dstack mode: SPEC-TDX.md.
 `VDOMAIN = utf8("PLR-VPN-v1")`.
 
 ---
@@ -20,7 +21,7 @@ plain HTTP). PLR-VPN does **not** hide those from the exit code. It proves, befo
    or included in receipts or on-chain data;
 4. destinations are resolved by the exit (remote DNS) — the client never resolves them;
 5. the exit refuses to reach loopback/private/link-local/metadata/reserved addresses (protects the host's own
-   services: quote socket, RPC, LLM ports, cloud metadata).
+   services: quote socket, RPC, cloud metadata).
 
 Out of scope: traffic analysis (timing, sizes), the destination seeing the exit's IP, the exit's ISP seeing
 destinations, content of non-TLS traffic as seen by the exit code (it is processed, never stored), TEE vendor trust.
@@ -44,7 +45,7 @@ verifiers hash bytes received). Schema (exact keys, no extras):
 resolver URLs whose host is an **IP literal** (no bootstrap DNS); `https:` is required, except that `http://127.0.0.1:<port>/…`
 is allowed only when `allow_loopback` is true (test builds). `deny_private` MUST be `true`. `allow_loopback: true`
 exists only for local test builds; it changes the compose hash, so a test build can never pass as production.
-The mock TDX host launches a `plr-vpn` compose with **no LLM**, same isolation as the router (read-only fs, no child
+The mock TDX host launches a `plr-vpn` compose under Node's permission model (read-only fs, no child
 processes, no addons, no code generation from strings); network is allowed (it is an exit).
 
 Builds (by `enclave/build.mjs`): `vpn-honest` (production policy), `vpn-honest-test` (`allow_loopback: true`),
@@ -251,7 +252,7 @@ class VpnClient {
                    attestTtlMs?: number; lookup?: typeof import("node:dns").lookup });
   attest(): Promise<VerifiedRouter>;                                 // fresh nonce; SPEC §9
   connect(host: string, port: number): Promise<VpnStream>;           // §7 checks then tunnel; rejects PlrError
-  verifyAnchored(r: VpnReceipt): Promise<boolean>;                   // as PrivateClient.verifyAnchored (E_NOT_ANCHORED / E_ANCHOR_MISMATCH)
+  verifyAnchored(r: VpnReceipt): Promise<boolean>;                   // SPEC §8: chain positions win (E_NOT_ANCHORED / E_ANCHOR_MISMATCH)
 }
 interface VpnStream extends import("node:stream").Duplex {
   receipt(): Promise<{ receipt: VpnReceipt; sig: string }>;          // verified per §5; E_TRUNCATED / E_RECEIPT_SIG / E_RECEIPT_MISMATCH
@@ -271,24 +272,27 @@ All lookups the client itself performs go through `o.lookup` when given. CLI: `p
 env `PLR_VPN_URL`, `PLR_VPN_REGISTRY`, `PLR_NEAR_RPC`, `PLR_TRUSTED_ROOT`; with `PLR_VPN_ENTRY_URL` set it runs two-hop
 with `PLR_VPN_URL` as the exit), `plr vpn verify` (prints every check, both hops and the operator check in two-hop mode).
 
-### 9.3 E2E harness additions (`e2e/src/harness.ts`, `Stack` gains)
+### 9.3 E2E harness (`e2e/src/harness.ts`)
 ```ts
 type VpnVariant = "vpn-honest" | "vpn-honest-test" | "vpn-evil-logger" | "vpn-mitm-key" | "vpn-replay-quote" | "vpn-tamper-stream" | "vpn-truncate-stream";
-interface Stack { …existing…
-  vpnContractId: string;                     // a second registry deployment (same wasm, same MOCK root), e.g. vpnregistry.<root>
+type Signer = "owner" | "operator" | "operator2" | "stranger";
+startStack(o?: { rpcPort?: number; id?: string; anchorIntervalMs?: number }): Promise<Stack>   // fresh near-sandbox + deployed VPN registry
+interface Stack {
+  rpcUrl: string; trustedRoot: Uint8Array; runDir: string;
+  accounts: { owner; operator; operator2; stranger };
+  vpnContractId: string;                     // the registry deployment (contracts/near wasm, MOCK root), vpnregistry.<root>
   vpnRegistry: RegistryReader;
-  callVpn(signer: Signer, method: string, args: object, o?: { deposit?: string; gas?: string }): Promise<unknown>;
+  viewVpn<T>(method: string, args: object): Promise<T>;
+  callVpn(signer: Signer, method: string, args: object, o?: { deposit?: string; gas?: string }): Promise<unknown>; // rejects with the contract panic code in the message
   approveVpnBuild(v: "vpn-honest" | "vpn-honest-test" | "vpn-evil-logger"): Promise<{ composeHash: string; osMeasurement: string }>;
-  startExit(v: VpnVariant, o?: { register?: boolean }): Promise<ExitHandle>;   // register defaults true (on the VPN registry)
+  attestFor(v: "vpn-honest" | "vpn-honest-test" | "vpn-evil-logger", reportData: Uint8Array, o?: { debug?: boolean }): Promise<{ quote: Uint8Array; eventLog: TdxEvent[]; appCompose: string }>; // measured quote of a build
+  startExit(v: VpnVariant, o?: { register?: boolean; operator?: "operator" | "operator2" }): Promise<ExitHandle>;   // register defaults true; operator default "operator"
   startDestination(): Promise<Destination>;
-}
-interface Stack { …
-  accounts: { owner; operator; operator2; stranger };          // Signer gains "operator2"
   approveOperator(account: "operator" | "operator2", orgId: string): Promise<void>;   // owner → approve_operator on the VPN registry
   revokeOperator(account: "operator" | "operator2"): Promise<void>;
   dns: { set(name: string, addrs: string[]): void; hits(): number; setDown(down: boolean): void };
+  stop(): Promise<void>;
 }
-startExit(v, o?: { register?: boolean; operator?: "operator" | "operator2" })   // operator account that registers it (default "operator")
 interface ExitHandle { url: string; composeHash: string; keyHash: string; output(): string; stop(): Promise<void> }
 interface Destination { host: "127.0.0.1"; port: number; hits(): number; received(): string; close(): Promise<void> }
 ```

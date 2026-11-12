@@ -5,7 +5,7 @@ import { lookup as realLookup } from "node:dns";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { PlrError } from "@plr/shared";
-import { VpnClient, PrivateClient, startVpn, type VpnStream } from "@plr/client";
+import { VpnClient, startVpn, type VpnStream } from "@plr/client";
 import { startStack, type Stack, type ExitHandle, type Destination } from "../src/harness.js";
 
 const MARK = "vpn-secret-" + Math.random().toString(36).slice(2);
@@ -17,7 +17,7 @@ const lookups: string[] = [];
 const spyLookup = ((host: string, ...rest: unknown[]) => { lookups.push(host); return (realLookup as any)(host, ...rest); }) as typeof realLookup;
 
 beforeAll(async () => {
-  S = await startStack({ llm: "mock" });
+  S = await startStack();
   await S.approveVpnBuild("vpn-honest-test");
   exit = await S.startExit("vpn-honest-test");
   dest = await S.startDestination();
@@ -234,19 +234,7 @@ describe("9. no retention by the honest exit", () => {
   });
 });
 
-describe("10. registries are independent", () => {
-  it("a VPN build is not approved on the LLM registry and vice versa", async () => {
-    expect(await S.registry.isComposeAllowed(exit.composeHash)).toBe(false);
-    await S.approveBuild("honest");
-    const router = await S.startRouter("honest");
-    expect(await S.vpnRegistry.isComposeAllowed(router.composeHash)).toBe(false);
-    expect(await codeOf(new PrivateClient({ routerUrl: exit.url, registry: S.registry, trustedRoot: S.trustedRoot }).attest())).toBe("E_COMPOSE_NOT_ALLOWED");
-    expect(await codeOf(vpn(router.url).attest())).toBe("E_COMPOSE_NOT_ALLOWED");
-    await router.stop();
-  });
-});
-
-describe("11. encrypted DNS inside the exit (DoH, no plaintext fallback)", () => {
+describe("10. encrypted DNS inside the exit (DoH, no plaintext fallback)", () => {
   it("resolves names only through the measured DoH resolver", async () => {
     const before = S.dns.hits();
     const s1 = await vpn(exit.url).connect("dest.plr.test", dest.port); // unresolvable by the system resolver (.test)

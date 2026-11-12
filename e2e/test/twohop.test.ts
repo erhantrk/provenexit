@@ -15,7 +15,7 @@ const lookups: string[] = [];
 const spyLookup = ((host: string, ...rest: unknown[]) => { lookups.push(host); return (realLookup as any)(host, ...rest); }) as typeof realLookup;
 
 beforeAll(async () => {
-  S = await startStack({ llm: "mock" });
+  S = await startStack();
   await S.approveVpnBuild("vpn-honest-test");
   await S.approveOperator("operator", "org-a");
   await S.approveOperator("operator2", "org-b");

@@ -11,11 +11,11 @@ const sockLen = (dir: string): number => Buffer.byteLength(dir + SUFFIX);
 
 describe("hostDirFor", () => {
   it("keeps the host dir next to the run dir when the socket path fits", () => {
-    expect(hostDirFor("/r/.run", "demo-1794418575-zcash")).toBe("/r/.run/demo-1794418575-zcash-host");
+    expect(hostDirFor("/r/.run", "demo-1794418575-extra")).toBe("/r/.run/demo-1794418575-extra-host");
   });
 
   it("fits exactly at the limit (103 bytes) and moves out one byte later", () => {
-    const id = "demo-1794418575-zcash"; // 21 bytes, the longest demo.sh id
+    const id = "demo-1794418575-extra"; // 21 bytes, longer than any demo.sh id
     const fixed = `/${id}-host`.length + SUFFIX.length;
     const okRoot = "/" + "a".repeat(103 - fixed - 1);
     expect(sockLen(hostDirFor(okRoot, id))).toBe(103);
@@ -28,7 +28,7 @@ describe("hostDirFor", () => {
 
   it("candidates: id dir, then a short hash dir in the root, then the tmp bases; all fit", () => {
     const root = "/Users/exampleuser/personal/web3/hackathons/provenexit/.run";
-    const c = hostDirCandidates(root, "demo-1794418575-zcash", ["/tmp", "relative", "/" + "t".repeat(120)]);
+    const c = hostDirCandidates(root, "demo-1794418575-extra", ["/tmp", "relative", "/" + "t".repeat(120)]);
     expect(c).toHaveLength(2); // the id dir is 104 bytes (does not fit), "relative" and the long base are dropped
     expect(c[0]!.startsWith(`${root}/plr-`)).toBe(true);
     expect(c[1]!.startsWith("/tmp/plr-")).toBe(true);
@@ -36,10 +36,10 @@ describe("hostDirFor", () => {
     expect(hostDirCandidates("/r/.run", "x", ["/tmp"])).toEqual(["/r/.run/x-host", expect.stringMatching(/^\/r\/\.run\/plr-[0-9a-f]{12}$/), expect.stringMatching(/^\/tmp\/plr-[0-9a-f]{12}$/)]);
   });
 
-  it("a 59-byte root (this checkout's `.run`) with the zcash demo id stays usable", () => {
+  it("a 59-byte root (this checkout's `.run`) with a 21-byte demo id stays usable", () => {
     const root = "/Users/exampleuser/personal/web3/hackathons/provenexit/.run";
     expect(Buffer.byteLength(root)).toBe(59);
-    expect(sockLen(hostDirFor(root, "demo-1794418575-zcash"))).toBeLessThanOrEqual(103);
+    expect(sockLen(hostDirFor(root, "demo-1794418575-extra"))).toBeLessThanOrEqual(103);
   });
 
   it("a very long clone path falls back to a short, deterministic, per-run directory", () => {

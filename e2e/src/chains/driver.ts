@@ -1,22 +1,15 @@
 /**
- * Chain drivers of the e2e harness (SPEC-CHAINS §6): one local node per stack holding the two registries (LLM + VPN),
- * the stack accounts, owner admin APIs, registry readers and the env an instance needs to register on that chain.
- * `startStack({ chain })` picks the driver; everything else in the harness is chain-agnostic.
+ * The chain driver of the e2e harness: one local near-sandbox per stack holding the VPN registry, the stack accounts,
+ * the owner admin API, the registry reader and the env an exit needs to register on it.
  */
 import type { RegistryReader } from "@plr/shared";
-
-export type Chain = "near" | "evm" | "stellar" | "solana" | "zcash";
-export const CHAINS: readonly Chain[] = ["near", "evm", "stellar", "solana", "zcash"];
 
 export type Signer = "owner" | "operator" | "operator2" | "stranger";
 /** Accounts that operate (register) instances; the owner maps them to organizations (SPEC §7 rev 1.2). */
 export type OperatorAccount = "operator" | "operator2";
 export const OPERATORS: readonly OperatorAccount[] = ["operator", "operator2"];
 
-/** Which of the stack's two registries. */
-export type RegistryName = "llm" | "vpn";
-
-/** Owner API of one registry (SPEC-CHAINS §6). Resolves once the write is included on chain. */
+/** Owner API of the registry. Resolves once the write is included on chain. */
 export interface ChainAdmin {
   allowCompose(h: string): Promise<void>;
   revokeCompose(h: string): Promise<void>;
@@ -26,32 +19,27 @@ export interface ChainAdmin {
   revokeOperator(account: OperatorAccount): Promise<void>;
 }
 
-/** NEAR-style method call on a registry (`call` / `callVpn`); chains without contracts map the owner methods. */
+/** NEAR method call on the registry, signed by a stack account. */
 export type CallFn = (signer: Signer, method: string, args: object, o?: { deposit?: string; gas?: string }) => Promise<unknown>;
 
-/** What a chain driver provides to the harness. */
+/** What the chain driver provides to the harness. */
 export interface ChainDriver {
-  readonly chain: Chain;
   /** The node's RPC URL. */
   readonly rpcUrl: string;
-  readonly contractId: string;
   readonly vpnContractId: string;
-  readonly registry: RegistryReader;
   readonly vpnRegistry: RegistryReader;
   readonly accounts: { owner: string; operator: string; operator2: string; stranger: string };
-  readonly admin: ChainAdmin;
   readonly vpnAdmin: ChainAdmin;
-  /** The same API signed by the stranger account (refused or ignored by readers). */
+  /** The same API signed by the stranger account (refused by the contract). */
   asStranger(a: ChainAdmin): ChainAdmin;
-  view<T>(method: string, args: object): Promise<T>;
-  call: CallFn;
+  viewVpn<T>(method: string, args: object): Promise<T>;
   callVpn: CallFn;
   /**
-   * Env of a launch that registers on `registries` as `operator` (the host forwards it per its allowlists). Each
-   * call may set up per-instance credentials (NEAR: a fresh full-access key on the operator account).
+   * Env of a launch that registers on the VPN registry as `operator` (the host forwards it per its allowlist). Each
+   * call sets up per-instance credentials (a fresh full-access key on the operator account).
    */
-  instanceEnv(operator: OperatorAccount, registries: readonly RegistryName[]): Promise<Record<string, string>>;
-  /** Dev tooling: lines for the stack env file describing where the registries are (client config). */
+  instanceEnv(operator: OperatorAccount): Promise<Record<string, string>>;
+  /** Dev tooling: lines for the stack env file describing where the registry is (client config). */
   clientEnvLines(): string[];
   /** Dev tooling: JSON for the owner key file (0600) used by `stack-cli owner`. */
   ownerFile(): Record<string, unknown>;
@@ -64,7 +52,7 @@ export interface ChainDriver {
 export interface DriverOptions {
   /** Directory for the node's state (under the stack's run dir). */
   dir: string;
-  /** Pinned MOCK root public key (64 bytes x‖y), set as the registries' root. */
+  /** Pinned MOCK root public key (64 bytes x‖y), set as the registry's root. */
   trustedRoot: Uint8Array;
   /** Fixed RPC port (default: a free one). */
   rpcPort?: number;
