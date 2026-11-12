@@ -319,8 +319,8 @@ FASTNEAR RPC, Phala PCCS.
 
 ## Other project by the same submitter (rule Q-015)
 
-Erhan also submits **ZeroInit**, an independent project that shares no code with this one (repository link added at
-submission).
+Erhan also submits **ZeroInit**, an independent project that shares no code with this one:
+<https://github.com/erhantrk/zeroinit> (private until submission).
 
 ## License
 
