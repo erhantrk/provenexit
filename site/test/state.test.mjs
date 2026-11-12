@@ -3,9 +3,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import {
-  deriveState, colourOf, failingCheck, groupChecks, allowlistStatus, rowStatus, expiryOf,
+  deriveState, colourOf, failingCheck, groupChecks, allowlistStatus, approvalSentence, rowStatus, expiryOf,
   short, fmtDateTime, fmtHM, fmtSpan, platformItems, txUrl, safeUrl, accountUrl, STALE_MS,
 } from "../assets/state.js";
+import { DEADLINE_MS, TIMEOUTS, withDeadline } from "../api/_lib/deadline.mjs";
 
 const here = new URL(".", import.meta.url);
 const text = (p) => readFileSync(new URL(p, here), "utf8");
@@ -239,4 +240,47 @@ test("the error fixture has the shape the page must survive", () => {
   assert.equal(error.instance, null);
   assert.deepEqual(error.registry.events, []);
   assert.ok(error.verify.checks.every((c) => c.ok === false));
+});
+
+test("the build lead claims approval only when the history shows it", () => {
+  const hash = online.exit.compose.hash;
+  assert.match(approvalSentence(allowlistStatus(online.registry.events, hash)), /approved this exact hash/);
+  const revoked = approvalSentence(allowlistStatus(refused.registry.events, hash));
+  assert.match(revoked, /revoked this exact hash/);
+  assert.doesNotMatch(revoked, /approved/);
+  assert.equal(approvalSentence(allowlistStatus([], hash)), "");
+  assert.equal(approvalSentence(null), "");
+  // The fixed copy makes neither claim; the sentence is set from the data.
+  const html = text("../index.html");
+  assert.doesNotMatch(html, /approved this exact hash|exit is running/);
+  assert.match(html, /id="build-lead"/);
+});
+
+test("text that changes every second is not part of a slot that holds a link", () => {
+  const app = text("../assets/app.js");
+  const body = (name) => app.slice(app.indexOf(`function ${name}(`), app.indexOf("\n}\n", app.indexOf(`function ${name}(`)));
+  assert.doesNotMatch(body("underPlate"), /fmtSpan/);
+  assert.match(body("underPlate"), /<span id="age"><\/span>/);
+  const near = body("renderNear");
+  assert.match(near, /<span id="expires-in"><\/span>/);
+  assert.match(near, /tick\("expires-in"/);
+  assert.equal(near.match(/fmtSpan/g).length, 1);
+});
+
+test("the status function answers before the platform's limit", async () => {
+  const limit = JSON.parse(text("../vercel.json")).functions["api/status.mjs"].maxDuration * 1000;
+  assert.ok(DEADLINE_MS < limit);
+  // The bundle's sequence: the parallel phase, then egress, get_instance, two rounds of tx details, two anchor reads.
+  const T = { healthz: 5e3, ...TIMEOUTS };
+  const parallel = Math.max(T.healthz + 500, T.verify, T.chain + 500, T.events + 500);
+  const worst = parallel + (T.egress + 2e3) + T.chain + 2 * (T.chain + 500) + 2 * T.chain;
+  assert.ok(worst < limit, `worst case ${worst} ms`);
+  assert.match(text("../api/status.mjs"), /withDeadline\(getStatus\(\{ timeouts: TIMEOUTS \}\)\)/);
+
+  const done = { checked_at: "2026-11-12T10:00:00.000Z", error: null };
+  assert.equal(await withDeadline(Promise.resolve(done), 50), done);
+  const late = await withDeadline(new Promise(() => {}), 20, () => new Date("2026-11-12T10:00:00.000Z"));
+  assert.deepEqual(late, { checked_at: "2026-11-12T10:00:00.000Z", error: "status check timed out" });
+  assert.equal(deriveState(late, Date.parse(late.checked_at) + 1000), "error");
+  await assert.rejects(withDeadline(Promise.reject(new Error("boom")), 50), /boom/);
 });

@@ -1,5 +1,6 @@
 // GET /api/status: the result of getStatus() from the repo's status bundle, cached for 30 s.
 import { getStatus } from "./_lib/provenexit-status.mjs";
+import { TIMEOUTS, withDeadline } from "./_lib/deadline.mjs";
 
 export default async function handler(req, res) {
   res.setHeader("content-type", "application/json; charset=utf-8");
@@ -10,7 +11,8 @@ export default async function handler(req, res) {
     return res.end(JSON.stringify({ error: "method not allowed" }));
   }
   try {
-    const status = await getStatus(); // defaults = the live testnet deployment
+    // Defaults = the live testnet deployment; only the timeouts are tightened.
+    const status = await withDeadline(getStatus({ timeouts: TIMEOUTS }));
     res.statusCode = 200;
     res.setHeader(
       "cache-control",

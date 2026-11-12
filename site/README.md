@@ -29,7 +29,7 @@ Sample states, on localhost only:
 | `assets/app.js` | fetch, 15 s poll, render, copy buttons, the lighting sequence |
 | `assets/styles.css` | tokens and layout; green and red only in the last block, under the page state |
 | `assets/config.js` | `demoVideoUrl`; the video link shows only when it is set |
-| `api/status.mjs` | `getStatus()` from `api/_lib/provenexit-status.mjs`, cached 30 s |
+| `api/status.mjs` | `getStatus()` from `api/_lib/provenexit-status.mjs`, cached 30 s; answers within 55 s (`api/_lib/deadline.mjs`) |
 | `api/ip.mjs` | the caller's address from the request headers, never cached |
 | `fixtures/`, `test/`, `dev-server.mjs` | local only (`.vercelignore`) |
 

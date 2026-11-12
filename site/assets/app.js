@@ -1,5 +1,5 @@
 import {
-  deriveState, checksOf, failingCheck, groupChecks, allowlistStatus, eventWords, isRevoke, expiryOf,
+  deriveState, checksOf, failingCheck, groupChecks, allowlistStatus, approvalSentence, eventWords, isRevoke, expiryOf,
   fmtDate, fmtTime, fmtHM, fmtDateTime, fmtDateHM, fmtSpan, short, platformItems, safeUrl, txUrl, accountUrl,
 } from "./state.js";
 import { CONFIG } from "./config.js";
@@ -57,17 +57,35 @@ const checkedAt = () => (json && Number.isFinite(Date.parse(json.checked_at)) ? 
 const atTime = () => (checkedAt() ? fmtHM(checkedAt()) : failedAt ? fmtHM(failedAt) : fmtHM(now()));
 const sentence = (s) => String(s ?? "").trim().replace(/[.\s]+$/, "");
 
-/** Replace a slot's HTML only when it changed, keeping keyboard focus on the same control. */
+/** Where keyboard focus sits inside a slot: a control's data-key, or a link's href and its place among equal links. */
+function focusMark(el) {
+  const a = document.activeElement;
+  if (!a || a === el || !el.contains(a)) return null;
+  if (a.dataset.key) return { sel: `[data-key="${CSS.escape(a.dataset.key)}"]`, n: 0 };
+  if (!a.matches("a[href]")) return null;
+  const sel = `a[href="${CSS.escape(a.getAttribute("href"))}"]`;
+  return { sel, n: [...el.querySelectorAll(sel)].indexOf(a) };
+}
+
+/** Replace a slot's HTML only when it changed, keeping keyboard focus on the same control or link. */
 function put(id, html) {
   if (lastHtml.get(id) === html) return false;
   const el = $(id);
   if (!el) return false;
-  const active = document.activeElement;
-  const key = active && el.contains(active) ? active.dataset.key : null;
+  const mark = focusMark(el);
   el.innerHTML = html;
   lastHtml.set(id, html);
-  if (key) el.querySelector(`[data-key="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
+  if (mark) {
+    const hits = el.querySelectorAll(mark.sel);
+    (hits[mark.n] ?? hits[0])?.focus({ preventScroll: true });
+  }
   return true;
+}
+
+/** Text that changes with the clock lives in its own element, so the slot around it is not rebuilt. */
+function tick(id, text) {
+  const el = $(id);
+  if (el && el.textContent !== text) el.textContent = text;
 }
 
 // ---- hero -------------------------------------------------------------------------------------
@@ -126,11 +144,11 @@ function pipsHtml(state) {
 }
 
 function underPlate(state) {
-  const run = `<a href="#run">Run the check yourself</a> to leave this page out of it.`;
+  const run = `<a href="#run" data-key="run-yourself">Run the check yourself</a> to leave this page out of it.`;
   if (state === "loading") return "";
   if (!checkedAt()) return run;
   const verb = state === "error" ? "Tried" : "Checked";
-  return `${verb} by this site's server ${esc(fmtSpan(now() - Date.parse(checkedAt())))} ago. ${run}`;
+  return `${verb} by this site's server <span id="age"></span> ago. ${run}`;
 }
 
 function renderHero(state, animate) {
@@ -138,6 +156,7 @@ function renderHero(state, animate) {
   const chip = () => put("chip-text", state === "verified" && checkedAt() ? `Verified <span class="chip-time">${esc(fmtHM(checkedAt()))}</span>` : WORDS[state]);
   put("platform", platformItems(json?.exit?.platform).map((p) => `<li>${esc(p)}</li>`).join(""));
   put("under-plate", underPlate(state));
+  if (checkedAt()) tick("age", fmtSpan(now() - Date.parse(checkedAt())));
   const plate = $("plate");
   const pips = $("pips");
   const finish = () => {
@@ -279,16 +298,19 @@ const unavailable = (state, what = "the check could not run") =>
       : `<p class="note-line">Not available: ${what}.</p>`;
 
 function renderBuild(state) {
-  if (state === "loading" || state === "error" || state === "stale") return put("build-body", unavailable(state));
-  const live = state === "verified" && json.exit?.compose ? json.exit.compose : null;
-  const c = live ?? json.replay?.compose ?? null;
+  const known = !(state === "loading" || state === "error" || state === "stale");
+  const live = known && state === "verified" && json.exit?.compose ? json.exit.compose : null;
+  const c = known ? (live ?? json.replay?.compose ?? null) : null;
+  const status = c ? allowlistStatus(json.registry?.events, c.hash) : null;
+  const approval = approvalSentence(status);
+  put("build-lead", approval ? ` ${esc(approval)}` : "");
+  if (!known) return put("build-body", unavailable(state));
   if (!c) return put("build-body", `<p class="note-line">Not available: this response carries no build values.</p>`);
   let label = "";
   if (!live) {
     const why = state === "offline" ? "The exit is stopped" : state === "refused" ? "The client refused to connect" : "The exit returned no build values";
     label = `<p class="label-recorded">Recorded ${time(json.replay.captured_at)}. ${why}, so these are not live values.</p>`;
   }
-  const status = allowlistStatus(json.registry?.events, c.hash);
   let allow = `<span class="quiet">The history read at ${esc(atTime())} does not show this hash.</span>`;
   if (status?.allowed) allow = `${mark("pass", "allowed")} Allowed on NEAR, ${time(status.event.at)}. ${txLink(status.event.tx)}`;
   else if (status) allow = `${mark("fail", "revoked")} Revoked on NEAR, ${time(status.event.at)}. The registry no longer allows this build. ${txLink(status.event.tx)}`;
@@ -316,12 +338,12 @@ function renderNear(state) {
   const exp = expiryOf(i, now());
   let expires = "–";
   if (exp?.expired) expires = `Expired ${time(i.expires_at)}. The exit registers again when it runs.`;
-  else if (exp) expires = `${time(i.expires_at)}, in ${esc(fmtSpan(exp.at - now()))}. The exit re-registers every 6 hours while it runs.`;
+  else if (exp) expires = `${time(i.expires_at)}, in <span id="expires-in"></span>. The exit re-registers every 6 hours while it runs.`;
   const row = (k, v) => `<div class="row"><dt>${k}</dt><dd>${v}</dd><dd></dd></div>`;
   const refusedNote = state === "refused"
     ? `<p class="note-line">A registration can stay in place while a build is revoked. The client reads the registry again before every connection.</p>`
     : "";
-  return put(
+  put(
     "near-body",
     `<p class="gas">Before the registry listed this exit's keys, the contract verified the exit's Intel quote on chain: 13 checks in one transaction${gas}.</p>
 ${refusedNote}<dl class="rows">
@@ -334,6 +356,7 @@ ${row("Registry", whole(json.registry?.account))}
 ${row("Root", whole(json.registry?.root))}
 </dl>`,
   );
+  if (exp && !exp.expired) tick("expires-in", fmtSpan(exp.at - now()));
 }
 
 // ---- keys -------------------------------------------------------------------------------------

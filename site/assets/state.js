@@ -154,6 +154,12 @@ export function allowlistStatus(events, hash) {
   return { allowed: newest.kind === "allow_compose", event: newest };
 }
 
+/** What the history supports saying about the build's hash; nothing when the history does not show it. */
+export function approvalSentence(status) {
+  if (!status) return "";
+  return status.allowed ? "The owner approved this exact hash on NEAR." : "The owner revoked this exact hash on NEAR.";
+}
+
 export const EVENT_WORDS = {
   approve_operator: "Operator approved",
   allow_os: "OS image allowed",
