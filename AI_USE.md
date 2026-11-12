@@ -36,9 +36,12 @@ baseline, did the review passes, and ran the testnet/Phala operator work. Commit
 
 ## What the AI did not do
 
-- It never held, printed or committed a private key, mnemonic or API token. The exit's operator key exists only as a
-  sealed `phala deploy -e` value in the plan; no exit was ever deployed with it (fallback S1-F2).
-- It did not deploy the VPN exit, did not push the repository and did not submit the hackathon form.
+- It never printed or committed a private key, mnemonic or API token. For the live exit, the operator key was read
+  from the local NEAR credentials into a temporary env file, passed to `phala deploy -e` (encrypted to the CVM) and
+  deleted right after.
+- On Erhan's instruction, Claude Opus 5.5 acted as operator: it deployed the VPN exit on Phala (2026-11-12), deployed
+  the keyless registry and sent the owner transactions, and pushed the repository. Erhan decided each of those steps.
+- It did not submit the hackathon form.
 - It did not decide the product: the name, the pitch, the tracks, the trust model, the fallbacks used (S1-F2) and
   the omissions in `README.md` "What it does not prove" are Erhan's calls.
 

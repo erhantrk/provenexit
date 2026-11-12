@@ -13445,7 +13445,7 @@ ${b64.match(/.{1,64}/g).join("\n")}
       }
       return Buffer2.from(base642, "base64");
     }
-    var createPublicKey2 = function(key) {
+    var createPublicKey = function(key) {
       if (!isBrowser && crypto2.createPublicKey) {
         return crypto2.createPublicKey(key);
       }
@@ -13509,7 +13509,7 @@ ${b64.match(/.{1,64}/g).join("\n")}
       X509Certificate,
       createHash,
       createVerify,
-      createPublicKey: createPublicKey2,
+      createPublicKey,
       isBrowser
     };
   }
@@ -16745,13 +16745,13 @@ function __setFunctionName(f, name, prefix) {
 function __metadata(metadataKey, metadataValue) {
   if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(metadataKey, metadataValue);
 }
-function __awaiter(thisArg, _arguments, P2, generator) {
+function __awaiter(thisArg, _arguments, P, generator) {
   function adopt(value) {
-    return value instanceof P2 ? value : new P2(function(resolve) {
+    return value instanceof P ? value : new P(function(resolve) {
       resolve(value);
     });
   }
-  return new (P2 || (P2 = Promise))(function(resolve, reject) {
+  return new (P || (P = Promise))(function(resolve, reject) {
     function fulfilled(value) {
       try {
         step(generator.next(value));
@@ -39504,9 +39504,8 @@ var ERROR_CODES = [
   "E_BAD_HEX",
   "E_BAD_INPUT",
   "E_NOT_IMPLEMENTED",
-  // router HTTP API (§6)
+  // HTTP API (§6.2, §6.4)
   "E_BAD_REQUEST",
-  "E_TOO_LARGE",
   "E_NOT_ANCHORED",
   // receipt inclusion proof disagrees with the on-chain anchor (§8)
   "E_ANCHOR_MISMATCH",
@@ -39526,7 +39525,7 @@ var ERROR_CODES = [
   "E_OS_NOT_ALLOWED",
   "E_INSTANCE_NOT_REGISTERED",
   "E_REGISTRY_UNAVAILABLE",
-  // streaming (§6.3, §9)
+  // tunnel and receipts (SPEC-VPN §4, §5); E_UPSTREAM: 503 from the exit (quote / collateral service, tunnel limit)
   "E_DECRYPT",
   "E_TRUNCATED",
   "E_RECEIPT_SIG",
@@ -39544,8 +39543,6 @@ var ERROR_CODES = [
   // two-hop operator organizations (SPEC-VPN §8, §10 rev 2)
   "E_OPERATOR_UNAPPROVED",
   "E_SAME_OPERATOR",
-  // rev 1.4 registration evidence for registries that do not verify quotes on-chain (SPEC-CHAINS §2)
-  "E_REGISTRATION_EVIDENCE",
   // INTEL / dstack mode (SPEC-TDX §0)
   "E_TCB_STATUS",
   "E_COMPOSE_POLICY",
@@ -40769,40 +40766,15 @@ function verifyEventLogDstack(events, rtmr3) {
 // packages/shared/dist/tdx/measure.js
 init_define_STATUS_DEFAULTS();
 init_define_STATUS_REPLAY();
-var MAX_CONTRACT_ID_LEN = 128;
-var CONTRACT_ID_RE = /^[\x21-\x7e]+$/;
-function contractIdBytes(contractId) {
-  if (typeof contractId !== "string" || contractId.length === 0 || contractId.length > MAX_CONTRACT_ID_LEN || !CONTRACT_ID_RE.test(contractId)) {
-    throw new PlrError("E_BAD_INPUT", "bad contract id");
-  }
-  return utf8(contractId);
-}
 function keyHash(x255192, ed255193) {
   requireBytes(x255192, 32, "E_BAD_INPUT", "x25519");
   requireBytes(ed255193, 32, "E_BAD_INPUT", "ed25519");
   return sha256(concatBytes2(DOMAIN, x255192, ed255193));
 }
 var SESSION_NONCE_DOMAIN = "PLR-v1/session-nonce";
-var REGISTRATION_NONCE_DOMAIN = "PLR-v1/register/2";
-var MAX_ACCOUNT_ID_BYTES = 64;
 function sessionNonceDigest(clientNonce) {
   requireBytes(clientNonce, 32, "E_BAD_INPUT", "nonce");
   return sha256(concatBytes2(utf8(SESSION_NONCE_DOMAIN), clientNonce));
-}
-function accountIdField(id2, what) {
-  const b = contractIdBytes(id2);
-  if (b.length > MAX_ACCOUNT_ID_BYTES)
-    throw new PlrError("E_BAD_INPUT", `${what} too long`);
-  return concatBytes2(Uint8Array.of(b.length), b);
-}
-function registrationNonce(contractId, operatorId) {
-  const c = accountIdField(contractId, "contract id");
-  const o = accountIdField(operatorId, "operator id");
-  return sha256(concatBytes2(utf8(REGISTRATION_NONCE_DOMAIN), c, o));
-}
-function registrationReportData(x255192, ed255193, contractId, operatorId) {
-  const nonce = registrationNonce(contractId, operatorId);
-  return concatBytes2(keyHash(x255192, ed255193), nonce);
 }
 
 // packages/shared/dist/attest/mock.js
@@ -41137,13 +41109,13 @@ function sqrt5mod8(Fp3, n) {
   assertIsSquare(F2, root, n);
   return root;
 }
-function sqrt9mod16(P2) {
-  const Fp_ = Field(P2);
-  const tn = tonelliShanks(P2);
+function sqrt9mod16(P) {
+  const Fp_ = Field(P);
+  const tn = tonelliShanks(P);
   const c1 = tn(Fp_, Fp_.neg(Fp_.ONE));
   const c2 = tn(Fp_, c1);
   const c3 = tn(Fp_, Fp_.neg(c1));
-  const c4 = (P2 + _7n) / _16n;
+  const c4 = (P + _7n) / _16n;
   return ((Fp3, n) => {
     const F2 = Fp3;
     let tv1 = F2.pow(n, c4);
@@ -41160,18 +41132,18 @@ function sqrt9mod16(P2) {
     return root;
   });
 }
-function tonelliShanks(P2) {
-  if (P2 < _3n)
+function tonelliShanks(P) {
+  if (P < _3n)
     throw new Error("sqrt is not defined for small field");
-  aoddModulus(P2, "tonelliShanks");
-  let Q2 = P2 - _1n2;
+  aoddModulus(P, "tonelliShanks");
+  let Q2 = P - _1n2;
   let S = 0;
   while (Q2 % _2n === _0n2) {
     Q2 /= _2n;
     S++;
   }
   let Z = _2n;
-  const _Fp = Field(P2);
+  const _Fp = Field(P);
   while (FpLegendre(_Fp, Z) === 1) {
     if (Z++ > 1e3)
       throw new Error("Cannot find square root: probably non-prime P");
@@ -41211,15 +41183,15 @@ function tonelliShanks(P2) {
     return R;
   };
 }
-function FpSqrt(P2) {
-  aoddModulus(P2, "Fp.sqrt");
-  if (P2 % _4n === _3n)
+function FpSqrt(P) {
+  aoddModulus(P, "Fp.sqrt");
+  if (P % _4n === _3n)
     return sqrt3mod4;
-  if (P2 % _8n === _5n)
+  if (P % _8n === _5n)
     return sqrt5mod8;
-  if (P2 % _16n === _9n)
-    return sqrt9mod16(P2);
-  return tonelliShanks(P2);
+  if (P % _16n === _9n)
+    return sqrt9mod16(P);
+  return tonelliShanks(P);
 }
 var isNegativeLE = (num, modulo) => (mod(num, modulo) & _1n2) === _1n2;
 var FIELD_FIELDS = [
@@ -41531,8 +41503,8 @@ function validateMSMScalars(scalars, field, maxScalar) {
   });
 }
 var pointWindowSizes = /* @__PURE__ */ new WeakMap();
-function getWindowSize(P2) {
-  return pointWindowSizes.get(P2) || 1;
+function getWindowSize(P) {
+  return pointWindowSizes.get(P) || 1;
 }
 function oddMultiples(p, size) {
   const dbl = p.double();
@@ -42271,9 +42243,9 @@ function weierstrass(params, extraOpts = {}) {
       return new Point(x, y, Fp3.ONE);
     }
     static fromBytes(bytes) {
-      const P2 = Point.fromAffine(decodePoint(abytes2(bytes, void 0, "point")));
-      P2.assertValidity();
-      return P2;
+      const P = Point.fromAffine(decodePoint(abytes2(bytes, void 0, "point")));
+      P.assertValidity();
+      return P;
     }
     static fromHex(hex) {
       return Point.fromBytes(hexToBytes2(hex));
@@ -42853,8 +42825,8 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
     validateSigLength(signature, format);
     try {
       const sig = Signature.fromBytes(signature, format);
-      const P2 = Point.fromBytes(publicKey);
-      if (P2.is0())
+      const P = Point.fromBytes(publicKey);
+      if (P.is0())
         return false;
       if (lowS && sig.hasHighS())
         return false;
@@ -42863,7 +42835,7 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
       const is = Fn2.inv(s);
       const u1 = Fn2.create(h * is);
       const u2 = Fn2.create(r * is);
-      const R = Point.BASE.mulAddUnsafe(u1, P2, u2);
+      const R = Point.BASE.mulAddUnsafe(u1, P, u2);
       if (R.is0())
         return false;
       const q = R.toAffine();
@@ -43114,7 +43086,201 @@ function checkDstackComposePolicy(appCompose) {
   return { images };
 }
 
-// packages/shared/dist/crypto/session.js
+// packages/shared/dist/receipts/anchor.js
+init_define_STATUS_DEFAULTS();
+init_define_STATUS_REPLAY();
+var ANCHOR_LABEL = utf8("PLR-v1/anchor");
+
+// packages/shared/dist/receipts/merkle.js
+init_define_STATUS_DEFAULTS();
+init_define_STATUS_REPLAY();
+var MAX_PROOF_LEN = 64;
+var NODE_PREFIX = Uint8Array.of(1);
+function node(l, r) {
+  return sha256(concatBytes2(NODE_PREFIX, l, r));
+}
+function verifyMerkleProof(leaf, index, size, proof, root) {
+  try {
+    if (!isBytes2(leaf) || leaf.length !== 32 || !isBytes2(root) || root.length !== 32)
+      return false;
+    if (!isUint(index) || !isUint(size) || size === 0 || index >= size)
+      return false;
+    if (!Array.isArray(proof) || proof.length > MAX_PROOF_LEN)
+      return false;
+    let fn = index;
+    let sn = size - 1;
+    let r = leaf;
+    for (const p of proof) {
+      if (!isBytes2(p) || p.length !== 32)
+        return false;
+      if (sn === 0)
+        return false;
+      if (fn % 2 === 1 || fn === sn) {
+        r = node(p, r);
+        while (fn % 2 === 0 && fn !== 0) {
+          fn = Math.floor(fn / 2);
+          sn = Math.floor(sn / 2);
+        }
+      } else {
+        r = node(r, p);
+      }
+      fn = Math.floor(fn / 2);
+      sn = Math.floor(sn / 2);
+    }
+    return sn === 0 && equalBytes(r, root);
+  } catch {
+    return false;
+  }
+}
+
+// packages/shared/dist/registry.js
+init_define_STATUS_DEFAULTS();
+init_define_STATUS_REPLAY();
+var ZERO32 = "00".repeat(32);
+var ORG_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+function isOrgId(v) {
+  return typeof v === "string" && v.length <= 64 && ORG_ID_RE.test(v);
+}
+function isHash32(h) {
+  return isHex(h, 32) && h !== ZERO32;
+}
+function isRegistryRoot(v) {
+  return isPlainObject(v) && (v.kind === "MOCK" || v.kind === "INTEL") && isHex(v.p256, 64);
+}
+function isInstanceRecord(v) {
+  return isPlainObject(v) && isHash32(v.compose_hash) && isHash32(v.os_measurement) && isHex(v.x25519, 32) && isHex(v.ed25519, 32) && typeof v.operator === "string" && // required key (fail closed): an absent org_id is not the same as "unapproved"
+  Object.prototype.hasOwnProperty.call(v, "org_id") && (v.org_id === null || isOrgId(v.org_id)) && isUint(v.registered_at_ms) && isUint(v.expires_at_ms) && isUint(v.next_seq);
+}
+function isAnchorRecord(v) {
+  return isPlainObject(v) && isUint(v.id) && isHash32(v.key_hash) && isHex(v.root, 32) && isUint(v.first_seq) && isUint(v.count) && isUint(v.at_ms);
+}
+function bad3(what) {
+  throw new PlrError("E_BAD_INPUT", `MemoryRegistry: ${what}`);
+}
+var MemoryRegistry = class {
+  chain;
+  contractId;
+  #root;
+  #compose = /* @__PURE__ */ new Set();
+  #os = /* @__PURE__ */ new Set();
+  #instances = /* @__PURE__ */ new Map();
+  #anchors = [];
+  /** account → org_id; `null` = explicitly revoked */
+  #operators = /* @__PURE__ */ new Map();
+  #now;
+  constructor(o) {
+    if (!isPlainObject(o))
+      bad3("options required");
+    if (!isRegistryRoot(o.root))
+      bad3("bad root");
+    if (!Array.isArray(o.compose) || !Array.isArray(o.os) || !isPlainObject(o.instances))
+      bad3("bad allowlists");
+    this.chain = o.chain ?? "memory";
+    this.contractId = o.contractId ?? "registry.memory";
+    this.#now = o.now ?? Date.now;
+    this.#root = { kind: o.root.kind, p256: o.root.p256 };
+    for (const h of o.compose)
+      this.allowCompose(h);
+    for (const h of o.os)
+      this.allowOs(h);
+    for (const [k, rec] of Object.entries(o.instances))
+      this.putInstance(k, rec);
+    for (const a of o.anchors ?? [])
+      this.addAnchor(a);
+    if (o.operators !== void 0) {
+      if (!isPlainObject(o.operators))
+        bad3("bad operators");
+      for (const [acct, org] of Object.entries(o.operators))
+        this.approveOperator(acct, org);
+    }
+  }
+  // --- mutators (test helpers mirroring the owner/operator methods) ---
+  setRoot(root) {
+    if (!isRegistryRoot(root))
+      bad3("bad root");
+    this.#root = { kind: root.kind, p256: root.p256 };
+  }
+  allowCompose(h) {
+    if (!isHash32(h))
+      bad3("bad compose hash");
+    this.#compose.add(h);
+  }
+  revokeCompose(h) {
+    this.#compose.delete(h);
+  }
+  allowOs(h) {
+    if (!isHash32(h))
+      bad3("bad os hash");
+    this.#os.add(h);
+  }
+  revokeOs(h) {
+    this.#os.delete(h);
+  }
+  putInstance(keyHash2, rec) {
+    if (!isHash32(keyHash2))
+      bad3("bad key hash");
+    if (!isInstanceRecord(rec))
+      bad3("bad instance record");
+    this.#instances.set(keyHash2, { ...rec });
+  }
+  removeInstance(keyHash2) {
+    this.#instances.delete(keyHash2);
+  }
+  /** `approve_operator(account_id, org_id)`: (re)maps an operator account to an organization. */
+  approveOperator(account, orgId) {
+    if (typeof account !== "string" || account.length === 0)
+      bad3("bad operator account");
+    if (!isOrgId(orgId))
+      bad3("bad org_id");
+    this.#operators.set(account, orgId);
+  }
+  /** `revoke_operator(account_id)`: the operator's instances read `org_id: null` from now on. */
+  revokeOperator(account) {
+    if (typeof account !== "string" || account.length === 0)
+      bad3("bad operator account");
+    this.#operators.set(account, null);
+  }
+  /** `get_operator(account_id)`: live org of an account (null if unknown or revoked). */
+  async getOperator(account) {
+    return typeof account === "string" ? this.#operators.get(account) ?? null : null;
+  }
+  /** Appends an anchor; its `id` must equal the current anchor count. */
+  addAnchor(a) {
+    if (!isAnchorRecord(a) || a.id !== this.#anchors.length)
+      bad3("bad anchor");
+    this.#anchors.push({ ...a });
+  }
+  // --- RegistryReader ---
+  async getRoot() {
+    return { kind: this.#root.kind, p256: this.#root.p256 };
+  }
+  async isComposeAllowed(h) {
+    return isHash32(h) && this.#compose.has(h);
+  }
+  async isOsAllowed(h) {
+    return isHash32(h) && this.#os.has(h);
+  }
+  async getInstance(keyHash2) {
+    if (!isHash32(keyHash2))
+      return null;
+    const rec = this.#instances.get(keyHash2);
+    if (rec === void 0 || rec.expires_at_ms <= this.#now())
+      return null;
+    const org_id = this.#operators.has(rec.operator) ? this.#operators.get(rec.operator) ?? null : rec.org_id;
+    return { ...rec, org_id };
+  }
+  async getAnchor(id2) {
+    if (!isUint(id2))
+      return null;
+    const a = this.#anchors[id2];
+    return a === void 0 ? null : { ...a };
+  }
+  async anchorCount() {
+    return this.#anchors.length;
+  }
+};
+
+// packages/shared/dist/policy.js
 init_define_STATUS_DEFAULTS();
 init_define_STATUS_REPLAY();
 
@@ -43581,15 +43747,15 @@ init_define_STATUS_REPLAY();
 var _0n7 = /* @__PURE__ */ BigInt(0);
 var _1n6 = /* @__PURE__ */ BigInt(1);
 var _2n4 = /* @__PURE__ */ BigInt(2);
-function cmask(P2, swap) {
-  return P2 + swap - (swap >> _1n6 << _1n6);
+function cmask(P, swap) {
+  return P + swap - (swap >> _1n6 << _1n6);
 }
-function cswap(P2) {
-  const offset = BigInt(6) * P2;
+function cswap(P) {
+  const offset = BigInt(6) * P;
   return (mask, x_2, x_3) => {
     const sum = x_2 + x_3;
     const d = offset + x_3 - x_2;
-    const a = (d * mask + x_2) % P2;
+    const a = (d * mask + x_2) % P;
     return { x_2: a, x_3: sum - a };
   };
 }
@@ -43607,21 +43773,21 @@ function validateOpts(curve) {
 }
 function montgomery(curveDef) {
   const CURVE = validateOpts(curveDef);
-  const { P: P2, type, adjustScalarBytes: adjustScalarBytes3, powPminus2, randomBytes: rand } = CURVE;
+  const { P, type, adjustScalarBytes: adjustScalarBytes3, powPminus2, randomBytes: rand } = CURVE;
   const mulBaseHook = CURVE.scalarMultBase;
   const is25519 = type === "x25519";
   if (!is25519 && type !== "x448")
     throw new Error("invalid type");
   const randomBytes_ = rand === void 0 ? randomBytes2 : rand;
   const montgomeryBits = is25519 ? 255 : 448;
-  const swap = cswap(P2);
+  const swap = cswap(P);
   const fieldLen = is25519 ? 32 : 56;
   const Gu = is25519 ? BigInt(9) : BigInt(5);
   const a24 = is25519 ? BigInt(121665) : BigInt(39081);
   const minScalar = is25519 ? _2n4 ** BigInt(254) : _2n4 ** BigInt(447);
   const maxAdded = is25519 ? BigInt(8) * (_2n4 ** BigInt(251) - _1n6) : BigInt(4) * (_2n4 ** BigInt(445) - _1n6);
   const maxScalar = minScalar + maxAdded + _1n6;
-  const modP = (n) => mod(n, P2);
+  const modP = (n) => mod(n, P);
   const GuBytes = encodeU(Gu);
   function encodeU(u) {
     return numberToBytesLE(modP(u), fieldLen);
@@ -43638,10 +43804,10 @@ function montgomery(curveDef) {
   const lowOrderU = new Set(is25519 ? [
     _0n7,
     _1n6,
-    P2 - _1n6,
+    P - _1n6,
     BigInt("325606250916557431795983626356110631294008115727848805560023387167927233504"),
     BigInt("39382357235489614581723060781553021112529911719440698176882885853963445705823")
-  ] : [_0n7, _1n6, P2 - _1n6]);
+  ] : [_0n7, _1n6, P - _1n6]);
   function scalarMult(scalar, u) {
     const pointU = decodeU(u);
     if (lowOrderU.has(pointU))
@@ -43664,7 +43830,7 @@ function montgomery(curveDef) {
   const getPublicKey = scalarMultBase;
   const getSharedSecret = scalarMult;
   function montgomeryLadder(u, scalar) {
-    aInRange("u", u, _0n7, P2);
+    aInRange("u", u, _0n7, P);
     aInRange("scalar", scalar, minScalar, maxScalar);
     const k = scalar;
     const x_1 = u;
@@ -43674,7 +43840,7 @@ function montgomery(curveDef) {
     let z_3 = _1n6;
     const kx = k ^ k >> _1n6;
     for (let t = BigInt(montgomeryBits - 1); t >= _0n7; t--) {
-      const mask2 = cmask(P2, kx >> t);
+      const mask2 = cmask(P, kx >> t);
       ({ x_2, x_3 } = swap(mask2, x_2, x_3));
       ({ x_2: z_2, x_3: z_3 } = swap(mask2, z_2, z_3));
       const A = x_2 + z_2;
@@ -43693,7 +43859,7 @@ function montgomery(curveDef) {
       x_2 = modP(AA * BB);
       z_2 = modP(E * (AA + modP(a24 * E)));
     }
-    const mask = cmask(P2, k);
+    const mask = cmask(P, k);
     ({ x_2, x_3 } = swap(mask, x_2, x_3));
     ({ x_2: z_2, x_3: z_3 } = swap(mask, z_2, z_3));
     const z2 = powPminus2(z_2);
@@ -43743,19 +43909,19 @@ var ed25519_CURVE = /* @__PURE__ */ (() => ({
 }))();
 function ed25519_pow_2_252_3(x) {
   const _10n = BigInt(10), _20n = BigInt(20), _40n = BigInt(40), _80n = BigInt(80);
-  const P2 = ed25519_CURVE_p;
-  const x2 = x * x % P2;
-  const b2 = x2 * x % P2;
-  const b4 = pow2(b2, _2n5, P2) * b2 % P2;
-  const b5 = pow2(b4, _1n7, P2) * x % P2;
-  const b10 = pow2(b5, _5n2, P2) * b5 % P2;
-  const b20 = pow2(b10, _10n, P2) * b10 % P2;
-  const b40 = pow2(b20, _20n, P2) * b20 % P2;
-  const b80 = pow2(b40, _40n, P2) * b40 % P2;
-  const b160 = pow2(b80, _80n, P2) * b80 % P2;
-  const b240 = pow2(b160, _80n, P2) * b80 % P2;
-  const b250 = pow2(b240, _10n, P2) * b10 % P2;
-  const pow_p_5_8 = pow2(b250, _2n5, P2) * x % P2;
+  const P = ed25519_CURVE_p;
+  const x2 = x * x % P;
+  const b2 = x2 * x % P;
+  const b4 = pow2(b2, _2n5, P) * b2 % P;
+  const b5 = pow2(b4, _1n7, P) * x % P;
+  const b10 = pow2(b5, _5n2, P) * b5 % P;
+  const b20 = pow2(b10, _10n, P) * b10 % P;
+  const b40 = pow2(b20, _20n, P) * b20 % P;
+  const b80 = pow2(b40, _40n, P) * b40 % P;
+  const b160 = pow2(b80, _80n, P) * b80 % P;
+  const b240 = pow2(b160, _80n, P) * b80 % P;
+  const b250 = pow2(b240, _10n, P) * b10 % P;
+  const pow_p_5_8 = pow2(b250, _2n5, P) * x % P;
   return { pow_p_5_8, b2 };
 }
 function adjustScalarBytes(bytes) {
@@ -43766,23 +43932,23 @@ function adjustScalarBytes(bytes) {
 }
 var ED25519_SQRT_M1 = /* @__PURE__ */ BigInt("19681161376707505956807079304988542015446066515923890162744021073123829784752");
 function uvRatio(u, v) {
-  const P2 = ed25519_CURVE_p;
-  const v3 = mod(v * v * v, P2);
-  const v7 = mod(v3 * v3 * v, P2);
+  const P = ed25519_CURVE_p;
+  const v3 = mod(v * v * v, P);
+  const v7 = mod(v3 * v3 * v, P);
   const pow3 = ed25519_pow_2_252_3(u * v7).pow_p_5_8;
-  let x = mod(u * v3 * pow3, P2);
-  const vx2 = mod(v * x * x, P2);
+  let x = mod(u * v3 * pow3, P);
+  const vx2 = mod(v * x * x, P);
   const root1 = x;
-  const root2 = mod(x * ED25519_SQRT_M1, P2);
+  const root2 = mod(x * ED25519_SQRT_M1, P);
   const useRoot1 = vx2 === u;
-  const useRoot2 = vx2 === mod(-u, P2);
-  const noRoot = vx2 === mod(-u * ED25519_SQRT_M1, P2);
+  const useRoot2 = vx2 === mod(-u, P);
+  const noRoot = vx2 === mod(-u * ED25519_SQRT_M1, P);
   if (useRoot1)
     x = root1;
   if (useRoot2 || noRoot)
     x = root2;
-  if (isNegativeLE(x, P2))
-    x = mod(-x, P2);
+  if (isNegativeLE(x, P))
+    x = mod(-x, P);
   return { isValid: useRoot1 || useRoot2, value: x };
 }
 var ed25519_Point = /* @__PURE__ */ edwards(ed25519_CURVE, { uvRatio });
@@ -43801,13 +43967,13 @@ function ed(opts) {
 }
 var ed25519 = /* @__PURE__ */ ed({});
 var x25519 = /* @__PURE__ */ (() => {
-  const P2 = ed25519_CURVE_p;
+  const P = ed25519_CURVE_p;
   const powPminus2 = (x) => {
     const { pow_p_5_8, b2 } = ed25519_pow_2_252_3(x);
-    return mod(pow2(pow_p_5_8, _3n3, P2) * b2, P2);
+    return mod(pow2(pow_p_5_8, _3n3, P) * b2, P);
   };
   return montgomery({
-    P: P2,
+    P,
     type: "x25519",
     powPminus2,
     adjustScalarBytes,
@@ -43819,10 +43985,247 @@ var x25519 = /* @__PURE__ */ (() => {
       if (kn === _0n8)
         return _0n8;
       const p = ed25519_Point.BASE.multiply(kn);
-      return mod((p.Z + p.Y) * powPminus2(mod(p.Z - p.Y, P2)), P2);
+      return mod((p.Z + p.Y) * powPminus2(mod(p.Z - p.Y, P)), P);
     }
   });
 })();
+
+// packages/shared/dist/policy.js
+var MAX_APP_COMPOSE_BYTES = 8 * 1024;
+var MAX_DSTACK_COMPOSE_BYTES = 32 * 1024;
+var CHECKS = Object.freeze({
+  RESPONSE: "response well-formed, fresh 32-byte nonce",
+  QUOTE_FORMAT: "quote structure (TDX v4)",
+  TEE_TYPE: "TEE type is TDX",
+  ROOT: "pinned root == registry root == verifier root",
+  QUOTE_SIG: "quote signature chain to root",
+  DEBUG: "TD debug attribute clear",
+  REPORT_DATA_KEYS: "report_data binds router keys",
+  NONCE: "report_data binds client nonce",
+  EVENT_LOG: "event log digests and boot sequence",
+  RTMR3: "event log replays to RTMR3",
+  COMPOSE: "app-compose matches measured compose-hash",
+  COMPOSE_ALLOWED: "compose hash allowed by registry",
+  OS_ALLOWED: "OS measurement allowed by registry",
+  INSTANCE: "instance registered with matching keys",
+  TCB: "Intel TCB status accepted",
+  COMPOSE_POLICY: "dstack compose: images pinned by digest, exit logging disabled"
+});
+var fail = (code, detail) => {
+  throw new PlrError(code, detail);
+};
+function guard(f, allowed, fallback) {
+  try {
+    return f();
+  } catch (e) {
+    if (e instanceof PlrError && allowed.includes(e.code))
+      throw e;
+    throw new PlrError(fallback);
+  }
+}
+async function reg(f, valid) {
+  let v;
+  try {
+    v = await f();
+  } catch {
+    throw new PlrError("E_REGISTRY_UNAVAILABLE");
+  }
+  if (!valid(v))
+    throw new PlrError("E_REGISTRY_UNAVAILABLE", "malformed registry reply");
+  return v;
+}
+var isBool = (v) => typeof v === "boolean";
+function parseBundle(b, expectedKind) {
+  const bad5 = (d) => fail("E_BAD_RESPONSE", d);
+  if (!isPlainObject(b))
+    return bad5("bundle is not an object");
+  if (b.v !== "PLR-v1")
+    bad5("v");
+  if (b.root_kind !== expectedKind)
+    bad5("root_kind");
+  if (!isHex(b.quote) || b.quote.length === 0 || b.quote.length > QUOTE.MAX_LEN * 2)
+    bad5("quote");
+  if (!Array.isArray(b.event_log))
+    bad5("event_log");
+  if (!isWellFormedString(b.app_compose))
+    bad5("app_compose");
+  if (!isHex(b.x25519, 32))
+    bad5("x25519");
+  if (!isHex(b.ed25519, 32))
+    bad5("ed25519");
+  const composeBytes = utf8(b.app_compose);
+  const maxCompose = expectedKind === "INTEL" ? MAX_DSTACK_COMPOSE_BYTES : MAX_APP_COMPOSE_BYTES;
+  if (composeBytes.length === 0 || composeBytes.length > maxCompose)
+    bad5("app_compose size");
+  let collateral;
+  if (expectedKind === "INTEL") {
+    const c = b.collateral;
+    if (isCollateralJson(c))
+      collateral = c;
+    else
+      bad5("collateral");
+  }
+  const x = fromHex(b.x25519, 32);
+  const e = fromHex(b.ed25519, 32);
+  if (isAllZero(x))
+    bad5("x25519");
+  try {
+    const pt = ed25519.Point.fromBytes(e, false);
+    if (pt.isSmallOrder())
+      bad5("ed25519");
+  } catch {
+    bad5("ed25519");
+  }
+  return {
+    rootKind: expectedKind,
+    collateral,
+    quote: fromHex(b.quote),
+    eventLog: b.event_log,
+    composeBytes,
+    x25519: x,
+    ed25519: e
+  };
+}
+async function verifyAttestation(p) {
+  const checks = [];
+  if (!isPlainObject(p))
+    fail("E_BAD_RESPONSE", "params");
+  const { bundle, nonce, verifier, registry, trustedRoot } = p;
+  const nowSecs = Math.floor((p.now ?? Date.now()) / 1e3);
+  if (typeof verifier !== "object" || verifier === null || typeof verifier.verify !== "function" || verifier.rootKind !== "MOCK" && verifier.rootKind !== "INTEL") {
+    fail("E_ROOT_UNTRUSTED", "verifier");
+  }
+  if (!isBytes2(nonce) || nonce.length !== 32 || isAllZero(nonce))
+    fail("E_BAD_RESPONSE", "nonce");
+  const b = parseBundle(bundle, verifier.rootKind);
+  checks.push(CHECKS.RESPONSE);
+  const parsed = guard(() => parseQuote(b.quote, b.rootKind), ["E_QUOTE_FORMAT", "E_TEE_TYPE"], "E_QUOTE_FORMAT");
+  checks.push(CHECKS.QUOTE_FORMAT, CHECKS.TEE_TYPE);
+  const root = await reg(() => registry.getRoot(), isRegistryRoot);
+  if (!isBytes2(trustedRoot) || trustedRoot.length !== 64)
+    fail("E_ROOT_UNTRUSTED", "pinned root");
+  if (root.kind !== verifier.rootKind || !equalBytes(fromHex(root.p256, 64), trustedRoot)) {
+    fail("E_ROOT_UNTRUSTED", "registry root differs from pinned root");
+  }
+  const verifierRoot = guard(() => verifier.rootPublicKey, [], "E_ROOT_UNTRUSTED");
+  if (!isBytes2(verifierRoot) || !equalBytes(verifierRoot, trustedRoot)) {
+    fail("E_ROOT_UNTRUSTED", "verifier root differs from pinned root");
+  }
+  checks.push(CHECKS.ROOT);
+  const ctx = { collateral: b.collateral, nowSecs };
+  const verified = guard(() => verifier.verify(b.quote, ctx), ["E_QUOTE_FORMAT", "E_TEE_TYPE", "E_QUOTE_SIG", "E_TCB_STATUS", "E_COLLATERAL"], "E_QUOTE_SIG");
+  if (!isPlainObject(verified) || !isBytes2(verified.signedBytes) || !equalBytes(verified.signedBytes, parsed.signedBytes)) {
+    fail("E_QUOTE_SIG", "verifier result");
+  }
+  checks.push(CHECKS.QUOTE_SIG);
+  let tcbStatus;
+  if (b.rootKind === "INTEL") {
+    tcbStatus = verifier.lastStatus;
+    checks.push(CHECKS.TCB);
+  }
+  const report = parsed.report;
+  if (isDebug(report))
+    fail("E_DEBUG_TD");
+  checks.push(CHECKS.DEBUG);
+  const kh = keyHash(b.x25519, b.ed25519);
+  if (!equalBytes(report.reportData.subarray(0, 32), kh))
+    fail("E_REPORT_DATA_KEYS");
+  checks.push(CHECKS.REPORT_DATA_KEYS);
+  if (!equalBytes(report.reportData.subarray(32, 64), sessionNonceDigest(nonce)))
+    fail("E_NONCE");
+  checks.push(CHECKS.NONCE);
+  const ids = guard(() => (b.rootKind === "INTEL" ? verifyEventLogDstack : verifyEventLog)(b.eventLog, report.rtmr[3]), ["E_EVENT_LOG", "E_RTMR3"], "E_EVENT_LOG");
+  checks.push(CHECKS.EVENT_LOG, CHECKS.RTMR3);
+  if (!equalBytes(sha256(b.composeBytes), ids.composeHash))
+    fail("E_COMPOSE_MISMATCH");
+  checks.push(CHECKS.COMPOSE);
+  let pol;
+  if (b.rootKind === "INTEL") {
+    pol = guard(() => checkDstackComposePolicy(bundle.app_compose), ["E_COMPOSE_POLICY"], "E_COMPOSE_POLICY");
+    checks.push(CHECKS.COMPOSE_POLICY);
+  }
+  const composeHex = toHex(ids.composeHash);
+  const os = osMeasurement(report);
+  const osHex = toHex(os);
+  if (!await reg(() => registry.isComposeAllowed(composeHex), isBool))
+    fail("E_COMPOSE_NOT_ALLOWED");
+  checks.push(CHECKS.COMPOSE_ALLOWED);
+  if (!await reg(() => registry.isOsAllowed(osHex), isBool))
+    fail("E_OS_NOT_ALLOWED");
+  checks.push(CHECKS.OS_ALLOWED);
+  const inst = await reg(() => registry.getInstance(toHex(kh)), (v) => v === null || isInstanceRecord(v));
+  if (!isInstanceRecord(inst))
+    return fail("E_INSTANCE_NOT_REGISTERED");
+  const now = p.now ?? Date.now();
+  if (inst.compose_hash !== composeHex || inst.os_measurement !== osHex || inst.x25519 !== toHex(b.x25519) || inst.ed25519 !== toHex(b.ed25519) || !(inst.expires_at_ms > now)) {
+    fail("E_INSTANCE_NOT_REGISTERED", "registry record does not match attestation");
+  }
+  checks.push(CHECKS.INSTANCE);
+  return {
+    ...tcbStatus !== void 0 ? { tcbStatus } : {},
+    ...pol !== void 0 ? { images: pol.images } : {},
+    x25519: b.x25519.slice(),
+    ed25519: b.ed25519.slice(),
+    keyHash: kh,
+    composeHash: ids.composeHash,
+    osMeasurement: os,
+    rootKind: b.rootKind,
+    checks
+  };
+}
+
+// packages/shared/dist/tunnel/constants.js
+init_define_STATUS_DEFAULTS();
+init_define_STATUS_REPLAY();
+var VPN_DOMAIN = utf8("PLR-VPN-v1");
+var TUNNEL = Object.freeze({
+  /** hello / server_hello version byte (handshake v2; v1 is removed) */
+  VERSION: 2,
+  /** `u8(2) ‖ att_nonce(32) ‖ epk_c(32)` */
+  HELLO_LEN: 65,
+  /** `u8(2) ‖ epk_s(32)` */
+  SERVER_HELLO_LEN: 33,
+  /** max frame payload (DATA chunk) */
+  MAX_PAYLOAD: 16384,
+  /** tag(16) + type(1) */
+  MIN_FRAME_LEN: 17,
+  /** tag(16) + type(1) + MAX_PAYLOAD */
+  MAX_FRAME_LEN: 16401,
+  DIR_C2S: 1,
+  DIR_S2C: 2
+});
+var FRAME = Object.freeze({
+  CONNECT: 1,
+  CONNECT_OK: 2,
+  CONNECT_ERR: 3,
+  DATA: 4,
+  FIN: 5,
+  RECEIPT: 6
+});
+var MAX_CONNECT_PAYLOAD = 512;
+var TUNNEL_STEP_TIMEOUT_MS = 1e4;
+var TUNNEL_IDLE_TIMEOUT_MS = 3e5;
+var FRAME_RULES = Object.freeze({
+  [FRAME.CONNECT]: { dirs: [TUNNEL.DIR_C2S], min: 1, max: MAX_CONNECT_PAYLOAD },
+  [FRAME.CONNECT_OK]: { dirs: [TUNNEL.DIR_S2C], min: 0, max: 0 },
+  [FRAME.CONNECT_ERR]: { dirs: [TUNNEL.DIR_S2C], min: 1, max: MAX_CONNECT_PAYLOAD },
+  [FRAME.DATA]: { dirs: [TUNNEL.DIR_C2S, TUNNEL.DIR_S2C], min: 1, max: TUNNEL.MAX_PAYLOAD },
+  [FRAME.FIN]: { dirs: [TUNNEL.DIR_C2S, TUNNEL.DIR_S2C], min: 0, max: 0 },
+  [FRAME.RECEIPT]: { dirs: [TUNNEL.DIR_S2C], min: 1, max: TUNNEL.MAX_PAYLOAD }
+});
+function isTunnelDir(d) {
+  return d === TUNNEL.DIR_C2S || d === TUNNEL.DIR_S2C;
+}
+function frameAllowed(type, dir, len) {
+  if (!Object.prototype.hasOwnProperty.call(FRAME_RULES, type))
+    return false;
+  const r = FRAME_RULES[type];
+  return r.dirs.includes(dir) && len >= r.min && len <= r.max;
+}
+
+// packages/shared/dist/tunnel/keys.js
+init_define_STATUS_DEFAULTS();
+init_define_STATUS_REPLAY();
 
 // node_modules/@noble/hashes/hkdf.js
 init_define_STATUS_DEFAULTS();
@@ -43886,6 +44289,102 @@ var hkdf = (hash, ikm, salt, info, length) => {
   const HMAC = hmac.create(hash, salt).update(ikm);
   return expand(hash, HMAC.digest(), info, length, HMAC);
 };
+
+// packages/shared/dist/crypto/ecdh.js
+init_define_STATUS_DEFAULTS();
+init_define_STATUS_REPLAY();
+function ecdh2(sk, pk) {
+  let shared;
+  try {
+    shared = x25519.getSharedSecret(sk, pk);
+  } catch {
+    throw new PlrError("E_DECRYPT", "key agreement failed");
+  }
+  if (shared.length !== 32 || isAllZero(shared))
+    throw new PlrError("E_DECRYPT", "low-order point");
+  return shared;
+}
+
+// packages/shared/dist/tunnel/keys.js
+var TUNNEL_LABEL = utf8("PLR-VPN-v2/tunnel");
+var KEYS_INFO = utf8("PLR-VPN-v2/keys");
+function need32(v, code, what) {
+  if (!isBytes2(v) || v.length !== 32)
+    throw new PlrError(code, `${what} must be 32 bytes`);
+  return v;
+}
+function requireParams(p) {
+  if (typeof p !== "object" || p === null)
+    throw new PlrError("E_BAD_INPUT", "missing parameters");
+}
+function deriveTunnel(p) {
+  requireParams(p);
+  const dh1 = need32(p.dh1, "E_BAD_INPUT", "dh1");
+  const dh2 = need32(p.dh2, "E_BAD_INPUT", "dh2");
+  const th = sha256(concatBytes2(TUNNEL_LABEL, need32(p.attNonce, "E_BAD_INPUT", "attNonce"), need32(p.epkC, "E_BAD_INPUT", "epkC"), need32(p.epkS, "E_BAD_INPUT", "epkS"), need32(p.xp, "E_BAD_INPUT", "xp"), need32(p.ep, "E_BAD_INPUT", "ep")));
+  const zero1 = isAllZero(dh1), zero2 = isAllZero(dh2);
+  if (zero1 || zero2)
+    throw new PlrError("E_DECRYPT", "low-order point");
+  const ikm = concatBytes2(dh1, dh2);
+  try {
+    const okm = hkdf(sha256, ikm, th, KEYS_INFO, 64);
+    const keys = { th, kC2s: okm.slice(0, 32), kS2c: okm.slice(32, 64) };
+    okm.fill(0);
+    return keys;
+  } finally {
+    ikm.fill(0);
+  }
+}
+function encodeHello(attNonce, epkC) {
+  return concatBytes2(Uint8Array.of(TUNNEL.VERSION), need32(attNonce, "E_BAD_INPUT", "attNonce"), need32(epkC, "E_BAD_INPUT", "epkC"));
+}
+function parseServerHello(b) {
+  if (!isBytes2(b) || b.length !== TUNNEL.SERVER_HELLO_LEN || b[0] !== TUNNEL.VERSION) {
+    throw new PlrError("E_TUNNEL_PROTOCOL", "bad server hello");
+  }
+  return { epkS: b.slice(1, 33) };
+}
+function tunnelClientStart(p) {
+  requireParams(p);
+  const xp = need32(p.xp, "E_BAD_INPUT", "xp").slice();
+  const ep = need32(p.ep, "E_BAD_INPUT", "ep").slice();
+  const attNonce = need32(p.attNonce, "E_BAD_INPUT", "attNonce").slice();
+  const esk = x25519.utils.randomSecretKey();
+  let epkC;
+  try {
+    epkC = x25519.getPublicKey(esk);
+  } catch (e) {
+    esk.fill(0);
+    throw e;
+  }
+  const hello = encodeHello(attNonce, epkC);
+  let used = false;
+  const abort = () => {
+    used = true;
+    esk.fill(0);
+  };
+  const finish = (serverHello) => {
+    if (used)
+      throw new PlrError("E_TUNNEL_PROTOCOL", "handshake already finished");
+    used = true;
+    let dh1, dh2;
+    try {
+      const { epkS } = parseServerHello(serverHello);
+      dh1 = ecdh2(esk, xp);
+      dh2 = ecdh2(esk, epkS);
+      return deriveTunnel({ dh1, dh2, attNonce, epkC, epkS, xp, ep });
+    } finally {
+      esk.fill(0);
+      dh1?.fill(0);
+      dh2?.fill(0);
+    }
+  };
+  return { hello: hello.slice(), finish, abort };
+}
+
+// packages/shared/dist/tunnel/frames.js
+init_define_STATUS_DEFAULTS();
+init_define_STATUS_REPLAY();
 
 // node_modules/@noble/ciphers/chacha.js
 init_define_STATUS_DEFAULTS();
@@ -44608,616 +45107,7 @@ var chacha20poly1305 = /* @__PURE__ */ wrapCipher(
   /* @__PURE__ */ _poly1305_aead(chacha20)
 );
 
-// packages/shared/dist/crypto/session.js
-var SESSION_LABEL = utf8("PLR-v1/session");
-var KEYS_INFO = utf8("PLR-v1/keys");
-var ZERO_NONCE = new Uint8Array(12);
-function ecdh2(sk, pk) {
-  let shared;
-  try {
-    shared = x25519.getSharedSecret(sk, pk);
-  } catch {
-    throw new PlrError("E_DECRYPT", "key agreement failed");
-  }
-  if (shared.length !== 32 || isAllZero(shared))
-    throw new PlrError("E_DECRYPT", "low-order point");
-  return shared;
-}
-
-// packages/shared/dist/crypto/frames.js
-init_define_STATUS_DEFAULTS();
-init_define_STATUS_REPLAY();
-
-// packages/shared/dist/receipts/receipt.js
-init_define_STATUS_DEFAULTS();
-init_define_STATUS_REPLAY();
-var RECEIPT_LABEL = utf8("PLR-v1/receipt");
-var ANCHOR_LABEL = utf8("PLR-v1/anchor");
-var HASH_FIELDS = ["th", "req_hash", "resp_hash", "compose_hash", "key_hash"];
-var RECEIPT_KEYS = /* @__PURE__ */ new Set(["v", ...HASH_FIELDS, "seq", "ts_ms"]);
-function anchorMessage(p) {
-  if (!isBytes2(p?.keyHash) || p.keyHash.length !== 32)
-    throw new PlrError("E_BAD_INPUT", "keyHash must be 32 bytes");
-  if (!isBytes2(p.root) || p.root.length !== 32)
-    throw new PlrError("E_BAD_INPUT", "root must be 32 bytes");
-  if (typeof p.firstSeq !== "bigint" || typeof p.count !== "bigint")
-    throw new PlrError("E_BAD_INPUT", "firstSeq/count must be bigint");
-  return concatBytes2(ANCHOR_LABEL, contractIdBytes(p.contractId), p.keyHash, p.root, u64be(p.firstSeq), u64be(p.count));
-}
-
-// packages/shared/dist/receipts/merkle.js
-init_define_STATUS_DEFAULTS();
-init_define_STATUS_REPLAY();
-var MAX_PROOF_LEN = 64;
-var NODE_PREFIX = Uint8Array.of(1);
-function node(l, r) {
-  return sha256(concatBytes2(NODE_PREFIX, l, r));
-}
-function verifyMerkleProof(leaf, index, size, proof, root) {
-  try {
-    if (!isBytes2(leaf) || leaf.length !== 32 || !isBytes2(root) || root.length !== 32)
-      return false;
-    if (!isUint(index) || !isUint(size) || size === 0 || index >= size)
-      return false;
-    if (!Array.isArray(proof) || proof.length > MAX_PROOF_LEN)
-      return false;
-    let fn = index;
-    let sn = size - 1;
-    let r = leaf;
-    for (const p of proof) {
-      if (!isBytes2(p) || p.length !== 32)
-        return false;
-      if (sn === 0)
-        return false;
-      if (fn % 2 === 1 || fn === sn) {
-        r = node(p, r);
-        while (fn % 2 === 0 && fn !== 0) {
-          fn = Math.floor(fn / 2);
-          sn = Math.floor(sn / 2);
-        }
-      } else {
-        r = node(r, p);
-      }
-      fn = Math.floor(fn / 2);
-      sn = Math.floor(sn / 2);
-    }
-    return sn === 0 && equalBytes(r, root);
-  } catch {
-    return false;
-  }
-}
-
-// packages/shared/dist/registry.js
-init_define_STATUS_DEFAULTS();
-init_define_STATUS_REPLAY();
-var ZERO32 = "00".repeat(32);
-var ORG_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-function isOrgId(v) {
-  return typeof v === "string" && v.length <= 64 && ORG_ID_RE.test(v);
-}
-function isHash32(h) {
-  return isHex(h, 32) && h !== ZERO32;
-}
-function isRegistryRoot(v) {
-  return isPlainObject(v) && (v.kind === "MOCK" || v.kind === "INTEL") && isHex(v.p256, 64);
-}
-function isInstanceRecord(v) {
-  return isPlainObject(v) && isHash32(v.compose_hash) && isHash32(v.os_measurement) && isHex(v.x25519, 32) && isHex(v.ed25519, 32) && typeof v.operator === "string" && // required key (fail closed): an absent org_id is not the same as "unapproved"
-  Object.prototype.hasOwnProperty.call(v, "org_id") && (v.org_id === null || isOrgId(v.org_id)) && isUint(v.registered_at_ms) && isUint(v.expires_at_ms) && isUint(v.next_seq);
-}
-function isAnchorRecord(v) {
-  return isPlainObject(v) && isUint(v.id) && isHash32(v.key_hash) && isHex(v.root, 32) && isUint(v.first_seq) && isUint(v.count) && isUint(v.at_ms) && (v.sig === void 0 || isHex(v.sig, 64));
-}
-function bad3(what) {
-  throw new PlrError("E_BAD_INPUT", `MemoryRegistry: ${what}`);
-}
-var MemoryRegistry = class {
-  chain;
-  contractId;
-  verifiesOnChain;
-  #root;
-  #regQuotes = /* @__PURE__ */ new Map();
-  #compose = /* @__PURE__ */ new Set();
-  #os = /* @__PURE__ */ new Set();
-  #instances = /* @__PURE__ */ new Map();
-  #anchors = [];
-  /** account → org_id; `null` = explicitly revoked */
-  #operators = /* @__PURE__ */ new Map();
-  #now;
-  constructor(o) {
-    if (!isPlainObject(o))
-      bad3("options required");
-    if (!isRegistryRoot(o.root))
-      bad3("bad root");
-    if (!Array.isArray(o.compose) || !Array.isArray(o.os) || !isPlainObject(o.instances))
-      bad3("bad allowlists");
-    this.chain = o.chain ?? "memory";
-    this.contractId = o.contractId ?? "registry.memory";
-    this.#now = o.now ?? Date.now;
-    if (o.verifiesOnChain !== void 0 && typeof o.verifiesOnChain !== "boolean")
-      bad3("bad verifiesOnChain");
-    this.verifiesOnChain = o.verifiesOnChain ?? true;
-    if (o.registrationQuotes !== void 0) {
-      if (!isPlainObject(o.registrationQuotes))
-        bad3("bad registrationQuotes");
-      for (const [k, q] of Object.entries(o.registrationQuotes))
-        this.setRegistrationQuote(k, q);
-    }
-    this.#root = { kind: o.root.kind, p256: o.root.p256 };
-    for (const h of o.compose)
-      this.allowCompose(h);
-    for (const h of o.os)
-      this.allowOs(h);
-    for (const [k, rec] of Object.entries(o.instances))
-      this.putInstance(k, rec);
-    for (const a of o.anchors ?? [])
-      this.addAnchor(a);
-    if (o.operators !== void 0) {
-      if (!isPlainObject(o.operators))
-        bad3("bad operators");
-      for (const [acct, org] of Object.entries(o.operators))
-        this.approveOperator(acct, org);
-    }
-  }
-  // --- mutators (test helpers mirroring the owner/operator methods) ---
-  setRoot(root) {
-    if (!isRegistryRoot(root))
-      bad3("bad root");
-    this.#root = { kind: root.kind, p256: root.p256 };
-  }
-  allowCompose(h) {
-    if (!isHash32(h))
-      bad3("bad compose hash");
-    this.#compose.add(h);
-  }
-  revokeCompose(h) {
-    this.#compose.delete(h);
-  }
-  allowOs(h) {
-    if (!isHash32(h))
-      bad3("bad os hash");
-    this.#os.add(h);
-  }
-  revokeOs(h) {
-    this.#os.delete(h);
-  }
-  putInstance(keyHash2, rec) {
-    if (!isHash32(keyHash2))
-      bad3("bad key hash");
-    if (!isInstanceRecord(rec))
-      bad3("bad instance record");
-    this.#instances.set(keyHash2, { ...rec });
-  }
-  removeInstance(keyHash2) {
-    this.#instances.delete(keyHash2);
-  }
-  /** `approve_operator(account_id, org_id)`: (re)maps an operator account to an organization. */
-  approveOperator(account, orgId) {
-    if (typeof account !== "string" || account.length === 0)
-      bad3("bad operator account");
-    if (!isOrgId(orgId))
-      bad3("bad org_id");
-    this.#operators.set(account, orgId);
-  }
-  /** `revoke_operator(account_id)`: the operator's instances read `org_id: null` from now on. */
-  revokeOperator(account) {
-    if (typeof account !== "string" || account.length === 0)
-      bad3("bad operator account");
-    this.#operators.set(account, null);
-  }
-  /** `get_operator(account_id)`: live org of an account (null if unknown or revoked). */
-  async getOperator(account) {
-    return typeof account === "string" ? this.#operators.get(account) ?? null : null;
-  }
-  /** Sets (or replaces) the registration quote returned for `keyHash`. */
-  setRegistrationQuote(keyHash2, quoteHex) {
-    if (!isHash32(keyHash2))
-      bad3("bad key hash");
-    if (!isHex(quoteHex) || quoteHex.length === 0)
-      bad3("bad registration quote");
-    this.#regQuotes.set(keyHash2, fromHex(quoteHex));
-  }
-  /** Appends an anchor; its `id` must equal the current anchor count. */
-  addAnchor(a) {
-    if (!isAnchorRecord(a) || a.id !== this.#anchors.length)
-      bad3("bad anchor");
-    this.#anchors.push({ ...a });
-  }
-  // --- RegistryReader ---
-  async getRoot() {
-    return { kind: this.#root.kind, p256: this.#root.p256 };
-  }
-  async isComposeAllowed(h) {
-    return isHash32(h) && this.#compose.has(h);
-  }
-  async isOsAllowed(h) {
-    return isHash32(h) && this.#os.has(h);
-  }
-  async getInstance(keyHash2) {
-    if (!isHash32(keyHash2))
-      return null;
-    const rec = this.#instances.get(keyHash2);
-    if (rec === void 0 || rec.expires_at_ms <= this.#now())
-      return null;
-    const org_id = this.#operators.has(rec.operator) ? this.#operators.get(rec.operator) ?? null : rec.org_id;
-    return { ...rec, org_id };
-  }
-  async getAnchor(id2) {
-    if (!isUint(id2))
-      return null;
-    const a = this.#anchors[id2];
-    return a === void 0 ? null : { ...a };
-  }
-  /** Returns the configured registration quote for `keyHash` (ignores `offered`), or null. */
-  async getRegistrationQuote(keyHash2, _offered) {
-    if (!isHash32(keyHash2))
-      return null;
-    const q = this.#regQuotes.get(keyHash2);
-    return q === void 0 ? null : q.slice();
-  }
-  async anchorCount() {
-    return this.#anchors.length;
-  }
-};
-
-// packages/shared/dist/policy.js
-init_define_STATUS_DEFAULTS();
-init_define_STATUS_REPLAY();
-var MAX_APP_COMPOSE_BYTES = 8 * 1024;
-var MAX_DSTACK_COMPOSE_BYTES = 32 * 1024;
-var CHECKS = Object.freeze({
-  RESPONSE: "response well-formed, fresh 32-byte nonce",
-  QUOTE_FORMAT: "quote structure (TDX v4)",
-  TEE_TYPE: "TEE type is TDX",
-  ROOT: "pinned root == registry root == verifier root",
-  QUOTE_SIG: "quote signature chain to root",
-  DEBUG: "TD debug attribute clear",
-  REPORT_DATA_KEYS: "report_data binds router keys",
-  NONCE: "report_data binds client nonce",
-  EVENT_LOG: "event log digests and boot sequence",
-  RTMR3: "event log replays to RTMR3",
-  COMPOSE: "app-compose matches measured compose-hash",
-  COMPOSE_ALLOWED: "compose hash allowed by registry",
-  OS_ALLOWED: "OS measurement allowed by registry",
-  INSTANCE: "instance registered with matching keys",
-  TCB: "Intel TCB status accepted",
-  COMPOSE_POLICY: "dstack compose: images pinned by digest, exit logging disabled"
-});
-var REGISTRATION_EVIDENCE_CHECK = "registration quote: same boot, bound to (registry, operator)";
-var fail = (code, detail) => {
-  throw new PlrError(code, detail);
-};
-function guard(f, allowed, fallback) {
-  try {
-    return f();
-  } catch (e) {
-    if (e instanceof PlrError && allowed.includes(e.code))
-      throw e;
-    throw new PlrError(fallback);
-  }
-}
-async function reg(f, valid) {
-  let v;
-  try {
-    v = await f();
-  } catch {
-    throw new PlrError("E_REGISTRY_UNAVAILABLE");
-  }
-  if (!valid(v))
-    throw new PlrError("E_REGISTRY_UNAVAILABLE", "malformed registry reply");
-  return v;
-}
-var isBool = (v) => typeof v === "boolean";
-function parseBundle(b, expectedKind) {
-  const bad5 = (d) => fail("E_BAD_RESPONSE", d);
-  if (!isPlainObject(b))
-    return bad5("bundle is not an object");
-  if (b.v !== "PLR-v1")
-    bad5("v");
-  if (b.root_kind !== expectedKind)
-    bad5("root_kind");
-  if (!isHex(b.quote) || b.quote.length === 0 || b.quote.length > QUOTE.MAX_LEN * 2)
-    bad5("quote");
-  if (!Array.isArray(b.event_log))
-    bad5("event_log");
-  if (!isWellFormedString(b.app_compose))
-    bad5("app_compose");
-  if (!isHex(b.x25519, 32))
-    bad5("x25519");
-  if (!isHex(b.ed25519, 32))
-    bad5("ed25519");
-  const composeBytes = utf8(b.app_compose);
-  const maxCompose = expectedKind === "INTEL" ? MAX_DSTACK_COMPOSE_BYTES : MAX_APP_COMPOSE_BYTES;
-  if (composeBytes.length === 0 || composeBytes.length > maxCompose)
-    bad5("app_compose size");
-  let collateral;
-  if (expectedKind === "INTEL") {
-    const c = b.collateral;
-    if (isCollateralJson(c))
-      collateral = c;
-    else
-      bad5("collateral");
-  }
-  const x = fromHex(b.x25519, 32);
-  const e = fromHex(b.ed25519, 32);
-  if (isAllZero(x))
-    bad5("x25519");
-  try {
-    const pt = ed25519.Point.fromBytes(e, false);
-    if (pt.isSmallOrder())
-      bad5("ed25519");
-  } catch {
-    bad5("ed25519");
-  }
-  const rq = b.registration_quote;
-  const registrationQuote = isHex(rq) && rq.length > 0 && rq.length <= QUOTE.MAX_LEN * 2 ? fromHex(rq) : void 0;
-  return {
-    rootKind: expectedKind,
-    registrationQuote,
-    collateral,
-    quote: fromHex(b.quote),
-    eventLog: b.event_log,
-    composeBytes,
-    x25519: x,
-    ed25519: e
-  };
-}
-async function verifyAttestation(p) {
-  const checks = [];
-  if (!isPlainObject(p))
-    fail("E_BAD_RESPONSE", "params");
-  const { bundle, nonce, verifier, registry, trustedRoot } = p;
-  const nowSecs = Math.floor((p.now ?? Date.now()) / 1e3);
-  if (typeof verifier !== "object" || verifier === null || typeof verifier.verify !== "function" || verifier.rootKind !== "MOCK" && verifier.rootKind !== "INTEL") {
-    fail("E_ROOT_UNTRUSTED", "verifier");
-  }
-  if (!isBytes2(nonce) || nonce.length !== 32 || isAllZero(nonce))
-    fail("E_BAD_RESPONSE", "nonce");
-  const b = parseBundle(bundle, verifier.rootKind);
-  checks.push(CHECKS.RESPONSE);
-  const parsed = guard(() => parseQuote(b.quote, b.rootKind), ["E_QUOTE_FORMAT", "E_TEE_TYPE"], "E_QUOTE_FORMAT");
-  checks.push(CHECKS.QUOTE_FORMAT, CHECKS.TEE_TYPE);
-  const root = await reg(() => registry.getRoot(), isRegistryRoot);
-  if (!isBytes2(trustedRoot) || trustedRoot.length !== 64)
-    fail("E_ROOT_UNTRUSTED", "pinned root");
-  if (root.kind !== verifier.rootKind || !equalBytes(fromHex(root.p256, 64), trustedRoot)) {
-    fail("E_ROOT_UNTRUSTED", "registry root differs from pinned root");
-  }
-  const verifierRoot = guard(() => verifier.rootPublicKey, [], "E_ROOT_UNTRUSTED");
-  if (!isBytes2(verifierRoot) || !equalBytes(verifierRoot, trustedRoot)) {
-    fail("E_ROOT_UNTRUSTED", "verifier root differs from pinned root");
-  }
-  checks.push(CHECKS.ROOT);
-  const ctx = { collateral: b.collateral, nowSecs };
-  const verified = guard(() => verifier.verify(b.quote, ctx), ["E_QUOTE_FORMAT", "E_TEE_TYPE", "E_QUOTE_SIG", "E_TCB_STATUS", "E_COLLATERAL"], "E_QUOTE_SIG");
-  if (!isPlainObject(verified) || !isBytes2(verified.signedBytes) || !equalBytes(verified.signedBytes, parsed.signedBytes)) {
-    fail("E_QUOTE_SIG", "verifier result");
-  }
-  checks.push(CHECKS.QUOTE_SIG);
-  let tcbStatus;
-  if (b.rootKind === "INTEL") {
-    tcbStatus = verifier.lastStatus;
-    checks.push(CHECKS.TCB);
-  }
-  const report = parsed.report;
-  if (isDebug(report))
-    fail("E_DEBUG_TD");
-  checks.push(CHECKS.DEBUG);
-  const kh = keyHash(b.x25519, b.ed25519);
-  if (!equalBytes(report.reportData.subarray(0, 32), kh))
-    fail("E_REPORT_DATA_KEYS");
-  checks.push(CHECKS.REPORT_DATA_KEYS);
-  if (!equalBytes(report.reportData.subarray(32, 64), sessionNonceDigest(nonce)))
-    fail("E_NONCE");
-  checks.push(CHECKS.NONCE);
-  const ids = guard(() => (b.rootKind === "INTEL" ? verifyEventLogDstack : verifyEventLog)(b.eventLog, report.rtmr[3]), ["E_EVENT_LOG", "E_RTMR3"], "E_EVENT_LOG");
-  checks.push(CHECKS.EVENT_LOG, CHECKS.RTMR3);
-  if (!equalBytes(sha256(b.composeBytes), ids.composeHash))
-    fail("E_COMPOSE_MISMATCH");
-  checks.push(CHECKS.COMPOSE);
-  let pol;
-  if (b.rootKind === "INTEL") {
-    pol = guard(() => checkDstackComposePolicy(bundle.app_compose), ["E_COMPOSE_POLICY"], "E_COMPOSE_POLICY");
-    checks.push(CHECKS.COMPOSE_POLICY);
-  }
-  const composeHex = toHex(ids.composeHash);
-  const os = osMeasurement(report);
-  const osHex = toHex(os);
-  if (!await reg(() => registry.isComposeAllowed(composeHex), isBool))
-    fail("E_COMPOSE_NOT_ALLOWED");
-  checks.push(CHECKS.COMPOSE_ALLOWED);
-  if (!await reg(() => registry.isOsAllowed(osHex), isBool))
-    fail("E_OS_NOT_ALLOWED");
-  checks.push(CHECKS.OS_ALLOWED);
-  const inst = await reg(() => registry.getInstance(toHex(kh)), (v) => v === null || isInstanceRecord(v));
-  if (!isInstanceRecord(inst))
-    return fail("E_INSTANCE_NOT_REGISTERED");
-  const now = p.now ?? Date.now();
-  if (inst.compose_hash !== composeHex || inst.os_measurement !== osHex || inst.x25519 !== toHex(b.x25519) || inst.ed25519 !== toHex(b.ed25519) || !(inst.expires_at_ms > now)) {
-    fail("E_INSTANCE_NOT_REGISTERED", "registry record does not match attestation");
-  }
-  checks.push(CHECKS.INSTANCE);
-  let onChain;
-  try {
-    onChain = registry.verifiesOnChain;
-  } catch {
-    onChain = false;
-  }
-  let evidence;
-  if (onChain !== true) {
-    evidence = await verifyRegistrationEvidence({ registry, verifier, keyHashHex: toHex(kh), offered: b.registrationQuote, session: report, inst, x25519: b.x25519, ed25519: b.ed25519, rootKind: b.rootKind, ctx });
-    checks.push(REGISTRATION_EVIDENCE_CHECK);
-  }
-  return {
-    ...evidence !== void 0 ? { registrationQuote: evidence } : {},
-    ...tcbStatus !== void 0 ? { tcbStatus } : {},
-    ...pol !== void 0 ? { images: pol.images } : {},
-    x25519: b.x25519.slice(),
-    ed25519: b.ed25519.slice(),
-    keyHash: kh,
-    composeHash: ids.composeHash,
-    osMeasurement: os,
-    rootKind: b.rootKind,
-    checks
-  };
-}
-var isQuoteOrNull = (v) => v === null || isBytes2(v);
-async function verifyRegistrationEvidence(p) {
-  const E = "E_REGISTRATION_EVIDENCE";
-  const offered = p.offered === void 0 ? void 0 : p.offered.slice();
-  const rq = await reg(() => p.registry.getRegistrationQuote(p.keyHashHex, offered), isQuoteOrNull);
-  if (rq === null || rq.length === 0 || rq.length > QUOTE.MAX_LEN)
-    return fail(E, "no registration quote");
-  const quote = rq.slice();
-  const parsed = guard(() => parseQuote(quote, p.rootKind), [], E);
-  const verified = guard(() => p.verifier.verify(quote, p.ctx), [], E);
-  if (!isPlainObject(verified) || !isBytes2(verified.signedBytes) || !equalBytes(verified.signedBytes, parsed.signedBytes)) {
-    fail(E, "registration quote signature");
-  }
-  const r = parsed.report;
-  if (isDebug(r))
-    fail(E, "registration quote is DEBUG");
-  const expected = guard(() => registrationReportData(p.x25519, p.ed25519, p.registry.contractId, p.inst.operator), [], E);
-  if (!equalBytes(r.reportData, expected))
-    fail(E, "registration report_data");
-  const s = p.session;
-  if (!equalBytes(r.mrTd, s.mrTd) || !equalBytes(r.rtmr[0], s.rtmr[0]) || !equalBytes(r.rtmr[1], s.rtmr[1]) || !equalBytes(r.rtmr[2], s.rtmr[2]) || !equalBytes(r.rtmr[3], s.rtmr[3])) {
-    fail(E, "registration quote is from another boot");
-  }
-  return quote.slice();
-}
-
-// packages/shared/dist/tunnel/constants.js
-init_define_STATUS_DEFAULTS();
-init_define_STATUS_REPLAY();
-var VPN_DOMAIN = utf8("PLR-VPN-v1");
-var TUNNEL = Object.freeze({
-  /** hello / server_hello version byte (handshake v2; v1 is removed) */
-  VERSION: 2,
-  /** `u8(2) ‖ att_nonce(32) ‖ epk_c(32)` */
-  HELLO_LEN: 65,
-  /** `u8(2) ‖ epk_s(32)` */
-  SERVER_HELLO_LEN: 33,
-  /** max frame payload (DATA chunk) */
-  MAX_PAYLOAD: 16384,
-  /** tag(16) + type(1) */
-  MIN_FRAME_LEN: 17,
-  /** tag(16) + type(1) + MAX_PAYLOAD */
-  MAX_FRAME_LEN: 16401,
-  DIR_C2S: 1,
-  DIR_S2C: 2
-});
-var FRAME = Object.freeze({
-  CONNECT: 1,
-  CONNECT_OK: 2,
-  CONNECT_ERR: 3,
-  DATA: 4,
-  FIN: 5,
-  RECEIPT: 6
-});
-var MAX_CONNECT_PAYLOAD = 512;
-var TUNNEL_STEP_TIMEOUT_MS = 1e4;
-var TUNNEL_IDLE_TIMEOUT_MS = 3e5;
-var FRAME_RULES = Object.freeze({
-  [FRAME.CONNECT]: { dirs: [TUNNEL.DIR_C2S], min: 1, max: MAX_CONNECT_PAYLOAD },
-  [FRAME.CONNECT_OK]: { dirs: [TUNNEL.DIR_S2C], min: 0, max: 0 },
-  [FRAME.CONNECT_ERR]: { dirs: [TUNNEL.DIR_S2C], min: 1, max: MAX_CONNECT_PAYLOAD },
-  [FRAME.DATA]: { dirs: [TUNNEL.DIR_C2S, TUNNEL.DIR_S2C], min: 1, max: TUNNEL.MAX_PAYLOAD },
-  [FRAME.FIN]: { dirs: [TUNNEL.DIR_C2S, TUNNEL.DIR_S2C], min: 0, max: 0 },
-  [FRAME.RECEIPT]: { dirs: [TUNNEL.DIR_S2C], min: 1, max: TUNNEL.MAX_PAYLOAD }
-});
-function isTunnelDir(d) {
-  return d === TUNNEL.DIR_C2S || d === TUNNEL.DIR_S2C;
-}
-function frameAllowed(type, dir, len) {
-  if (!Object.prototype.hasOwnProperty.call(FRAME_RULES, type))
-    return false;
-  const r = FRAME_RULES[type];
-  return r.dirs.includes(dir) && len >= r.min && len <= r.max;
-}
-
-// packages/shared/dist/tunnel/keys.js
-init_define_STATUS_DEFAULTS();
-init_define_STATUS_REPLAY();
-var TUNNEL_LABEL = utf8("PLR-VPN-v2/tunnel");
-var KEYS_INFO2 = utf8("PLR-VPN-v2/keys");
-function need32(v, code, what) {
-  if (!isBytes2(v) || v.length !== 32)
-    throw new PlrError(code, `${what} must be 32 bytes`);
-  return v;
-}
-function requireParams(p) {
-  if (typeof p !== "object" || p === null)
-    throw new PlrError("E_BAD_INPUT", "missing parameters");
-}
-function deriveTunnel(p) {
-  requireParams(p);
-  const dh1 = need32(p.dh1, "E_BAD_INPUT", "dh1");
-  const dh2 = need32(p.dh2, "E_BAD_INPUT", "dh2");
-  const th = sha256(concatBytes2(TUNNEL_LABEL, need32(p.attNonce, "E_BAD_INPUT", "attNonce"), need32(p.epkC, "E_BAD_INPUT", "epkC"), need32(p.epkS, "E_BAD_INPUT", "epkS"), need32(p.xp, "E_BAD_INPUT", "xp"), need32(p.ep, "E_BAD_INPUT", "ep")));
-  const zero1 = isAllZero(dh1), zero2 = isAllZero(dh2);
-  if (zero1 || zero2)
-    throw new PlrError("E_DECRYPT", "low-order point");
-  const ikm = concatBytes2(dh1, dh2);
-  try {
-    const okm = hkdf(sha256, ikm, th, KEYS_INFO2, 64);
-    const keys = { th, kC2s: okm.slice(0, 32), kS2c: okm.slice(32, 64) };
-    okm.fill(0);
-    return keys;
-  } finally {
-    ikm.fill(0);
-  }
-}
-function encodeHello(attNonce, epkC) {
-  return concatBytes2(Uint8Array.of(TUNNEL.VERSION), need32(attNonce, "E_BAD_INPUT", "attNonce"), need32(epkC, "E_BAD_INPUT", "epkC"));
-}
-function parseServerHello(b) {
-  if (!isBytes2(b) || b.length !== TUNNEL.SERVER_HELLO_LEN || b[0] !== TUNNEL.VERSION) {
-    throw new PlrError("E_TUNNEL_PROTOCOL", "bad server hello");
-  }
-  return { epkS: b.slice(1, 33) };
-}
-function tunnelClientStart(p) {
-  requireParams(p);
-  const xp = need32(p.xp, "E_BAD_INPUT", "xp").slice();
-  const ep = need32(p.ep, "E_BAD_INPUT", "ep").slice();
-  const attNonce = need32(p.attNonce, "E_BAD_INPUT", "attNonce").slice();
-  const esk = x25519.utils.randomSecretKey();
-  let epkC;
-  try {
-    epkC = x25519.getPublicKey(esk);
-  } catch (e) {
-    esk.fill(0);
-    throw e;
-  }
-  const hello = encodeHello(attNonce, epkC);
-  let used = false;
-  const abort = () => {
-    used = true;
-    esk.fill(0);
-  };
-  const finish = (serverHello) => {
-    if (used)
-      throw new PlrError("E_TUNNEL_PROTOCOL", "handshake already finished");
-    used = true;
-    let dh1, dh2;
-    try {
-      const { epkS } = parseServerHello(serverHello);
-      dh1 = ecdh2(esk, xp);
-      dh2 = ecdh2(esk, epkS);
-      return deriveTunnel({ dh1, dh2, attNonce, epkC, epkS, xp, ep });
-    } finally {
-      esk.fill(0);
-      dh1?.fill(0);
-      dh2?.fill(0);
-    }
-  };
-  return { hello: hello.slice(), finish, abort };
-}
-
 // packages/shared/dist/tunnel/frames.js
-init_define_STATUS_DEFAULTS();
-init_define_STATUS_REPLAY();
 var MAX_SEQ = Number.MAX_SAFE_INTEGER;
 var LEN_BYTES = 4;
 function checkParams(key, th, dir) {
@@ -45500,8 +45390,8 @@ function validateDestination(host, port) {
 init_define_STATUS_DEFAULTS();
 init_define_STATUS_REPLAY();
 var VPN_RECEIPT_LABEL = utf8("PLR-VPN-v1/receipt");
-var HASH_FIELDS2 = ["th", "compose_hash", "key_hash"];
-var VPN_RECEIPT_KEYS = /* @__PURE__ */ new Set(["v", ...HASH_FIELDS2, "seq", "ts_open_ms", "ts_close_ms"]);
+var HASH_FIELDS = ["th", "compose_hash", "key_hash"];
+var VPN_RECEIPT_KEYS = /* @__PURE__ */ new Set(["v", ...HASH_FIELDS, "seq", "ts_open_ms", "ts_close_ms"]);
 function isVpnReceipt(r) {
   if (!isPlainObject(r))
     return false;
@@ -45515,12 +45405,12 @@ function isVpnReceipt(r) {
     return false;
   if (r.ts_open_ms > r.ts_close_ms)
     return false;
-  return HASH_FIELDS2.every((f) => isHex(r[f], 32));
+  return HASH_FIELDS.every((f) => isHex(r[f], 32));
 }
 function vpnReceiptMessage(r) {
   if (!isVpnReceipt(r))
     throw new PlrError("E_BAD_INPUT", "malformed vpn receipt");
-  return concatBytes2(VPN_RECEIPT_LABEL, ...HASH_FIELDS2.map((f) => fromHex(r[f], 32)), u64be(r.seq), u64be(r.ts_open_ms), u64be(r.ts_close_ms));
+  return concatBytes2(VPN_RECEIPT_LABEL, ...HASH_FIELDS.map((f) => fromHex(r[f], 32)), u64be(r.seq), u64be(r.ts_open_ms), u64be(r.ts_close_ms));
 }
 function verifyVpnReceipt(r, sigHex, edPub) {
   try {
@@ -45635,133 +45525,6 @@ var DNS = Object.freeze({
   MAX_MESSAGE_LEN: 65535,
   /** per-resolver timeout (SPEC-VPN §6.1) */
   RESOLVER_TIMEOUT_MS: 5e3
-});
-
-// packages/shared/dist/zcash/tx.js
-init_define_STATUS_DEFAULTS();
-init_define_STATUS_REPLAY();
-var ZCASH_TX = Object.freeze({
-  /** `fOverwintered | 5` */
-  HEADER_V5: 2147483653,
-  VERSION_GROUP_ID_V5: 648488714,
-  /** Upper bound on a serialized transaction we parse (Zcash block size limit is 2 MB). */
-  MAX_TX_BYTES: 2e6,
-  /** consensus `MAX_MONEY` in zatoshi */
-  MAX_MONEY: 21000000n * 100000000n,
-  SEQUENCE_FINAL: 4294967295,
-  SPEND_LEN: 96,
-  OUTPUT_LEN: 756,
-  ACTION_LEN: 820,
-  SPEND_PROOF_LEN: 192,
-  OUTPUT_PROOF_LEN: 192,
-  SIG_LEN: 64,
-  ENC_CIPHERTEXT_LEN: 580,
-  OUT_CIPHERTEXT_LEN: 80
-});
-var SIGHASH = Object.freeze({ ALL: 1, NONE: 2, SINGLE: 3, ANYONECANPAY: 128 });
-var P = (s) => {
-  const b = utf8(s);
-  if (b.length !== 16)
-    throw new PlrError("E_BAD_INPUT", "personalization must be 16 bytes");
-  return b;
-};
-var PERS = {
-  HEADERS: P("ZTxIdHeadersHash"),
-  TRANSPARENT: P("ZTxIdTranspaHash"),
-  PREVOUTS: P("ZTxIdPrevoutHash"),
-  SEQUENCE: P("ZTxIdSequencHash"),
-  OUTPUTS: P("ZTxIdOutputsHash"),
-  AMOUNTS: P("ZTxTrAmountsHash"),
-  SCRIPTS: P("ZTxTrScriptsHash"),
-  TXIN: P("Zcash___TxInHash"),
-  SAPLING: P("ZTxIdSaplingHash"),
-  S_SPENDS: P("ZTxIdSSpendsHash"),
-  S_SPEND_C: P("ZTxIdSSpendCHash"),
-  S_SPEND_N: P("ZTxIdSSpendNHash"),
-  S_OUTPUTS: P("ZTxIdSOutputHash"),
-  S_OUT_C: P("ZTxIdSOutC__Hash"),
-  S_OUT_M: P("ZTxIdSOutM__Hash"),
-  S_OUT_N: P("ZTxIdSOutN__Hash"),
-  ORCHARD: P("ZTxIdOrchardHash"),
-  O_C: P("ZTxIdOrcActCHash"),
-  O_M: P("ZTxIdOrcActMHash"),
-  O_N: P("ZTxIdOrcActNHash"),
-  AUTH_TRANS: P("ZTxAuthTransHash"),
-  AUTH_SAPLING: P("ZTxAuthSapliHash"),
-  AUTH_ORCHARD: P("ZTxAuthOrchaHash")
-};
-
-// packages/shared/dist/zcash/script.js
-init_define_STATUS_DEFAULTS();
-init_define_STATUS_REPLAY();
-var ZCASH_NETWORKS = Object.freeze(["regtest", "testnet", "mainnet"]);
-var OP = Object.freeze({ RETURN: 106, PUSHDATA1: 76, DUP: 118, HASH160: 169, EQUALVERIFY: 136, CHECKSIG: 172 });
-var B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-var B58_MAP = new Map(Array.from(B58, (c, i) => [c, i]));
-var T_ADDR_PREFIX = Object.freeze({
-  mainnet: Uint8Array.of(28, 184),
-  test: Uint8Array.of(29, 37)
-});
-var ZIP317 = Object.freeze({ MARGINAL_FEE: 5000n, GRACE_ACTIONS: 2, P2PKH_STANDARD_INPUT_SIZE: 150, P2PKH_STANDARD_OUTPUT_SIZE: 34 });
-
-// packages/shared/dist/zcash/build.js
-init_define_STATUS_DEFAULTS();
-init_define_STATUS_REPLAY();
-
-// packages/shared/dist/zcash/record.js
-init_define_STATUS_DEFAULTS();
-init_define_STATUS_REPLAY();
-var ZCASH_RECORD_MAGIC = utf8("PLR1");
-var ZCASH_RECORD_TYPE = Object.freeze({
-  allow_compose: 1,
-  revoke_compose: 2,
-  allow_os: 3,
-  revoke_os: 4,
-  set_root: 5,
-  approve_operator: 6,
-  revoke_operator: 7,
-  transfer_owner: 8,
-  reg_keys: 16,
-  reg_measure: 17,
-  reg_os: 18,
-  reg_quote: 19,
-  anchor: 32,
-  anchor_sig: 33
-});
-
-// packages/shared/dist/zcash/log.js
-init_define_STATUS_DEFAULTS();
-init_define_STATUS_REPLAY();
-var ZCASH_LOG = Object.freeze({
-  DEFAULT_TTL_MS: 864e5,
-  /** an anchor needs its 0x21 signature within this many blocks */
-  ANCHOR_SIG_WINDOW: 10,
-  /**
-   * Bound on tracked (author, key) registration slots of authors NOT approved when their record landed (oldest
-   * evicted first). Slots of approved authors are not bounded here: the owner controls that set.
-   */
-  MAX_UNAPPROVED_REGISTRATIONS: 1e4,
-  /** strict mode: pending (unsigned) anchors kept per (operator, key) */
-  MAX_PENDING_ANCHORS: 8,
-  MAX_TX_PER_BLOCK: 1e5,
-  MAX_SCRIPT_HEX: 2e4
-});
-
-// packages/shared/dist/zcash/block.js
-init_define_STATUS_DEFAULTS();
-init_define_STATUS_REPLAY();
-var ZCASH_BLOCK = Object.freeze({
-  /** consensus `MAX_BLOCK_SIZE` */
-  MAX_BLOCK_BYTES: 2e6,
-  HEADER_FIXED_LEN: 140,
-  /** Equihash solutions are 1344 (mainnet/testnet) or 36 (regtest) bytes */
-  MAX_SOLUTION_LEN: 2e3,
-  JOINSPLIT_PHGR_LEN: 1802,
-  JOINSPLIT_GROTH_LEN: 1698,
-  SPEND_V4_LEN: 384,
-  OUTPUT_V4_LEN: 948,
-  VGID_OVERWINTER: 63210096,
-  VGID_SAPLING: 2301567109
 });
 
 // client/src/near-registry.ts
@@ -46723,13 +46486,13 @@ function sqrt5mod82(Fp3, n) {
   assertIsSquare2(F2, root, n);
   return root;
 }
-function sqrt9mod162(P2) {
-  const Fp_ = Field2(P2);
-  const tn = tonelliShanks2(P2);
+function sqrt9mod162(P) {
+  const Fp_ = Field2(P);
+  const tn = tonelliShanks2(P);
   const c1 = tn(Fp_, Fp_.neg(Fp_.ONE));
   const c2 = tn(Fp_, c1);
   const c3 = tn(Fp_, Fp_.neg(c1));
-  const c4 = (P2 + _7n2) / _16n2;
+  const c4 = (P + _7n2) / _16n2;
   return ((Fp3, n) => {
     const F2 = Fp3;
     let tv1 = F2.pow(n, c4);
@@ -46746,17 +46509,17 @@ function sqrt9mod162(P2) {
     return root;
   });
 }
-function tonelliShanks2(P2) {
-  if (P2 < _3n4)
+function tonelliShanks2(P) {
+  if (P < _3n4)
     throw new Error("sqrt is not defined for small field");
-  let Q2 = P2 - _1n9;
+  let Q2 = P - _1n9;
   let S = 0;
   while (Q2 % _2n6 === _0n10) {
     Q2 /= _2n6;
     S++;
   }
   let Z = _2n6;
-  const _Fp = Field2(P2);
+  const _Fp = Field2(P);
   while (FpLegendre2(_Fp, Z) === 1) {
     if (Z++ > 1e3)
       throw new Error("Cannot find square root: probably non-prime P");
@@ -46796,14 +46559,14 @@ function tonelliShanks2(P2) {
     return R;
   };
 }
-function FpSqrt2(P2) {
-  if (P2 % _4n5 === _3n4)
+function FpSqrt2(P) {
+  if (P % _4n5 === _3n4)
     return sqrt3mod42;
-  if (P2 % _8n4 === _5n3)
+  if (P % _8n4 === _5n3)
     return sqrt5mod82;
-  if (P2 % _16n2 === _9n2)
-    return sqrt9mod162(P2);
-  return tonelliShanks2(P2);
+  if (P % _16n2 === _9n2)
+    return sqrt9mod162(P);
+  return tonelliShanks2(P);
 }
 var isNegativeLE2 = (num, modulo) => (mod2(num, modulo) & _1n9) === _1n9;
 var FIELD_FIELDS2 = [
@@ -47110,8 +46873,8 @@ function calcOffsets(n, window2, wOpts) {
 }
 var pointPrecomputes = /* @__PURE__ */ new WeakMap();
 var pointWindowSizes2 = /* @__PURE__ */ new WeakMap();
-function getW(P2) {
-  return pointWindowSizes2.get(P2) || 1;
+function getW(P) {
+  return pointWindowSizes2.get(P) || 1;
 }
 function assert0(n) {
   if (n !== _0n11)
@@ -47240,10 +47003,10 @@ var wNAF = class {
   // We calculate precomputes for elliptic curve point multiplication
   // using windowed method. This specifies window size and
   // stores precomputed values. Usually only base point would be precomputed.
-  createCache(P2, W) {
+  createCache(P, W) {
     validateW2(W, this.bits);
-    pointWindowSizes2.set(P2, W);
-    pointPrecomputes.delete(P2);
+    pointWindowSizes2.set(P, W);
+    pointPrecomputes.delete(P);
   }
   hasCache(elm) {
     return getW(elm) !== 1;
@@ -47901,19 +47664,19 @@ var ed25519_CURVE2 = /* @__PURE__ */ (() => ({
 }))();
 function ed25519_pow_2_252_32(x) {
   const _10n = BigInt(10), _20n = BigInt(20), _40n = BigInt(40), _80n = BigInt(80);
-  const P2 = ed25519_CURVE_p2;
-  const x2 = x * x % P2;
-  const b2 = x2 * x % P2;
-  const b4 = pow22(b2, _2n8, P2) * b2 % P2;
-  const b5 = pow22(b4, _1n12, P2) * x % P2;
-  const b10 = pow22(b5, _5n4, P2) * b5 % P2;
-  const b20 = pow22(b10, _10n, P2) * b10 % P2;
-  const b40 = pow22(b20, _20n, P2) * b20 % P2;
-  const b80 = pow22(b40, _40n, P2) * b40 % P2;
-  const b160 = pow22(b80, _80n, P2) * b80 % P2;
-  const b240 = pow22(b160, _80n, P2) * b80 % P2;
-  const b250 = pow22(b240, _10n, P2) * b10 % P2;
-  const pow_p_5_8 = pow22(b250, _2n8, P2) * x % P2;
+  const P = ed25519_CURVE_p2;
+  const x2 = x * x % P;
+  const b2 = x2 * x % P;
+  const b4 = pow22(b2, _2n8, P) * b2 % P;
+  const b5 = pow22(b4, _1n12, P) * x % P;
+  const b10 = pow22(b5, _5n4, P) * b5 % P;
+  const b20 = pow22(b10, _10n, P) * b10 % P;
+  const b40 = pow22(b20, _20n, P) * b20 % P;
+  const b80 = pow22(b40, _40n, P) * b40 % P;
+  const b160 = pow22(b80, _80n, P) * b80 % P;
+  const b240 = pow22(b160, _80n, P) * b80 % P;
+  const b250 = pow22(b240, _10n, P) * b10 % P;
+  const pow_p_5_8 = pow22(b250, _2n8, P) * x % P;
   return { pow_p_5_8, b2 };
 }
 function adjustScalarBytes2(bytes) {
@@ -47924,23 +47687,23 @@ function adjustScalarBytes2(bytes) {
 }
 var ED25519_SQRT_M12 = /* @__PURE__ */ BigInt("19681161376707505956807079304988542015446066515923890162744021073123829784752");
 function uvRatio2(u, v) {
-  const P2 = ed25519_CURVE_p2;
-  const v3 = mod2(v * v * v, P2);
-  const v7 = mod2(v3 * v3 * v, P2);
+  const P = ed25519_CURVE_p2;
+  const v3 = mod2(v * v * v, P);
+  const v7 = mod2(v3 * v3 * v, P);
   const pow3 = ed25519_pow_2_252_32(u * v7).pow_p_5_8;
-  let x = mod2(u * v3 * pow3, P2);
-  const vx2 = mod2(v * x * x, P2);
+  let x = mod2(u * v3 * pow3, P);
+  const vx2 = mod2(v * x * x, P);
   const root1 = x;
-  const root2 = mod2(x * ED25519_SQRT_M12, P2);
+  const root2 = mod2(x * ED25519_SQRT_M12, P);
   const useRoot1 = vx2 === u;
-  const useRoot2 = vx2 === mod2(-u, P2);
-  const noRoot = vx2 === mod2(-u * ED25519_SQRT_M12, P2);
+  const useRoot2 = vx2 === mod2(-u, P);
+  const noRoot = vx2 === mod2(-u * ED25519_SQRT_M12, P);
   if (useRoot1)
     x = root1;
   if (useRoot2 || noRoot)
     x = root2;
-  if (isNegativeLE2(x, P2))
-    x = mod2(-x, P2);
+  if (isNegativeLE2(x, P))
+    x = mod2(-x, P);
   return { isValid: useRoot1 || useRoot2, value: x };
 }
 var ed25519_Point2 = /* @__PURE__ */ edwards2(ed25519_CURVE2, { uvRatio: uvRatio2 });
@@ -47960,7 +47723,7 @@ var MAX_255B = /* @__PURE__ */ BigInt("0x7ffffffffffffffffffffffffffffffffffffff
 var bytes255ToNumberLE = (bytes) => Fp2.create(bytesToNumberLE2(bytes) & MAX_255B);
 function calcElligatorRistrettoMap(r0) {
   const { d } = ed25519_CURVE2;
-  const P2 = ed25519_CURVE_p2;
+  const P = ed25519_CURVE_p2;
   const mod3 = (n) => Fp2.create(n);
   const r = mod3(SQRT_M1 * r0 * r0);
   const Ns = mod3((r + _1n12) * ONE_MINUS_D_SQ);
@@ -47968,7 +47731,7 @@ function calcElligatorRistrettoMap(r0) {
   const D2 = mod3((c - d * r) * mod3(r + d));
   let { isValid: Ns_D_is_sq, value: s } = uvRatio2(Ns, D2);
   let s_ = mod3(s * r0);
-  if (!isNegativeLE2(s_, P2))
+  if (!isNegativeLE2(s_, P))
     s_ = mod3(-s_);
   if (!Ns_D_is_sq)
     s = s_;
@@ -48015,10 +47778,10 @@ var _RistrettoPoint = class __RistrettoPoint extends PrimeEdwardsPoint2 {
   static fromBytes(bytes) {
     abytes4(bytes, 32);
     const { a, d } = ed25519_CURVE2;
-    const P2 = ed25519_CURVE_p2;
+    const P = ed25519_CURVE_p2;
     const mod3 = (n) => Fp2.create(n);
     const s = bytes255ToNumberLE(bytes);
-    if (!equalBytes3(Fp2.toBytes(s), bytes) || isNegativeLE2(s, P2))
+    if (!equalBytes3(Fp2.toBytes(s), bytes) || isNegativeLE2(s, P))
       throw new Error("invalid ristretto255 encoding 1");
     const s2 = mod3(s * s);
     const u1 = mod3(_1n12 + a * s2);
@@ -48030,11 +47793,11 @@ var _RistrettoPoint = class __RistrettoPoint extends PrimeEdwardsPoint2 {
     const Dx = mod3(I * u2);
     const Dy = mod3(I * Dx * v);
     let x = mod3((s + s) * Dx);
-    if (isNegativeLE2(x, P2))
+    if (isNegativeLE2(x, P))
       x = mod3(-x);
     const y = mod3(u1 * Dy);
     const t = mod3(x * y);
-    if (!isValid || isNegativeLE2(t, P2) || y === _0n13)
+    if (!isValid || isNegativeLE2(t, P) || y === _0n13)
       throw new Error("invalid ristretto255 encoding 2");
     return new __RistrettoPoint(new ed25519_Point2(x, y, _1n12, t));
   }
@@ -48052,7 +47815,7 @@ var _RistrettoPoint = class __RistrettoPoint extends PrimeEdwardsPoint2 {
    */
   toBytes() {
     let { X, Y, Z, T } = this.ep;
-    const P2 = ed25519_CURVE_p2;
+    const P = ed25519_CURVE_p2;
     const mod3 = (n) => Fp2.create(n);
     const u1 = mod3(mod3(Z + Y) * mod3(Z - Y));
     const u2 = mod3(X * Y);
@@ -48062,7 +47825,7 @@ var _RistrettoPoint = class __RistrettoPoint extends PrimeEdwardsPoint2 {
     const D2 = mod3(invsqrt * u2);
     const zInv = mod3(D1 * D2 * T);
     let D3;
-    if (isNegativeLE2(T * zInv, P2)) {
+    if (isNegativeLE2(T * zInv, P)) {
       let _x = mod3(Y * SQRT_M1);
       let _y = mod3(X * SQRT_M1);
       X = _x;
@@ -48071,10 +47834,10 @@ var _RistrettoPoint = class __RistrettoPoint extends PrimeEdwardsPoint2 {
     } else {
       D3 = D2;
     }
-    if (isNegativeLE2(X * zInv, P2))
+    if (isNegativeLE2(X * zInv, P))
       Y = mod3(-Y);
     let s = mod3((Z - Y) * D3);
-    if (isNegativeLE2(s, P2))
+    if (isNegativeLE2(s, P))
       s = mod3(-s);
     return Fp2.toBytes(s);
   }
@@ -48805,9 +48568,9 @@ function weierstrass2(params, extraOpts = {}) {
       return new Point(x, y, Fp3.ONE);
     }
     static fromBytes(bytes) {
-      const P2 = Point.fromAffine(decodePoint(abytes5(bytes, void 0, "point")));
-      P2.assertValidity();
-      return P2;
+      const P = Point.fromAffine(decodePoint(abytes5(bytes, void 0, "point")));
+      P.assertValidity();
+      return P;
     }
     static fromHex(hex) {
       return Point.fromBytes(hexToBytes4(hex));
@@ -49369,7 +49132,7 @@ function ecdsa2(Point, hash, ecdsaOpts = {}) {
     validateSigLength(signature, format);
     try {
       const sig = Signature.fromBytes(signature, format);
-      const P2 = Point.fromBytes(publicKey);
+      const P = Point.fromBytes(publicKey);
       if (lowS && sig.hasHighS())
         return false;
       const { r, s } = sig;
@@ -49377,7 +49140,7 @@ function ecdsa2(Point, hash, ecdsaOpts = {}) {
       const is = Fn2.inv(s);
       const u1 = Fn2.create(h * is);
       const u2 = Fn2.create(r * is);
-      const R = Point.BASE.multiplyUnsafe(u1).add(P2.multiplyUnsafe(u2));
+      const R = Point.BASE.multiplyUnsafe(u1).add(P.multiplyUnsafe(u2));
       if (R.is0())
         return false;
       const v = Fn2.create(R.x);
@@ -49425,23 +49188,23 @@ var secp256k1_ENDO = {
 };
 var _2n10 = /* @__PURE__ */ BigInt(2);
 function sqrtMod(y) {
-  const P2 = secp256k1_CURVE.p;
+  const P = secp256k1_CURVE.p;
   const _3n6 = BigInt(3), _6n = BigInt(6), _11n = BigInt(11), _22n = BigInt(22);
   const _23n = BigInt(23), _44n = BigInt(44), _88n = BigInt(88);
-  const b2 = y * y * y % P2;
-  const b3 = b2 * b2 * y % P2;
-  const b6 = pow22(b3, _3n6, P2) * b3 % P2;
-  const b9 = pow22(b6, _3n6, P2) * b3 % P2;
-  const b11 = pow22(b9, _2n10, P2) * b2 % P2;
-  const b22 = pow22(b11, _11n, P2) * b11 % P2;
-  const b44 = pow22(b22, _22n, P2) * b22 % P2;
-  const b88 = pow22(b44, _44n, P2) * b44 % P2;
-  const b176 = pow22(b88, _88n, P2) * b88 % P2;
-  const b220 = pow22(b176, _44n, P2) * b44 % P2;
-  const b223 = pow22(b220, _3n6, P2) * b3 % P2;
-  const t1 = pow22(b223, _23n, P2) * b22 % P2;
-  const t2 = pow22(t1, _6n, P2) * b2 % P2;
-  const root = pow22(t2, _2n10, P2);
+  const b2 = y * y * y % P;
+  const b3 = b2 * b2 * y % P;
+  const b6 = pow22(b3, _3n6, P) * b3 % P;
+  const b9 = pow22(b6, _3n6, P) * b3 % P;
+  const b11 = pow22(b9, _2n10, P) * b2 % P;
+  const b22 = pow22(b11, _11n, P) * b11 % P;
+  const b44 = pow22(b22, _22n, P) * b22 % P;
+  const b88 = pow22(b44, _44n, P) * b44 % P;
+  const b176 = pow22(b88, _88n, P) * b88 % P;
+  const b220 = pow22(b176, _44n, P) * b44 % P;
+  const b223 = pow22(b220, _3n6, P) * b3 % P;
+  const t1 = pow22(b223, _23n, P) * b22 % P;
+  const t2 = pow22(t1, _6n, P) * b2 % P;
+  const root = pow22(t2, _2n10, P);
   if (!Fpk1.eql(Fpk1.sqr(root), y))
     throw new Error("Cannot find square root");
   return root;
@@ -54457,8 +54220,6 @@ var INSTANCE_UINTS = ["registered_at_ms", "expires_at_ms", "next_seq"];
 var ANCHOR_UINTS = ["id", "first_seq", "count", "at_ms"];
 var NearRegistry = class {
   chain = "near";
-  /** Tier A: the contract verifies the registration quote at registration (SPEC-CHAINS §1, §2). */
-  verifiesOnChain = true;
   contractId;
   rpcUrl;
   #provider;
@@ -54547,10 +54308,6 @@ var NearRegistry = class {
     if (!isAnchorRecord(v)) throw new NearRegistryError("get_anchor: malformed reply");
     return { id: v.id, key_hash: v.key_hash, root: v.root, first_seq: v.first_seq, count: v.count, at_ms: v.at_ms };
   }
-  /** Tier A: the contract checked the quote and does not store it (SPEC-CHAINS §2), so there is nothing to return. */
-  async getRegistrationQuote(_keyHash, _offered) {
-    return null;
-  }
   async anchorCount() {
     const n = toUint(await this.view("anchor_count", {}));
     if (n === void 0) throw new NearRegistryError("anchor_count: malformed reply");
@@ -54596,18 +54353,6 @@ var TracingRegistry = class {
   get contractId() {
     return this.inner.contractId;
   }
-  /** Forwarded strictly: anything but an explicit `true` counts as false (fail closed). */
-  get verifiesOnChain() {
-    try {
-      return this.inner.verifiesOnChain === true;
-    } catch {
-      return false;
-    }
-  }
-  getRegistrationQuote(keyHash2, offered) {
-    this.lastCall = "getRegistrationQuote";
-    return this.inner.getRegistrationQuote(keyHash2, offered);
-  }
   getRoot() {
     this.lastCall = "getRoot";
     return this.inner.getRoot();
@@ -54636,15 +54381,12 @@ var INTEL_ORDER = MOCK_ORDER.flatMap(
   (k) => k === "QUOTE_SIG" ? [k, "TCB"] : k === "COMPOSE" ? [k, "COMPOSE_POLICY"] : [k]
 );
 function orderFor(o) {
-  const order = [...o.intel === true ? INTEL_ORDER : MOCK_ORDER];
-  if (o.evidence === true) order.push("REGISTRATION_EVIDENCE");
-  return order;
+  return [...o.intel === true ? INTEL_ORDER : MOCK_ORDER];
 }
 var LABELS = {
   NONCE: `report_data binds client nonce as a session quote (SHA256("PLR-v1/session-nonce" ‖ nonce))`
 };
-var label = (k) => k === "REGISTRATION_EVIDENCE" ? REGISTRATION_EVIDENCE_LABEL : LABELS[k] ?? CHECKS[k];
-var REGISTRATION_EVIDENCE_LABEL = `${REGISTRATION_EVIDENCE_CHECK} (registration evidence: the chain does not verify quotes)`;
+var label = (k) => LABELS[k] ?? CHECKS[k];
 var CODE_TO_CHECK = {
   E_BAD_RESPONSE: "RESPONSE",
   E_QUOTE_FORMAT: "QUOTE_FORMAT",
@@ -54660,7 +54402,6 @@ var CODE_TO_CHECK = {
   E_COMPOSE_NOT_ALLOWED: "COMPOSE_ALLOWED",
   E_OS_NOT_ALLOWED: "OS_ALLOWED",
   E_INSTANCE_NOT_REGISTERED: "INSTANCE",
-  E_REGISTRATION_EVIDENCE: "REGISTRATION_EVIDENCE",
   E_TCB_STATUS: "TCB",
   E_COLLATERAL: "QUOTE_SIG",
   E_COMPOSE_POLICY: "COMPOSE_POLICY"
@@ -54670,8 +54411,7 @@ var REGISTRY_STEP = {
   isComposeAllowed: "COMPOSE_ALLOWED",
   isOsAllowed: "OS_ALLOWED",
   getInstance: "INSTANCE",
-  getAnchor: "INSTANCE",
-  getRegistrationQuote: "REGISTRATION_EVIDENCE"
+  getAnchor: "INSTANCE"
 };
 function checkLines(err, lastRegistryCall, o = {}) {
   const order = orderFor(o);
@@ -54695,7 +54435,6 @@ init_define_STATUS_REPLAY();
 // client/src/anchored.ts
 init_define_STATUS_DEFAULTS();
 init_define_STATUS_REPLAY();
-import { createPublicKey, verify as cryptoVerify } from "node:crypto";
 
 // client/src/util.ts
 init_define_STATUS_DEFAULTS();
@@ -54729,61 +54468,6 @@ function parseProofReply(j) {
     proof: proof.slice()
   };
 }
-function ed25519Verify(pub, msg2, sig) {
-  try {
-    if (pub.length !== 32 || sig.length !== 64) return false;
-    const key = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: Buffer.from(pub).toString("base64url") }, format: "jwk" });
-    return cryptoVerify(null, msg2, key, sig);
-  } catch {
-    return false;
-  }
-}
-function verifiesOnChain(registry) {
-  try {
-    return registry.verifiesOnChain === true;
-  } catch {
-    return false;
-  }
-}
-async function verifyAnchorSig(registry, anchor, hint) {
-  const bad5 = (why) => {
-    throw new PlrError("E_ANCHOR_SIG", why);
-  };
-  if (!isHex(anchor.sig, 64)) bad5("anchor carries no signature");
-  if (!isHex(anchor.key_hash, 32) || !isHex(anchor.root, 32)) bad5("anchor shape");
-  let ed3;
-  try {
-    if (hint !== void 0 && toHex(keyHash(hint.x25519, hint.ed25519)) === anchor.key_hash) ed3 = hint.ed25519.slice();
-  } catch {
-    ed3 = void 0;
-  }
-  if (ed3 === void 0) {
-    let inst;
-    try {
-      inst = await registry.getInstance(anchor.key_hash);
-    } catch {
-      throw new PlrError("E_REGISTRY_UNAVAILABLE", "get_instance");
-    }
-    if (inst === null || !isHex(inst.x25519, 32) || !isHex(inst.ed25519, 32)) return bad5("anchor signer unknown");
-    const x = fromHex(inst.x25519, 32);
-    const e = fromHex(inst.ed25519, 32);
-    if (toHex(keyHash(x, e)) !== anchor.key_hash) bad5("instance keys do not match the anchor");
-    ed3 = e;
-  }
-  let msg2;
-  try {
-    msg2 = anchorMessage({
-      contractId: registry.contractId,
-      keyHash: fromHex(anchor.key_hash, 32),
-      root: fromHex(anchor.root, 32),
-      firstSeq: BigInt(anchor.first_seq),
-      count: BigInt(anchor.count)
-    });
-  } catch {
-    return bad5("anchor message");
-  }
-  if (!ed25519Verify(ed3, msg2, fromHex(anchor.sig, 64))) bad5("bad anchor signature");
-}
 async function chainAnchor(registry, id2) {
   try {
     return await registry.getAnchor(id2);
@@ -54793,7 +54477,7 @@ async function chainAnchor(registry, id2) {
 }
 async function verifyVpnReceiptAnchored(p) {
   if (!isVpnReceipt(p.receipt)) throw new PlrError("E_BAD_INPUT", "malformed receipt");
-  return verifyLeafAnchored({ seq: p.receipt.seq, keyHash: p.receipt.key_hash, leaf: vpnReceiptLeaf(p.receipt), reply: p.reply, registry: p.registry, signer: p.signer });
+  return verifyLeafAnchored({ seq: p.receipt.seq, keyHash: p.receipt.key_hash, leaf: vpnReceiptLeaf(p.receipt), reply: p.reply, registry: p.registry });
 }
 async function verifyLeafAnchored(p) {
   const reply = parseProofReply(p.reply);
@@ -54805,13 +54489,12 @@ async function verifyLeafAnchored(p) {
   if (anchor.id !== reply.anchor_id) mismatch("anchor id");
   if (anchor.key_hash !== p.keyHash) mismatch("anchor belongs to another instance");
   if (!isUint2(anchor.first_seq) || !isUint2(anchor.count) || anchor.count < 1) mismatch("on-chain anchor shape");
-  if (!verifiesOnChain(p.registry)) await verifyAnchorSig(p.registry, anchor, p.signer);
   const seq = p.seq;
   if (seq < anchor.first_seq || seq - anchor.first_seq >= anchor.count) mismatch("receipt seq outside the anchored batch");
   const index = seq - anchor.first_seq;
   const size = anchor.count;
-  if (reply.first_seq !== anchor.first_seq || reply.count !== size || reply.index !== index) mismatch("router batch position");
-  if (reply.root !== anchor.root) mismatch("router root");
+  if (reply.first_seq !== anchor.first_seq || reply.count !== size || reply.index !== index) mismatch("exit batch position");
+  if (reply.root !== anchor.root) mismatch("exit root");
   const ok = verifyMerkleProof(
     p.leaf,
     index,
@@ -54833,7 +54516,6 @@ function parseJsonBytes(b) {
     return void 0;
   }
 }
-var MAX_ERROR_BODY = 4 * 1024;
 function fail2(code, detail) {
   throw new PlrError(code, detail);
 }
@@ -54872,8 +54554,6 @@ var AttestationCache = class {
   #o;
   #session;
   #pending;
-  /** Keys of the last successful verification (kept across expiry/invalidation; used only as an anchor-signer hint). */
-  #keys;
   constructor(o) {
     this.#o = { ...o, trustedRoot: o.trustedRoot.slice() };
   }
@@ -54894,7 +54574,6 @@ var AttestationCache = class {
       });
       const session = { verified, attNonce: nonce, at: this.#o.clock(), appCompose: bundle.app_compose };
       this.#session = session;
-      this.#keys = { x25519: verified.x25519.slice(), ed25519: verified.ed25519.slice() };
       return session;
     } catch (e) {
       this.#session = void 0;
@@ -54926,14 +54605,6 @@ var AttestationCache = class {
       this.#pending = void 0;
     });
     return this.#pending;
-  }
-  /**
-   * The x25519/ed25519 keys of the last successful verification, or undefined. Attested keys stay authentic after the
-   * session expires, so they may check signatures of that instance (SPEC-CHAINS §2 anchors) when the key hash matches.
-   */
-  get verifiedKeys() {
-    const k = this.#keys;
-    return k === void 0 ? void 0 : { x25519: k.x25519.slice(), ed25519: k.ed25519.slice() };
   }
   /** Forgets the cached verification; the next {@link current} re-attests. */
   invalidate() {
@@ -55640,10 +55311,6 @@ var ExitHop = class {
       throw this.failed(e);
     }
   }
-  /** Keys of this hop's last successful verification (anchor-signer hint, SPEC-CHAINS §2), or undefined. */
-  get verifiedKeys() {
-    return this.#attestation.verifiedKeys;
-  }
   /** `GET /v1/receipts/proof?seq=` (bounded). @throws PlrError E_BAD_RESPONSE */
   async fetchProof(seq) {
     try {
@@ -55757,14 +55424,14 @@ var VpnClient = class {
    * Checks that a verified session receipt is included in an on-chain anchor of the VPN registry: fetches the
    * exit's proof (`/v1/receipts/proof`) and verifies it against `get_anchor` with the CHAIN's
    * `first_seq` / `count` / `root`. Resolves `true`.
-   * @throws PlrError E_NOT_ANCHORED (retry later), E_ANCHOR_MISMATCH, E_ANCHOR_SIG (tier B/C), E_BAD_RESPONSE, E_REGISTRY_UNAVAILABLE, E_BAD_INPUT
+   * @throws PlrError E_NOT_ANCHORED (retry later), E_ANCHOR_MISMATCH, E_BAD_RESPONSE, E_REGISTRY_UNAVAILABLE, E_BAD_INPUT
    */
   async verifyAnchored(r) {
     if (!isVpnReceipt(r)) fail2("E_BAD_INPUT", "malformed receipt");
     const res = await this.#hop.fetchProof(r.seq);
     if (res.status === 404) fail2("E_NOT_ANCHORED");
     if (res.status !== 200) fail2("E_BAD_RESPONSE", "proof HTTP status");
-    await verifyVpnReceiptAnchored({ receipt: r, reply: parseJsonBytes(res.body), registry: this.registry, signer: this.#hop.verifiedKeys });
+    await verifyVpnReceiptAnchored({ receipt: r, reply: parseJsonBytes(res.body), registry: this.registry });
     return true;
   }
 };
@@ -55783,7 +55450,7 @@ var fromLine = (l) => ({
 async function verifyVpnReport(client, registry) {
   const root = client.rootKind;
   const intel = root === "INTEL";
-  const opts = { evidence: !registry.verifiesOnChain, intel };
+  const opts = { intel };
   const refused = (e, lines, recheck) => {
     const code = errCode(e);
     const checks2 = lines.map(fromLine);
@@ -55864,7 +55531,6 @@ function registryOptions(v, meta) {
     instances: v.instances,
     chain: "near",
     contractId: meta.registry,
-    verifiesOnChain: true,
     now: () => meta.captured_at_ms
   };
 }
