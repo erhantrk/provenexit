@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { parseVpnCompose } from "../src/compose.js";
 
@@ -17,8 +17,8 @@ function walk(dir: string, rel = ""): string[] {
   });
 }
 
-function build(out: string): Record<string, string> {
-  execFileSync(process.execPath, [join(ENCLAVE, "build.mjs"), "--out", out], { cwd: ENCLAVE, stdio: "pipe" });
+function build(out: string, extra: string[] = []): Record<string, string> {
+  execFileSync(process.execPath, [join(ENCLAVE, "build.mjs"), "--out", out, ...extra], { cwd: ENCLAVE, stdio: "pipe" });
   return Object.fromEntries(walk(out).map((f) => [f, sha(readFileSync(join(out, f)))]));
 }
 
@@ -57,6 +57,25 @@ describe("reproducible build (SPEC §4, SPEC-VPN §2)", () => {
     } finally {
       rmSync(a, { recursive: true, force: true });
       rmSync(b, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("--node-exe-only (the exit image build): same bundles, node_sha256 = manifest digest of the node executable alone", () => {
+    const a = mkdtempSync(join(tmpdir(), "plr-build-exe-"));
+    try {
+      const ha = build(a, ["--node-exe-only"]);
+      const exe = realpathSync(process.execPath);
+      const want = sha(new TextEncoder().encode(`${sha(readFileSync(exe))} exe ${basename(exe)}\n`));
+      const info = JSON.parse(readFileSync(join(a, "build-info.json"), "utf8"));
+      expect(info.runtime.node_sha256).toBe(want);
+      const c = parseVpnCompose(new Uint8Array(readFileSync(join(a, "vpn-exit/vpn-honest/app-compose.json"))));
+      expect(c.vpn.node_sha256).toBe(want);
+      expect(c.vpn.bundle_sha256).toBe(ha["vpn-exit/vpn-honest/vpn.bundle.mjs"]);
+      expect(c.policy.egress).toEqual({ allow_loopback: false, deny_private: true });
+      // the flag changes only the runtime pin, never the code
+      expect(ha["vpn-exit/vpn-honest/vpn.bundle.mjs"]).toBe(sha(readFileSync(join(ENCLAVE, "dist", "vpn-exit", "vpn-honest", "vpn.bundle.mjs"))));
+    } finally {
+      rmSync(a, { recursive: true, force: true });
     }
   }, 120_000);
 

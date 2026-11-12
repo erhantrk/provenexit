@@ -1,6 +1,6 @@
 // Reproducible VPN exit build (SPEC §4, SPEC-VPN §2).
 //
-//   node build.mjs [--out <dir>]        (default: dist; run after `tsc -b`, which provides dist/compose.js)
+//   node build.mjs [--out <dir>] [--node-exe-only]   (default: dist; run after `tsc -b`, which provides dist/compose.js)
 //
 // Produces, deterministically (same sources + lockfile ⇒ same bytes):
 //   vpn-exit/<variant>/vpn.bundle.mjs              VPN exit builds (esbuild, platform node, esm, no sourcemap, no legal
@@ -18,16 +18,21 @@
 //
 // Runtime pin: `vpn.node_sha256` = runtime closure digest of the node running this build (the mock TDX host runs the
 // exit with the same node). See src/mock-tdx/runtime.ts. A different node install ⇒ different compose hashes (by design).
+//
+// `--node-exe-only` (the exit image build, deploy/phala/Dockerfile): `vpn.node_sha256` = the same manifest digest over
+// the node executable file alone. The closure walk above reads Mach-O and cannot run in the Linux build container;
+// there node is /usr/local/bin/node of the base image pinned by digest. Shared libraries are NOT measured in this
+// mode, and nothing checks the value in dstack mode (the image digest pins node); it only has to be deterministic.
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { mkdirSync, writeFileSync, existsSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import * as esbuild from "esbuild";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-const { values } = parseArgs({ options: { out: { type: "string", default: "dist" } }, strict: true });
+const { values } = parseArgs({ options: { out: { type: "string", default: "dist" }, "node-exe-only": { type: "boolean", default: false } }, strict: true });
 const OUT = resolve(HERE, values.out);
 
 const composeModule = join(HERE, "dist", "compose.js");
@@ -36,10 +41,16 @@ if (!existsSync(composeModule)) {
   process.exit(1);
 }
 const { makeVpnCompose, composeBytes, VPN_DOH_PRODUCTION, VPN_DOH_TEST } = await import(pathToFileURL(composeModule).href);
-const { measureRuntime } = await import(pathToFileURL(join(HERE, "dist", "mock-tdx", "runtime.js")).href);
+const { measureRuntime, runtimeDigest } = await import(pathToFileURL(join(HERE, "dist", "mock-tdx", "runtime.js")).href);
 let nodeRuntime;
 try {
-  nodeRuntime = await measureRuntime(process.execPath);
+  if (values["node-exe-only"]) {
+    const exe = realpathSync(process.execPath);
+    const exeSha = createHash("sha256").update(readFileSync(exe)).digest("hex");
+    nodeRuntime = { digest: runtimeDigest([{ role: "exe", name: basename(exe), sha256: exeSha }]) };
+  } else {
+    nodeRuntime = await measureRuntime(process.execPath);
+  }
 } catch (e) {
   process.stderr.write(`build.mjs: cannot measure the node runtime (${e?.code ?? "error"})\n`);
   process.exit(1);
