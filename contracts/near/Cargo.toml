@@ -5,6 +5,7 @@ edition = "2021"
 description = "PLR-v1 registry: on-chain MOCK TDX quote verification, compose/OS allowlist, receipt anchoring (SPEC §7)"
 license = "MIT"
 publish = false
+repository = "https://github.com/erhantrk/provenexit"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -38,4 +39,11 @@ lto = true
 debug = false
 panic = "abort"
 overflow-checks = true
+
+# Reproducible build (cargo near build reproducible-wasm): anyone can rebuild the deployed wasm from this commit.
+[package.metadata.near.reproducible_build]
+image = "sourcescan/cargo-near:0.23.0-rust-1.99.1"
+image_digest = "sha256:8013f039e8005627f10ae66b5519d1a6eeeed7d7aef4b5067d5e9a86c4302fcc"
+passed_env = []
+container_build_command = ["cargo", "near", "build", "non-reproducible-wasm", "--locked"]
 
