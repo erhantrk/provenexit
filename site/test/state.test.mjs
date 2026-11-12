@@ -303,6 +303,44 @@ test("motion is scrubbed by scroll, never played on a clock", () => {
   assert.doesNotMatch(text("../assets/styles.css"), /animation:[^;]*infinite|@keyframes (stream|ring|pop|blink)/);
 });
 
+test("the hero check-flow card is gone; the hero keeps headline, buttons and plate", () => {
+  const html = text("../index.html");
+  assert.doesNotMatch(html, /class="flow|id="flow|How the client decides, before the first byte/);
+  assert.match(html, /<h1>/);
+  assert.match(html, /class="btn" href="#run"/);
+  assert.match(html, /id="plate"/);
+  assert.doesNotMatch(text("../assets/styles.css"), /\.flow[-\s{]|\.g-tick/);
+  assert.doesNotMatch(text("../assets/motion.js"), /setFlowStop|heroFlow|flow-/);
+  assert.doesNotMatch(text("../assets/app.js"), /setFlowStop/);
+});
+
+test("the route section is a pinned scroll scene that reduced motion leaves unpinned", () => {
+  const html = text("../index.html");
+  const route = html.slice(html.indexOf('id="route"'), html.indexOf("</section>", html.indexOf('id="route"')));
+  // Track, then a sticky stage holding the heading, the diagram, all four steps in order and the counter.
+  assert.match(route, /<div class="route-pin" id="route-pin">\s*<div class="route-stage">/);
+  assert.ok(route.indexOf("route-stage") < route.indexOf('id="route-h"'));
+  assert.equal(route.match(/<li>/g).length, 4);
+  assert.match(route, /id="route-count" aria-hidden="true"/);
+  const css = text("../assets/styles.css");
+  // Pinning lives only under the "motion" class, which reduced motion never sets.
+  assert.match(css, /\.motion #route:not\(\[data-nopin\]\) \.route-pin \{ height: 280vh; \}/);
+  assert.match(css, /\.motion #route:not\(\[data-nopin\]\) \.route-stage \{\s*position: sticky; top: var\(--nav-h\);/);
+  for (const m of css.matchAll(/position: sticky|route-pin \{ height/g)) {
+    // The rule holding it: the text since the previous "}", minus an opening "@media (...) {".
+    const rule = css.slice(css.lastIndexOf("}", m.index) + 1, m.index).replace(/^\s*@media[^{]*\{/, "").replace(/\/\*[^]*?\*\//g, "");
+    assert.match(rule.trim(), /^\.motion /);
+  }
+  const flag = text("../assets/motion-flag.js");
+  assert.match(flag, /prefers-reduced-motion: reduce\)"\)\.matches\) return;\n  root\.classList\.add\("motion"\)/);
+  const motion = text("../assets/motion.js");
+  assert.match(motion, /room > 0 \? clamp\(\(stage\.getBoundingClientRect\(\)\.top - r\.top\) \/ room\) : 1/);
+  assert.match(motion, /sec\.dataset\.nopin = "1"/);
+  // Switching to reduced motion mid-visit drops the motion class (and with it the pin) and the step states.
+  assert.match(motion, /root\.classList\.remove\("motion"\);\n    removeEventListener\("scroll", queue\)/);
+  assert.match(motion, /classList\.remove\("lit", "done", "now"\)/);
+});
+
 test("the limits heading and the compact history", () => {
   const html = text("../index.html");
   assert.match(html, /<h3 class="also-h">More limits<\/h3>/);

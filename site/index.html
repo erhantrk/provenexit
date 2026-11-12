@@ -88,36 +88,6 @@
       <p class="under-plate" id="under-plate"></p>
     </div>
   </div>
-  <div class="wrap">
-    <figure class="flow" id="flow" aria-labelledby="flow-cap">
-      <figcaption class="flow-cap" id="flow-cap">How the client decides, before the first byte</figcaption>
-      <div class="flow-track" aria-hidden="true">
-        <div class="flow-rail"><i class="flow-fill"></i></div>
-        <span class="flow-packet"></span>
-        <div class="flow-stop flow-end-a">
-          <span class="flow-icon"><svg viewBox="0 0 32 32"><rect x="5" y="7" width="22" height="15" rx="2"/><path d="M2 25h28"/></svg></span>
-          <span class="flow-name">Your machine</span>
-        </div>
-        <div class="flow-stop flow-gate" data-gate="1">
-          <span class="flow-icon"><svg class="g-icon" viewBox="0 0 32 32"><rect x="8" y="8" width="16" height="16" rx="2"/><rect x="12.5" y="12.5" width="7" height="7"/><path d="M12 4v4M16 4v4M20 4v4M12 24v4M16 24v4M20 24v4M4 12h4M4 16h4M4 20h4M24 12h4M24 16h4M24 20h4"/></svg><svg class="g-tick" viewBox="0 0 32 32"><path d="M9 16.5l4.5 4.5L23 11"/></svg><svg class="g-cross" viewBox="0 0 32 32"><path d="M11 11l10 10M21 11L11 21"/></svg></span>
-          <span class="flow-name">Intel quote</span>
-        </div>
-        <div class="flow-stop flow-gate" data-gate="2">
-          <span class="flow-icon"><svg class="g-icon" viewBox="0 0 32 32"><path d="M16 4l11 6v12l-11 6-11-6V10z"/><path d="M5 10l11 6 11-6M16 16v12"/></svg><svg class="g-tick" viewBox="0 0 32 32"><path d="M9 16.5l4.5 4.5L23 11"/></svg><svg class="g-cross" viewBox="0 0 32 32"><path d="M11 11l10 10M21 11L11 21"/></svg></span>
-          <span class="flow-name">Approved image</span>
-        </div>
-        <div class="flow-stop flow-gate" data-gate="3">
-          <span class="flow-icon"><svg class="g-icon" viewBox="0 0 32 32"><rect x="5" y="5" width="22" height="22" rx="3"/><path d="M10 11h12M10 16h12M10 21h7"/></svg><svg class="g-tick" viewBox="0 0 32 32"><path d="M9 16.5l4.5 4.5L23 11"/></svg><svg class="g-cross" viewBox="0 0 32 32"><path d="M11 11l10 10M21 11L11 21"/></svg></span>
-          <span class="flow-name">NEAR registry</span>
-        </div>
-        <div class="flow-stop flow-end-b">
-          <span class="flow-icon"><svg viewBox="0 0 32 32"><rect x="6" y="5" width="20" height="9" rx="2"/><rect x="6" y="18" width="20" height="9" rx="2"/><path d="M10 9.5h2M10 22.5h2"/></svg></span>
-          <span class="flow-name">The exit</span>
-        </div>
-      </div>
-      <p class="flow-say" id="flow-say">The client checks the exit's Intel quote, the image it runs and the NEAR registry. Only then does it open the tunnel.</p>
-    </figure>
-  </div>
 </section>
 
 <section class="sec" id="checks" aria-labelledby="checks-h">
@@ -133,6 +103,8 @@
 </section>
 
 <section class="sec sec-unlit" id="route" aria-labelledby="route-h">
+  <div class="route-pin" id="route-pin">
+  <div class="route-stage">
   <div class="wrap">
     <header class="sec-head reveal" data-label="02  How it works">
       <h2 id="route-h">How one connection is decided</h2>
@@ -168,6 +140,9 @@
       <li>It reads the NEAR registry: is this build allowed, is this OS allowed, is this exit registered.</li>
       <li>Only then it opens an encrypted tunnel to the key in the quote. If the owner revokes the build, the next connection is refused.</li>
     </ol>
+    <p class="route-count" id="route-count" aria-hidden="true"><span class="route-count-n">Step <b id="route-n">1</b> of 4</span><span class="route-count-bar"><i></i></span></p>
+  </div>
+  </div>
   </div>
 </section>
 

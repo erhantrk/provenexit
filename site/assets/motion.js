@@ -1,5 +1,5 @@
-// Motion for the page, scrubbed by scroll position: section reveals, the hero flow, the route steps and
-// the history line. Nothing plays on a clock. One requestAnimationFrame-throttled scroll/resize handler
+// Motion for the page, scrubbed by scroll position: section reveals, the pinned route scene and the
+// history line. Nothing plays on a clock. One requestAnimationFrame-throttled scroll/resize handler
 // measures each element (getBoundingClientRect), turns its scroll position into a progress 0..1 and
 // writes it as a CSS custom property (--p, --draw) or a class; CSS turns that into transform and
 // opacity, so nothing shifts the layout. Scrolling back reverses every effect.
@@ -60,101 +60,68 @@ function reveals() {
   }
 }
 
-// ---- hero flow: a packet passes three checks, then the tunnel opens ---------------------------
-// An illustration of the order of the checks, drawn by how far the flow card has scrolled. When the
-// current response is a refusal, app.js calls setFlowStop(gate) and the packet stops at that gate,
-// so the picture never contradicts the plate.
-const FLOW_SAY = [
-  "Your client asks the exit for a fresh Intel quote.",
-  "Check 1: Intel's signature on the quote, debug off.",
-  "Check 2: the exact approved image, logging off.",
-  "Check 3: the NEAR registry must still allow this build.",
-  "Only when all three pass does the encrypted tunnel open.",
-];
-const FLOW_STATIC = "The client checks the exit's Intel quote, the image it runs and the NEAR registry. Only then does it open the tunnel.";
-const FLOW_STOPPED = "A check fails here, so the client stops and sends nothing.";
-const STOPS = [0.1, 0.3, 0.5, 0.7, 0.9];
-const flow = { stop: null, apply: null };
-
-/** null: the full illustration. 1, 2 or 3: the gate where the current refusal stops the client. */
-export function setFlowStop(gate) {
-  const g = gate === 1 || gate === 2 || gate === 3 ? gate : null;
-  if (g === flow.stop) return;
-  flow.stop = g;
-  flow.apply?.();
-}
-
-function heroFlow(animated) {
-  const fig = document.getElementById("flow");
-  if (!fig) return;
-  const packet = fig.querySelector(".flow-packet");
-  const fill = fig.querySelector(".flow-fill");
-  const say = document.getElementById("flow-say");
-  const track = fig.querySelector(".flow-track");
-  const gates = [...fig.querySelectorAll(".flow-gate")];
-  const end = fig.querySelector(".flow-end-b");
-  fig.dataset.js = "1";
-
-  /** x: the packet's place along the track, 0.1 (your machine) to 0.9 (the exit). */
-  const draw = (x, scrubbed) => {
-    const last = STOPS[flow.stop ?? 4];
-    x = Math.min(x, last);
-    const step = STOPS.filter((s) => x >= s - 0.001).length - 1; // gates passed, 4 = tunnel open
-    fig.style.setProperty("--p", ((x - 0.1) / 0.8).toFixed(3));
-    packet.style.transform = `translateX(${x * track.clientWidth}px)`;
-    fill.style.transform = `scaleX(${(x - 0.1) / 0.8})`;
-    gates.forEach((g, i) => {
-      const n = i + 1;
-      g.classList.toggle("pass", n <= step && n !== flow.stop);
-      g.classList.toggle("blocked", n === flow.stop && step >= n);
-    });
-    end.classList.toggle("open", step === 4);
-    fig.classList.toggle("tunnel", step === 4);
-    const text = flow.stop !== null && step === flow.stop ? FLOW_STOPPED : scrubbed ? FLOW_SAY[step] : FLOW_STATIC;
-    if (say.textContent !== text) say.textContent = text;
-  };
-
-  if (!animated) {
-    // Reduced motion: the end state, drawn once (and again when the verdict changes).
-    flow.apply = () => draw(0.9, false);
-    flow.apply();
-    return;
-  }
-  // From the moment the card's middle is near the bottom of the viewport until it is a little above
-  // the middle. At load that reads 0; with no scroll room it reads 1 (the end state).
-  const scrub = () => draw(0.1 + 0.8 * progress(fig, 0.5, 0.95, fig, 0.5, 0.4, true), true);
-  flow.apply = scrub;
-  fig.dataset.anim = "1";
-  parts.push(scrub);
-}
-
-// ---- the route: four steps, one after another --------------------------------------------------
+// ---- the route: a pinned scene, four steps one after another ----------------------------------
+// The section is a tall track and its stage is position: sticky (styles.css), so the page seems to
+// stop while scrolling plays the steps. p is how far the track has scrolled past the stage, 0..1.
+// When the stage does not fit the viewport, the section gets data-nopin and the same steps are
+// scrubbed by the plain scroll position instead.
 function routeSteps() {
+  const sec = document.getElementById("route");
+  const pin = document.getElementById("route-pin");
   const fig = document.getElementById("route-fig");
   const list = document.getElementById("route-steps");
-  if (!fig || !list) return;
+  if (!sec || !pin || !fig || !list) return;
+  const stage = pin.querySelector(".route-stage");
+  const wrap = stage.querySelector(".wrap");
   const line = fig.querySelector(".route-line i");
   const drop = fig.querySelector(".route-drop");
+  const [machine, exit, site] = fig.querySelectorAll(".station");
+  const registry = fig.querySelector(".route-registry");
   const items = [...list.children];
-  // Where each step lights, as a fraction of the section's scroll progress.
-  const AT = [0.08, 0.32, 0.56, 0.8];
+  const count = document.getElementById("route-count");
+  const num = document.getElementById("route-n");
   const seg = (p, a, b) => clamp((p - a) / (b - a));
+
+  // Pin only when the stage's content fits in it.
+  let width = -1;
+  const fit = () => {
+    // Recheck on a new width, or when content drawn later (live data) outgrows the pinned stage.
+    if (innerWidth === width && (sec.dataset.nopin || wrap.offsetHeight <= stage.clientHeight)) return;
+    width = innerWidth;
+    sec.removeAttribute("data-nopin");
+    if (wrap.offsetHeight > stage.clientHeight) sec.dataset.nopin = "1";
+  };
 
   fig.dataset.anim = "1";
   list.dataset.anim = "1";
   parts.push(() => {
-    // From the diagram's top at 85% of the viewport until the step cards' bottom is at 85%.
-    const p = progress(fig, 0, 0.85, list, 1, 0.85);
-    const n = AT.filter((a) => p >= a).length;
+    fit();
+    let p;
+    if (sec.dataset.nopin) {
+      // From the diagram's top at 85% of the viewport until the step cards' bottom is at 85%.
+      p = progress(fig, 0, 0.85, list, 1, 0.85);
+    } else {
+      const r = pin.getBoundingClientRect();
+      const room = r.height - stage.clientHeight;
+      p = room > 0 ? clamp((stage.getBoundingClientRect().top - r.top) / room) : 1;
+    }
+    const q = clamp(p / 0.92); // the last stretch holds the finished picture before the page moves on
+    const n = Math.min(4, Math.floor(q * 4) + 1);
+    // Step 1 draws the line to the exit, step 2 lights the exit, step 3 draws the read up to the
+    // registry and lights it, step 4 draws on to the website.
+    line.style.transform = `scaleX(${(seg(q, 0.02, 0.2) * 0.5 + seg(q, 0.76, 0.96) * 0.5).toFixed(3)})`;
+    drop.style.transform = `scaleY(${seg(q, 0.52, 0.7).toFixed(3)})`;
+    machine.classList.add("lit");
+    exit.classList.toggle("lit", q >= 0.25);
+    registry.classList.toggle("lit", q >= 0.7);
+    site.classList.toggle("lit", q >= 0.96);
     fig.dataset.step = String(n);
-    // Step 1 draws the line to the exit, step 3 drops the registry read, step 4 draws on to the website.
-    line.style.transform = `scaleX(${(seg(p, AT[0], AT[1]) * 0.5 + seg(p, AT[3], 1) * 0.5).toFixed(3)})`;
-    drop.style.transform = `scaleY(${seg(p, AT[2], AT[3]).toFixed(3)})`;
     items.forEach((li, i) => {
-      li.style.setProperty("--p", seg(p, AT[i] - 0.1, AT[i]).toFixed(3));
-      li.classList.toggle("on", i < n);
-      li.classList.toggle("now", i === n - 1 && p < 1);
+      li.classList.toggle("done", i < n - 1);
+      li.classList.toggle("now", i === n - 1);
     });
+    count.style.setProperty("--p", q.toFixed(3));
+    if (num.textContent !== String(n)) num.textContent = String(n);
   });
 }
 
@@ -182,11 +149,9 @@ export function startMotion() {
   root.dataset.motionReady = "1";
   if (!on()) {
     root.classList.remove("motion");
-    heroFlow(false);
     return;
   }
   parts.push(reveals);
-  heroFlow(true);
   routeSteps();
   historyDraw();
   addEventListener("scroll", queue, { passive: true });
@@ -199,16 +164,15 @@ export function startMotion() {
     removeEventListener("scroll", queue);
     removeEventListener("resize", queue);
     parts.length = 0;
-    for (const el of document.querySelectorAll("[style*='--p'], [style*='--draw'], .flow-packet, .flow-fill, .route-line i, .route-drop")) {
+    for (const el of document.querySelectorAll("[style*='--p'], [style*='--draw'], .route-line i, .route-drop")) {
       el.style.removeProperty("--p");
       el.style.removeProperty("--draw");
       el.style.removeProperty("transform");
     }
-    document.getElementById("flow")?.removeAttribute("data-anim");
     document.getElementById("route-fig")?.removeAttribute("data-anim");
     document.getElementById("route-steps")?.removeAttribute("data-anim");
     document.getElementById("history-body")?.removeAttribute("data-anim");
-    heroFlow(false);
+    for (const el of document.querySelectorAll("#route .lit, #route-steps .done, #route-steps .now")) el.classList.remove("lit", "done", "now");
   });
 }
 

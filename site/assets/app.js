@@ -3,7 +3,7 @@ import {
   fmtDate, fmtTime, fmtHM, fmtDateTime, fmtDateHM, fmtSpan, short, platformItems, safeUrl, txUrl, accountUrl,
 } from "./state.js";
 import { CONFIG } from "./config.js";
-import { startMotion, scanMotion, setFlowStop } from "./motion.js";
+import { startMotion, scanMotion } from "./motion.js";
 import { startMore, enhanceMore } from "./more.js";
 
 const POLL_MS = 15_000;
@@ -622,14 +622,6 @@ function render() {
     document.title = `ProvenExit: verified ${fmtHM(checkedAt())}`;
   }
   renderHero(state, animate);
-  // The hero flow stops at the gate of the failing check when the client refused; otherwise it is the illustration.
-  let gate = null;
-  if (state === "refused") {
-    const f = failingCheck(json);
-    const stage = f && groupChecks(json.verify.checks).find((x) => x.rows.some((r) => r.number === f.number));
-    gate = { hardware: 1, keys: 1, image: 2 }[stage?.id] ?? 3;
-  }
-  setFlowStop(gate);
   renderChecks(state);
   if (animate) lightChain();
   renderBindings();
