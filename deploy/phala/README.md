@@ -5,7 +5,7 @@
 The dstack app-compose measured into RTMR3 when the VPN exit runs in INTEL/dstack mode. Fill-ins are the real
 public testnet values from `deploy/testnet/env.live`:
 
-- `PLR_VPN_REGISTRY: pe-vpnreg-erhan.testnet` (T16 deploy, tx `FyRSR12vo3KXEwmH8DN7DJQ78SFFHcXoYKeRREUCUWj`)
+- `PLR_VPN_REGISTRY: vpnreg.pe-owner-erhan.testnet` (the keyless, reproducibly built registry; deploy tx `HLKDypfvxYKi55j5RnS7pxfwVbTrNNtRWgmTVhvZBg5L`)
 - `PLR_OPERATOR_ID: pe-op-erhan.testnet`
 - `PLR_OPERATOR_KEY: ${PLR_OPERATOR_KEY}` stays a reference: it is the only secret and is supplied sealed at deploy
   time (`phala deploy -e PLR_OPERATOR_KEY=…`), never written to a file in this repo.
@@ -17,9 +17,10 @@ public testnet values from `deploy/testnet/env.live`:
 
 - exit URL: `https://d2c65be0bde4f9b7628ef399310823e9e6339251-18200.dstack-pha1-prod9.phala.network` (also in
   `deploy/testnet/env.live`)
-- dstack compose hash `6b56436b06a60c2739c0718f198812b5727f98b72467c0335f72b5e01277e2c0`, allowed by the owner in tx
-  `8fU3ScGVptLev9qdGbBsW72kJDcye9CzKTLpQzaKh8dm`; OS measurement `821d442f…d323d` (already allowed)
-- registration (all 13 on-chain checks): tx `HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8`
+- dstack compose hash `9411d0f7125c31e0d392a96d956bcc29c04ee801f0494a12be75ac68f081c85c`, allowed by the owner in tx
+  `HeP6W5LMo9bnGAi9mTF4aoeEQSJrxJvdmcybE6cBRdFx`; OS measurement `821d442f…d323d` allowed in tx `61pQhJr3dbHZTmk9NVquB5yKu6xz18mLWRTD5iRYf722`
+- registration (all 13 on-chain checks, 186.34 Tgas): tx `EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN`
+- (the same exit first registered on the retired registry `pe-vpnreg-erhan.testnet`, compose `6b56436b…`, tx `HSQqnRMu…`)
 
 ## The image (T13)
 

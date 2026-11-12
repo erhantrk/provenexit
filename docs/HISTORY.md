@@ -38,3 +38,11 @@ submission.
 
 - Testnet registry `pe-vpnreg-erhan.testnet`: init, operator approval, spike allowlist, revoke and re-allow txs are
   listed in the README section "NEAR contract details".
+
+## 2026-11-12: keyless, reproducible registry
+
+The registry was redeployed as `vpnreg.pe-owner-erhan.testnet` from a `cargo near build reproducible-wasm` build
+(SHA-256 `a39ed48c…`, code hash `C1hvenbr…`) and its only access key was deleted, closing the "full-access key /
+non-reproducible build" limit of `pe-vpnreg-erhan.testnet`. The live exit's compose (now naming the new registry)
+was allowed and the exit registered 13/13 again (tx `EZDveHx5…`). The first registry is retired.
+

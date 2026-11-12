@@ -18,7 +18,7 @@ services:
       PLR_VPN_PORT: "18200"
       PLR_CHAIN: near
       PLR_NEAR_RPC: https://test.rpc.fastnear.com
-      PLR_VPN_REGISTRY: pe-vpnreg-erhan.testnet
+      PLR_VPN_REGISTRY: vpnreg.pe-owner-erhan.testnet
       PLR_OPERATOR_ID: pe-op-erhan.testnet
       PLR_OPERATOR_KEY: ${PLR_OPERATOR_KEY}
       PLR_ANCHOR_INTERVAL_MS: "60000"

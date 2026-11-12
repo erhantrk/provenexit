@@ -8,6 +8,7 @@ SPEC-TDX §2.3), and Ed25519-authorised Merkle anchoring of receipts.
 
 ```sh
 cd contracts/near
+cargo near build reproducible-wasm                 # the deployed build (Docker, pinned image): SHA-256 a39ed48c…, code hash C1hvenbr…
 cargo near build non-reproducible-wasm --no-abi   # → target/near/plr_registry.wasm (~230 KB, no dcap-qvl)
 cargo test --release                              # 60 tests, incl. the TS-generated vectors and the INTEL checks 1-4/8-13
 cargo test --release --features tdx-test-clock    # 61 tests: + TV-Q1 through the real dcap pipeline (fixed clock)

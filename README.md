@@ -11,7 +11,7 @@ A VPN exit on Intel TDX whose approved, logging-off build is checked on NEAR bef
 Live exit on Phala Cloud (runs during judging) · NEAR **testnet only** · MIT
 
 [![exit](https://img.shields.io/badge/exit-Intel%20TDX%20%C2%B7%20Phala-111110?style=flat-square)](deploy/phala/README.md)
-[![on-chain checks](https://img.shields.io/badge/on--chain%20checks-13%2F13-3FB950?style=flat-square)](https://testnet.nearblocks.io/txns/HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8)
+[![on-chain checks](https://img.shields.io/badge/on--chain%20checks-13%2F13-3FB950?style=flat-square)](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN)
 [![network](https://img.shields.io/badge/network-NEAR%20testnet%20only-555?style=flat-square)](#limits-and-trust)
 [![tests](https://github.com/erhantrk/provenexit/actions/workflows/tests.yml/badge.svg)](https://github.com/erhantrk/provenexit/actions/workflows/tests.yml)
 [![license](https://img.shields.io/badge/license-MIT-555?style=flat-square)](LICENSE)
@@ -26,7 +26,7 @@ Live exit on Phala Cloud (runs during judging) · NEAR **testnet only** · MIT
 
 ProvenExit's client checks, before it sends a byte, that the exit runs an approved build with logging off. The proof is an Intel-signed quote, checked against a NEAR registry. Built at NEAR HACKATHON (2026-11).
 
-> **Status:** a live exit runs on Intel TDX hardware (Phala Cloud, production OS `dstack-0.6.1`). The NEAR contract verified its quote on chain, all 13 checks, before listing its keys ([tx `HSQqnRMu…`](https://testnet.nearblocks.io/txns/HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8)). The full local demo (option 1) uses a mock root. Limits: [Limits and trust](#limits-and-trust).
+> **Status:** a live exit runs on Intel TDX hardware (Phala Cloud, production OS `dstack-0.6.1`). The NEAR contract verified its quote on chain, all 13 checks, before listing its keys ([tx `EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN)). The full local demo (option 1) uses a mock root. Limits: [Limits and trust](#limits-and-trust).
 
 Demo video: (link added at submission)
 
@@ -50,10 +50,11 @@ You see 16 `✔` lines and `✔ VERIFIED (FIXTURE REPLAY …)`. The full local d
 
 ## Numbers
 
-- **188.08 Tgas:** one NEAR transaction verified the live exit's real Intel TDX quote inside the contract, **all 13 checks** (DCAP signature, TCB, event log, compose, allowlists, key binding), then listed its keys ([tx `HSQqnRMu…`](https://testnet.nearblocks.io/txns/HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8)).
+- **186.34 Tgas:** one NEAR transaction verified the live exit's real Intel TDX quote inside the contract, **all 13 checks** (DCAP signature, TCB, event log, compose, allowlists, key binding), then listed its keys ([tx `EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN)).
+- **0 access keys** on the registry contract, and its code rebuilds from this repo to the deployed hash (`cargo near build reproducible-wasm` → code hash `C1hvenbr…`): nobody can swap the code that checks the exits.
 - **1 live exit** on Intel TDX: TCB `UpToDate`, debug off, image pinned by digest, container logging off, only ports 80 and 443, at most 32 tunnels.
 - **299 client tests and 60 contract tests** pass (client suite; contract tests in [`contracts/near/README.md`](contracts/near/README.md)).
-- **Owner revoke and re-allow** transactions ran on the NEAR testnet registry (on the test compose; a client refusing right after a revocation is shown on the local demo stack) ([revoke tx](https://testnet.nearblocks.io/txns/3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz), [re-allow tx](https://testnet.nearblocks.io/txns/642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV)).
+- **Owner revoke and re-allow** transactions ran on the first testnet registry (on the test compose; a client refusing right after a revocation is shown on the local demo stack) ([revoke tx](https://testnet.nearblocks.io/txns/3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz), [re-allow tx](https://testnet.nearblocks.io/txns/642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV)).
 
 ## Tracks
 
@@ -61,7 +62,7 @@ Proposed (Erhan confirms at submission): **Privacy & Private AI** (main) · AI S
 
 ## What NEAR does here
 
-A NEAR contract on testnet ([`pe-vpnreg-erhan.testnet`](https://testnet.nearblocks.io/address/pe-vpnreg-erhan.testnet)) runs Intel DCAP verification itself, with `dcap-qvl` inside the contract. It also checks the dstack event log, the compose hash and the OS allowlists before it lists an exit's keys. The owner can revoke a build on chain. The client reads the registry before every new connection, so a revoked build is refused on the next connection, even with a cached attestation. The same contract anchors Merkle roots of session receipts.
+A keyless NEAR contract on testnet ([`vpnreg.pe-owner-erhan.testnet`](https://testnet.nearblocks.io/address/vpnreg.pe-owner-erhan.testnet)) runs Intel DCAP verification itself, with `dcap-qvl` inside the contract. It also checks the dstack event log, the compose hash and the OS allowlists before it lists an exit's keys. The owner can revoke a build on chain. The client reads the registry before every new connection, so a revoked build is refused on the next connection, even with a cached attestation. The same contract anchors Merkle roots of session receipts.
 
 [Judge path](#how-to-verify-each-claim) · [Limits and trust](#limits-and-trust) · [AI use](#ai-use) · [Prior code](#prior-code-and-hackathon-window-rules-q-001q-003q-004) · [History](docs/HISTORY.md)
 
@@ -77,7 +78,8 @@ A NEAR contract on testnet ([`pe-vpnreg-erhan.testnet`](https://testnet.nearbloc
 |---|---|---|
 | the live exit is real Intel TDX, approved and registered | `scripts/try-live.sh` (or `vpn verify` with `deploy/testnet/env.live`) | every check `✔`, `✔ VERIFIED`, then a different IP through the exit |
 | the same, without network | `node client/dist/cli.js vpn verify --fixture fixtures/live-exit` | `✔ VERIFIED (FIXTURE REPLAY …)` |
-| NEAR verified Intel's signature itself | registration tx [`HSQqnRMu…`](https://testnet.nearblocks.io/txns/HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8) | success, 188.08 Tgas: all 13 checks ran in the contract |
+| NEAR verified Intel's signature itself | registration tx [`EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN) | success, 186.34 Tgas: all 13 checks ran in the contract |
+| the registry runs this source and nobody can change it | `cd contracts/near && cargo near build reproducible-wasm` (Docker), then compare with `view_account` of `vpnreg.pe-owner-erhan.testnet` | SHA-256 `a39ed48c…0d9e`, code hash `C1hvenbrzHKN1n1f2z63Duburr8YXLAKBescrEvarCGM`; `view_access_key_list` returns no keys |
 | the exit image is pinned and logging is off | `deploy/phala/docker-compose.yml`; `checkDstackComposePolicy` in [`packages/shared/src/attest/compose-policy.ts`](packages/shared/src/attest/compose-policy.ts) | image by digest, `logging.driver: none`; the same check rejects the real 2026-11-09 spike compose (`E_COMPOSE_POLICY`) |
 | image = this source | [`scripts/build-exit-image.sh`](scripts/build-exit-image.sh) builds it from the `vpn-honest` bundle and [`deploy/phala/Dockerfile`](deploy/phala/Dockerfile) | not reproducible yet: a rebuild is not shown to give the same digest (no build provenance) |
 | revocation works | option 1 (MOCK stack) or the testnet revoke/re-allow txs above | `refused with E_COMPOSE_NOT_ALLOWED`, then restored by re-approval |
@@ -143,32 +145,39 @@ A NEAR contract on testnet ([`pe-vpnreg-erhan.testnet`](https://testnet.nearbloc
 
 ## NEAR contract details
 
-- Contract [`pe-vpnreg-erhan.testnet`](https://testnet.nearblocks.io/address/pe-vpnreg-erhan.testnet)
+- Contract [`vpnreg.pe-owner-erhan.testnet`](https://testnet.nearblocks.io/address/vpnreg.pe-owner-erhan.testnet)
   ([`contracts/near`](contracts/near), near-sdk 5.29.1): owner allowlist (compose hash, OS measurement), operator
   organizations, instance records, receipt anchors, and **on-chain Intel DCAP verification**.
 - `register_instance_tdx` runs `dcap-qvl` 0.7.1 inside the contract: thirteen ordered checks (DCAP quote signature and
   TCB status, dstack event log, compose hash, allowlists, `report_data` binding) before an exit's keys are listed. It
   is payable (0.1 NEAR) and called with 300 Tgas. Measured: **179.63 Tgas** to DCAP-verify dcap-qvl's sample quote
   in a near-sandbox spike (test-clock build); on testnet, the live exit's registration passed all 13 checks for
-  **188.08 Tgas** ([tx `HSQqnRMu…`](https://testnet.nearblocks.io/txns/HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8)). An earlier run on the 2026-11-09 test-VM quote burnt 186.03 Tgas and stopped,
-  as designed, at check 13 (that VM never bound an exit's keys).
-- Deployed wasm: 622 282 bytes, SHA-256 `e2864a9c75f592af91cbdf36ba3918e5793434a949f1daca2b92df40db2b1bdc`.
-  Initialization (`new`, owner `pe-owner-erhan.testnet`, root `INTEL`, TTL 86 400 000 ms): tx
-  [`FyRSR12vo3KXEwmH8DN7DJQ78SFFHcXoYKeRREUCUWj`](https://testnet.nearblocks.io/txns/FyRSR12vo3KXEwmH8DN7DJQ78SFFHcXoYKeRREUCUWj).
-- Operator `pe-op-erhan.testnet` approved as organization `erhan-demo`: tx
-  [`G24JXkyLJZQjV8FFHeG9x5ZGy9mNVgwKtSi8p8xEZHL1`](https://testnet.nearblocks.io/txns/G24JXkyLJZQjV8FFHeG9x5ZGy9mNVgwKtSi8p8xEZHL1).
-- The live exit's compose hash `6b56436b…e2c0` was allowed by the owner in tx
-  [`8fU3ScGVptLev9qdGbBsW72kJDcye9CzKTLpQzaKh8dm`](https://testnet.nearblocks.io/txns/8fU3ScGVptLev9qdGbBsW72kJDcye9CzKTLpQzaKh8dm); its OS measurement is the same `821d442f…d323d`
-  (production `dstack-0.6.1`). The exit then registered itself: tx
-  [`HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8`](https://testnet.nearblocks.io/txns/HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8). It re-registers every 6 h (records expire after 24 h)
-  and anchors receipt roots on the same contract.
-- Allowlists for the **spike** (not an exit) compose `b9823a79…d05f` and OS measurement `821d442f…d323d`. They are
+  **186.34 Tgas** ([tx `EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN)).
+- **Reproducible and keyless.** Built with `cargo near build reproducible-wasm` (image
+  `sourcescan/cargo-near:0.23.0-rust-1.99.1`, pinned by digest in `contracts/near/Cargo.toml`): 617 739 bytes,
+  SHA-256 `a39ed48c2c7cdad5d5b732031db1f115cb6569400bcb7521c81061368d8a0d9e`, on-chain code hash
+  `C1hvenbrzHKN1n1f2z63Duburr8YXLAKBescrEvarCGM`. Account created [`DnEwrCy4…`](https://testnet.nearblocks.io/txns/DnEwrCy4FNs9AybgXwWnVm9TJy9Spveoio7EWJ5VLPKT),
+  deployed and initialized (`new`, owner `pe-owner-erhan.testnet`, root `INTEL`, TTL 86 400 000 ms)
+  [`HLKDypfv…`](https://testnet.nearblocks.io/txns/HLKDypfvxYKi55j5RnS7pxfwVbTrNNtRWgmTVhvZBg5L), then its only key deleted
+  [`58sZ72Aa…`](https://testnet.nearblocks.io/txns/58sZ72Aa7aAtCFjYQnKxxkcZ2PbGoS6D1yhBam343kiz): the code can never change.
+- Owner calls on it: operator `pe-op-erhan.testnet` approved as organization `erhan-demo`
+  [`4Jxoaw46…`](https://testnet.nearblocks.io/txns/4Jxoaw46DokBTCHWXTsToD2ZiFRSaqXCzefkKuo1Ajox); OS measurement `821d442f…d323d` (production
+  `dstack-0.6.1`) allowed [`61pQhJr3…`](https://testnet.nearblocks.io/txns/61pQhJr3dbHZTmk9NVquB5yKu6xz18mLWRTD5iRYf722); the live exit's compose hash
+  `9411d0f7…c85c` allowed [`HeP6W5LM…`](https://testnet.nearblocks.io/txns/HeP6W5LMo9bnGAi9mTF4aoeEQSJrxJvdmcybE6cBRdFx). The exit then
+  registered itself ([`EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN)). It re-registers every 6 h (records expire after 24 h) and
+  anchors receipt roots on the same contract. Only the live exit's compose is allowed here (no test composes).
+- **The first registry, `pe-vpnreg-erhan.testnet` (retired 2026-11-12).** Same code, but a non-reproducible build
+  (622 282 bytes, SHA-256 `e2864a9c…`) with a full-access key left on it. History on it: init
+  [`FyRSR12v…`](https://testnet.nearblocks.io/txns/FyRSR12vo3KXEwmH8DN7DJQ78SFFHcXoYKeRREUCUWj), operator approval
+  [`G24JXkyL…`](https://testnet.nearblocks.io/txns/G24JXkyLJZQjV8FFHeG9x5ZGy9mNVgwKtSi8p8xEZHL1), the live exit's first 13/13 registration
+  [`HSQqnRMu…`](https://testnet.nearblocks.io/txns/HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8) (188.08 Tgas). The client no longer uses it.
+  - Allowlists for the **spike** (not an exit) compose `b9823a79…d05f` and OS measurement `821d442f…d323d`. They are
   allowed on the INTEL registry **only to demonstrate checks 1–12**; the client refuses that compose with
   `E_COMPOSE_POLICY` (no `exit` service, unpinned image), but the registry itself would list a registration under it,
   so the owner should `revoke_compose b9823a79…` once the demo video is recorded (not done here): txs
   [`EmWz2Uawni6PicfCqrG8YwkZeZwgkyQMTCbGACQwq6sM`](https://testnet.nearblocks.io/txns/EmWz2Uawni6PicfCqrG8YwkZeZwgkyQMTCbGACQwq6sM)
   and [`E3to6jCjasF37vLqRtsFKLsehLpXL2J1xK7PNFbHnwbX`](https://testnet.nearblocks.io/txns/E3to6jCjasF37vLqRtsFKLsehLpXL2J1xK7PNFbHnwbX).
-- Revocation works on testnet: `revoke_compose b9823a79…` tx
+  - Revocation works on testnet: `revoke_compose b9823a79…` tx
   [`3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz`](https://testnet.nearblocks.io/txns/3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz),
   re-allow tx [`642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV`](https://testnet.nearblocks.io/txns/642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV).
 
@@ -181,7 +190,7 @@ Every limit and disclosure from the earlier README is kept here.
 - **The live exit runs on Intel TDX** on Phala Cloud (instance `tdx.small`, production OS `dstack-0.6.1`, not the
   SSH-enabled dev OS), from the image `ghcr.io/erhantrk/provenexit-exit@sha256:7e53f383…1ad5` pinned in
   [`deploy/phala/docker-compose.yml`](deploy/phala/docker-compose.yml). The NEAR contract verified its quote on chain
-  (all 13 checks) before listing its keys ([tx `HSQqnRMu…`](https://testnet.nearblocks.io/txns/HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8)). It is paid by the hour on Phala; it runs through
+  (all 13 checks) before listing its keys ([tx `EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN)). It is paid by the hour on Phala; it runs through
   judging and may be stopped afterwards. [`fixtures/live-exit/`](fixtures/live-exit) keeps a replayable capture.
 - **Safeguards in the measured compose:** the exit dials only ports 80 and 443 (`PLR_VPN_ALLOWED_PORTS`) and serves at
   most 32 tunnels at once (`PLR_VPN_MAX_TUNNELS`). Both are part of the compose hash the owner approved.
@@ -229,15 +238,10 @@ Every limit and disclosure from the earlier README is kept here.
 - **A single owner key decides the allowlist (R12).** `pe-owner-erhan.testnet` is one NEAR account: whoever holds that
   key can allow or revoke builds and operators. The client pins the Intel root and the registry contract, not the
   owner. Multisig / a DAO (e.g. Sputnik) is future work.
-- **A second trust root: the contract account's own key.** The final review found one **FullAccess** key still on
-  `pe-vpnreg-erhan.testnet` (`view_access_key_list`); it was not removed. Whoever holds it can deploy a different
-  wasm that answers `is_compose_allowed` with `true` and invents `get_instance` records while `get_root` stays
-  `INTEL`; the client pins only the contract id, so it would trust those answers, and "NEAR verified Intel's
-  signature" would then hold for nothing. The deployed wasm is also not reproducible: it was built with
-  `non-reproducible-wasm`, and a rebuild from this source on the reviewer's machine gave SHA-256 `3bab2448…`, not the
-  deployed `e2864a9c…`, so a reader cannot tie the deployed code to this source. Fix, not done here (needs a
-  redeploy and a human with the key): `cargo near build reproducible-wasm`, redeploy, delete the full-access key (or
-  route upgrades through the owner/DAO), and optionally pin `view_account.code_hash` in the client.
+- **The contract account's own key: closed.** The registry the client uses has no access keys, so nobody can deploy a
+  different wasm under its name, and its code rebuilds from this repo to the deployed hash. The client still pins
+  only the contract id (pinning `view_account.code_hash` as well is future work). The first registry
+  (`pe-vpnreg-erhan.testnet`) still has a full-access key and a non-reproducible build; it is retired.
 - **In a cloud deployment, Phala's dstack-gateway terminates TLS.** HTTPS to the exit ends at the gateway
   (`https://<app-id>-18200.<gateway-domain>`), which then speaks to the container; the tunnel inside is end-to-end
   encrypted to the attested key, so the gateway sees only ciphertext, cannot impersonate the exit (its key is inside
@@ -290,7 +294,7 @@ frozen interfaces in `SPEC-TDX.md`) were generated by Claude; only the interface
                 │ HTTPS (TLS ends at the gateway;      │ HTTPS JSON-RPC (views)
                 │ tunnel stays E2E to attested key)    │ https://rpc.testnet.fastnear.com
  ┌──────────────▼──────────────────────────┐   ┌───────▼───────────────────────────────────────┐
- │ Phala Cloud (UNTRUSTED operator/host)   │   │ NEAR testnet: pe-vpnreg-erhan.testnet         │
+ │ Phala Cloud (UNTRUSTED operator/host)   │   │ NEAR testnet: vpnreg.pe-owner-erhan.testnet   │
  │  dstack-gateway  *.phala.network:443    │   │  owner: allow/revoke compose + OS, orgs       │
  │  ┌──────── Intel TDX CVM (dstack OS) ─┐ │   │  register_instance_tdx: dcap-qvl ON-CHAIN,    │
  │  │ guest-agent /var/run/dstack.sock   │ │   │    dstack event log, compose/OS allowlist,    │

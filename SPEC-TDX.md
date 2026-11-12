@@ -437,7 +437,7 @@ export function isCollateralJson(c: unknown): c is CollateralJson;
 ```
 fixtures/phala-2026-11-12/
   meta.json        {"captured_at_ms":1794460000000,"exit_url":"https://<app-id>-18200.<gw>.phala.network",
-                    "network":"testnet","registry":"pe-vpnreg-erhan.testnet","registration_tx":"<tx hash>",
+                    "network":"testnet","registry":"vpnreg.pe-owner-erhan.testnet","registration_tx":"<tx hash>",
                     "revocation_tx":"<tx hash or null>","note":"captured by scripts/capture-fixture.mjs"}
   nonce.hex        64 hex chars (the nonce the capture used)
   bundle.json      the exact /v1/attestation response body (§1.5)
@@ -468,7 +468,7 @@ Mock-mode fixture: none needed. `bash scripts/demo.sh` with `PLR_LLM=mock` is th
 | `PLR_VPN_HOST` / `PLR_VPN_PORT` | `0.0.0.0` / `18200` | yes |
 | `PLR_CHAIN` | `near` | yes |
 | `PLR_NEAR_RPC` | `https://test.rpc.fastnear.com` | yes |
-| `PLR_VPN_REGISTRY` | `<VPN_REGISTRY_ID>` e.g. `pe-vpnreg-erhan.testnet` | yes |
+| `PLR_VPN_REGISTRY` | `<VPN_REGISTRY_ID>` e.g. `vpnreg.pe-owner-erhan.testnet` | yes |
 | `PLR_OPERATOR_ID` | `<OPERATOR_ID>` e.g. `pe-op-erhan.testnet` | yes |
 | `PLR_OPERATOR_KEY` | `ed25519:<base58>` (`NEAR_KEY_RE` in `enclave/src/near.ts`) | **no**: sealed env (`phala deploy -e`), the only secret |
 | `PLR_ANCHOR_INTERVAL_MS` | `60000` | yes |

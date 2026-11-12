@@ -1,9 +1,9 @@
 {
-  "captured_at_ms": 1794470574378,
+  "captured_at_ms": 1794487455834,
   "exit_url": "https://d2c65be0bde4f9b7628ef399310823e9e6339251-18200.dstack-pha1-prod9.phala.network",
   "network": "testnet",
-  "registry": "pe-vpnreg-erhan.testnet",
-  "registration_tx": "HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8",
+  "registry": "vpnreg.pe-owner-erhan.testnet",
+  "registration_tx": "EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN",
   "revocation_tx": null,
   "note": "captured by scripts/capture-fixture.mjs"
 }
