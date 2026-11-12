@@ -14,9 +14,9 @@ From `git log` (dates are commit dates).
 
 | date | commits | what |
 |---|---|---|
-| 2026-10-23 | `58c5ea9`..`79e29dd` | PLR-v1 spec and build (NEAR registry, TEE router, client SDK, e2e, demo); PLR-VPN-v1 (SOCKS5 proxy, no-logs exit); VPN milestone 2 (forward-secret tunnel v2, DoH-only exit DNS, two-hop with on-chain operator orgs) |
-| 2026-10-24 | `96edf2c`..`4fb2f08` | Combo milestone (LLM router and VPN exit in one TD); multi-chain registries: Zcash record log, EVM/Monad (Solidity), Stellar (Soroban), Solana |
-| 2026-11-11 | `842838b`.. | The hackathon plan in `docs/plan/`, the 2026-11-09 Phala spike fixture, then tasks T01..T24 (Intel/dstack path, DCAP in the contract, compose policy, testnet registry, client fixture replay), review fixes, README and AI_USE |
+| 2026-10-23 | `c2a35e4`..`977c648` | PLR-v1 spec and build (NEAR registry, TEE router, client SDK, e2e, demo); PLR-VPN-v1 (SOCKS5 proxy, no-logs exit); VPN milestone 2 (forward-secret tunnel v2, DoH-only exit DNS, two-hop with on-chain operator orgs) |
+| 2026-10-24 | `34900ba`..`9bd402e` | Combo milestone (LLM router and VPN exit in one TD); multi-chain registries: Zcash record log, EVM/Monad (Solidity), Stellar (Soroban), Solana |
+| 2026-11-11 | `4692b17`.. | The hackathon plan in `docs/plan/`, the 2026-11-09 Phala spike fixture, then tasks T01..T24 (Intel/dstack path, DCAP in the contract, compose policy, testnet registry, client fixture replay), review fixes, README and AI_USE |
 
 The first group is the disclosed baseline; see "Prior code and hackathon window" in the README.
 

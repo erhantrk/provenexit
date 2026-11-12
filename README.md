@@ -231,16 +231,16 @@ Every limit and disclosure from the earlier README is kept here.
 
 ## Prior code and hackathon window (rules Q-001/Q-003/Q-004)
 
-- **Disclosed baseline:** commits `58c5ea9`..`4fb2f08` (2026-10-23/24 — after the 2026-10-19 announcement, before the
+- **Disclosed baseline:** commits `c2a35e4`..`9bd402e` (2026-10-23/24 — after the 2026-10-19 announcement, before the
   2026-11-01 start) built the mock-root protocol, the NEAR registry, the VPN exit and the multi-chain registries. They
   are prior work and are not claimed as hackathon-window work.
-- **Judged work:** `4fb2f08`..`hackathon-submission` (from 2026-11-09): the real Intel TDX path (dstack event log,
+- **Judged work:** `9bd402e`..`hackathon-submission` (from 2026-11-09): the real Intel TDX path (dstack event log,
   DCAP in the client and on-chain in the contract, compose policy, the Phala spike, the local stack, the exit image
   and the live TDX exit).
 - Branches and tags: all of this work is on `main` (the same commits as the branch `provenexit`). The tags
-  `window-start` (`58c5ea9`), `real-tdx-start` (`4fb2f08`) and `hackathon-submission` (final HEAD) are to be created by
+  `window-start` (`c2a35e4`), `real-tdx-start` (`9bd402e`) and `hackathon-submission` (final HEAD) are to be created by
   the maintainers; none exists in this snapshot, so the links use `main`.
-- Diffs: [4fb2f08...main](https://github.com/erhantrk/provenexit/compare/4fb2f08...main) (the real-TDX
+- Diffs: [9bd402e...main](https://github.com/erhantrk/provenexit/compare/9bd402e...main) (the real-TDX
   work) and [the full history](https://github.com/erhantrk/provenexit/commits/main).
 - The design record is [`docs/plan/INTERFACES.md`](docs/plan/INTERFACES.md) (frozen interfaces), with the decisions and
   findings in [`NOTES-DECISIONS.md`](NOTES-DECISIONS.md). The internal plan and task list it cites (PLAN, TASKS) are not published.
