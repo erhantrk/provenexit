@@ -1,0 +1,242 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  deriveState, colourOf, failingCheck, groupChecks, allowlistStatus, rowStatus, expiryOf,
+  short, fmtDateTime, fmtHM, fmtSpan, platformItems, txUrl, safeUrl, accountUrl, STALE_MS,
+} from "../assets/state.js";
+
+const here = new URL(".", import.meta.url);
+const text = (p) => readFileSync(new URL(p, here), "utf8");
+const fixture = (name) => JSON.parse(text(`../fixtures/${name}.json`));
+const just = (json) => Date.parse(json.checked_at) + 14_000; // 14 s after the check
+const clone = (v) => structuredClone(v);
+
+const online = fixture("online");
+const offline = fixture("offline");
+const retired = fixture("offline-retired");
+const refused = fixture("refused");
+const error = fixture("error");
+
+test("the state table, one case per row", () => {
+  assert.equal(deriveState(undefined, Date.now()), "loading");
+  assert.equal(deriveState(null, Date.now()), "error");
+  assert.equal(deriveState("<html>", Date.now()), "error");
+  assert.equal(deriveState([], Date.now()), "error");
+  assert.equal(deriveState(error, just(error)), "error");
+  assert.equal(deriveState(online, Date.parse(online.checked_at) + STALE_MS + 1), "stale");
+  assert.equal(deriveState(offline, just(offline)), "offline");
+  assert.equal(deriveState(retired, just(retired)), "offline");
+  assert.equal(deriveState(online, just(online)), "verified");
+  assert.equal(deriveState(refused, just(refused)), "refused");
+});
+
+test("offline wins over REFUSED", () => {
+  assert.equal(offline.verify.verdict, "REFUSED");
+  assert.equal(deriveState(offline, just(offline)), "offline");
+  const j = clone(refused);
+  j.exit.online = false;
+  assert.equal(deriveState(j, just(j)), "offline");
+});
+
+test("a stopped exit is never verified, whatever the verdict says", () => {
+  for (const value of [false, null, undefined, "true", 1]) {
+    const j = clone(online);
+    j.exit.online = value;
+    assert.equal(deriveState(j, just(j)), "offline", `online=${String(value)}`);
+  }
+  const j = clone(online);
+  delete j.exit;
+  assert.equal(deriveState(j, just(j)), "offline");
+});
+
+test("error wins over VERIFIED", () => {
+  const j = clone(online);
+  j.error = "registry unreadable: fetch failed";
+  assert.equal(deriveState(j, just(j)), "error");
+  j.error = "";
+  assert.equal(deriveState(j, just(j)), "error");
+});
+
+test("VERIFIED with a failed check, or with no checks, is not verified", () => {
+  const a = clone(online);
+  a.verify.checks[4].ok = false;
+  assert.equal(deriveState(a, just(a)), "error");
+  const b = clone(online);
+  b.verify.checks = [];
+  assert.equal(deriveState(b, just(b)), "error");
+  const c = clone(online);
+  delete c.verify.checks;
+  assert.equal(deriveState(c, just(c)), "error");
+  const d = clone(online);
+  d.verify.checks[0].ok = "true";
+  assert.equal(deriveState(d, just(d)), "error");
+});
+
+test("an unknown verdict or a missing checked_at is an error", () => {
+  const a = clone(online);
+  a.verify.verdict = "OK";
+  assert.equal(deriveState(a, just(a)), "error");
+  const b = clone(online);
+  delete b.checked_at;
+  assert.equal(deriveState(b, Date.now()), "error");
+});
+
+test("stale: a verified result older than five minutes is not shown as verified", () => {
+  const at = Date.parse(online.checked_at);
+  assert.equal(deriveState(online, at + STALE_MS), "verified");
+  assert.equal(deriveState(online, at + STALE_MS + 1), "stale");
+  assert.equal(colourOf(online, at + STALE_MS + 1).face, "unlit");
+  assert.equal(colourOf(online, at + STALE_MS + 1).marks, false);
+});
+
+test("nothing is green unless the verdict is VERIFIED and the exit is online", () => {
+  const variants = [];
+  for (const base of [online, offline, retired, refused, error]) {
+    for (const exitOnline of [true, false, null]) {
+      for (const verdict of ["VERIFIED", "REFUSED", "OK", null]) {
+        for (const err of [null, "registry unreadable"]) {
+          for (const age of [14_000, STALE_MS + 1]) {
+            for (const breakCheck of [false, true]) {
+              const j = clone(base);
+              j.exit.online = exitOnline;
+              j.verify.verdict = verdict;
+              j.error = err;
+              if (breakCheck && j.verify.checks.length > 0) j.verify.checks[0].ok = false;
+              variants.push([j, Date.parse(j.checked_at) + age]);
+            }
+          }
+        }
+      }
+    }
+  }
+  let green = 0;
+  for (const [j, now] of variants) {
+    const c = colourOf(j, now);
+    if (c.face === "go") {
+      green++;
+      assert.equal(j.verify.verdict, "VERIFIED");
+      assert.equal(j.exit.online, true);
+      assert.equal(j.error, null);
+      assert.ok(j.verify.checks.length > 0 && j.verify.checks.every((x) => x.ok === true));
+      assert.ok(now - Date.parse(j.checked_at) <= STALE_MS);
+    }
+    // No mark of any colour without a current answer from a running exit.
+    if (c.marks) {
+      assert.equal(j.exit.online, true);
+      assert.equal(j.error, null);
+      assert.ok(now - Date.parse(j.checked_at) <= STALE_MS);
+    }
+    assert.equal(c.face === "go", c.state === "verified");
+    assert.equal(c.face === "stop", c.state === "refused");
+  }
+  assert.ok(green > 0, "the verified case is in the set");
+  for (const input of [undefined, null, "x"]) {
+    assert.deepEqual(colourOf(input, Date.now()), { state: input === undefined ? "loading" : "error", face: "unlit", marks: false });
+  }
+});
+
+test("the stylesheet uses the green and red tokens only under a verified or refused page state", () => {
+  const css = text("../assets/styles.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => [m[1].trim(), m[2]]);
+  const coloured = rules.filter(([, body]) => /var\(--(go|stop)[a-z-]*\)/.test(body));
+  assert.ok(coloured.length > 0, "the state rules exist");
+  for (const [selector, body] of coloured) {
+    const allowed = /var\(--stop[a-z-]*\)/.test(body) && !/var\(--go[a-z-]*\)/.test(body)
+      ? /^html\[data-state="refused"\]|^html\[data-state="verified"\]/
+      : /^html\[data-state="verified"\]|^html\[data-state="refused"\]/;
+    for (const part of selector.split(",").map((s) => s.trim())) {
+      assert.match(part, allowed, `colour outside a state selector: ${part}`);
+      assert.doesNotMatch(part, /\.recorded/, `colour inside a recorded block: ${part}`);
+    }
+  }
+  // The raw hex values appear once, where the tokens are defined.
+  for (const hex of ["#3DDC84", "#0E7A40", "#FF6B57", "#B4231A"]) {
+    assert.equal(css.split(hex).length - 1, 1, `${hex} is used once`);
+  }
+  // The plate turns green only for the verified state.
+  for (const [selector, body] of coloured.filter(([, b]) => /var\(--go\)/.test(b))) {
+    for (const part of selector.split(",")) assert.match(part.trim(), /^html\[data-state="verified"\]/);
+    assert.ok(body.length > 0);
+  }
+});
+
+test("refused: the failing check is the first failed row, not a row that was never reached", () => {
+  const f = failingCheck(refused);
+  assert.equal(f.number, 14);
+  assert.equal(f.check.name, "compose hash allowed by registry");
+  assert.equal(f.check.detail, "E_COMPOSE_NOT_ALLOWED");
+  assert.equal(failingCheck(online), null);
+  assert.equal(rowStatus({ ok: false, detail: "not checked" }), "skip");
+  assert.equal(rowStatus({ ok: false, detail: "" }), "fail");
+  assert.equal(rowStatus({ ok: true, detail: "" }), "pass");
+});
+
+test("stages: counts come from the data, the live list has 18 rows and the replay 16", () => {
+  const live = groupChecks(online.verify.checks);
+  assert.deepEqual(live.map((s) => [s.id, s.passed, s.rows.length, s.status]), [
+    ["hardware", 7, 7, "pass"], ["keys", 2, 2, "pass"], ["image", 4, 4, "pass"], ["near", 3, 3, "pass"], ["connection", 2, 2, "pass"],
+  ]);
+  assert.deepEqual(live.flatMap((s) => s.rows.map((r) => r.number)), Array.from({ length: 18 }, (_, i) => i + 1));
+  const rec = groupChecks(online.replay.checks);
+  assert.deepEqual(rec.map((s) => [s.id, s.rows.length]), [["hardware", 7], ["keys", 2], ["image", 4], ["near", 3]]);
+  const r = groupChecks(refused.verify.checks);
+  assert.deepEqual(r.map((s) => s.status), ["pass", "pass", "pass", "fail", "skip"]);
+  const off = groupChecks(offline.verify.checks);
+  assert.deepEqual(off.map((s) => s.status), ["fail", "skip", "skip", "skip", "skip"]);
+  const extra = groupChecks([...online.verify.checks, { name: "a new check", ok: true, detail: "" }]);
+  assert.equal(extra.at(-1).id, "other");
+  assert.equal(extra.at(-1).rows[0].number, 19);
+  assert.deepEqual(groupChecks(undefined), []);
+});
+
+test("allowlist status comes from the newest matching event", () => {
+  const hash = online.exit.compose.hash;
+  assert.equal(allowlistStatus(online.registry.events, hash).allowed, true);
+  assert.equal(allowlistStatus(refused.registry.events, hash).allowed, false);
+  assert.equal(allowlistStatus([], hash), null);
+  assert.equal(allowlistStatus(online.registry.events, null), null);
+  // Retired registry: revoked at 14:02:51, allowed again at 14:03:00.
+  const b98 = "b9823a796f86b61b4fae123f912d98f25914326f5789ab2f964b66d5f086d05f";
+  assert.equal(allowlistStatus(retired.registry.events, b98).allowed, true);
+  assert.equal(allowlistStatus([...retired.registry.events].reverse(), b98).allowed, true);
+});
+
+test("expiry is compared with the clock", () => {
+  const at = Date.parse(online.instance.expires_at);
+  assert.equal(expiryOf(online.instance, at - 1).expired, false);
+  assert.equal(expiryOf(online.instance, at).expired, true);
+  assert.equal(expiryOf(null, at), null);
+});
+
+test("formatters", () => {
+  assert.equal(short("9411d0f7125c31e0d392a96d956bcc29c04ee801f0494a12be75ac68f081c85c"), "9411d0f7…c85c");
+  assert.equal(short("INTEL"), "INTEL");
+  assert.equal(fmtDateTime("2026-11-12T12:55:50.318Z"), "12 Nov 2026, 12:55:50 UTC");
+  assert.equal(fmtHM("2026-11-12T02:05:50.318Z"), "02:05 UTC");
+  assert.equal(fmtDateTime("nope"), "");
+  assert.equal(fmtSpan(14_900), "14 seconds");
+  assert.equal(fmtSpan(1000), "1 second");
+  assert.equal(fmtSpan(12 * 60_000), "12 minutes");
+  assert.equal(fmtSpan(23.5 * 3600_000), "23 hours");
+  assert.deepEqual(platformItems(online.exit.platform), ["Intel TDX", "Phala Cloud", "dstack-0.6.1"]);
+  assert.deepEqual(platformItems(null), []);
+  assert.equal(txUrl(online.links, "EZDv"), "https://testnet.nearblocks.io/txns/EZDv");
+  assert.equal(txUrl(online.links, null), null);
+  assert.equal(txUrl({ explorer_tx: "javascript:alert({tx})" }, "x"), null);
+  assert.equal(safeUrl("http://example.com"), null);
+  assert.equal(accountUrl(online.links, "vpnreg.pe-owner-erhan.testnet"), "https://testnet.nearblocks.io/address/vpnreg.pe-owner-erhan.testnet");
+});
+
+test("the status bundle next to the API function is the repo's bundle, unedited", () => {
+  const sha = (p) => createHash("sha256").update(readFileSync(new URL(p, here))).digest("hex");
+  assert.equal(sha("../api/_lib/provenexit-status.mjs"), sha("../../status/provenexit-status.mjs"));
+});
+
+test("the error fixture has the shape the page must survive", () => {
+  assert.equal(typeof error.error, "string");
+  assert.equal(error.instance, null);
+  assert.deepEqual(error.registry.events, []);
+  assert.ok(error.verify.checks.every((c) => c.ok === false));
+});

@@ -1,0 +1,11 @@
+{
+  "name": "provenexit-site",
+  "private": true,
+  "type": "module",
+  "engines": { "node": "22.x" },
+  "scripts": {
+    "dev": "node dev-server.mjs",
+    "test": "node --test test/",
+    "fixtures": "node fixtures/make.mjs"
+  }
+}

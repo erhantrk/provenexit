@@ -1,0 +1,222 @@
+{
+  "checked_at": "2026-11-12T18:33:00.000Z",
+  "error": "registry unreadable: fetch failed",
+  "exit": {
+    "url": "https://d2c65be0bde4f9b7628ef399310823e9e6339251-18200.dstack-pha1-prod9.phala.network",
+    "online": false,
+    "egress_ip": null,
+    "platform": "Intel TDX · Phala Cloud · dstack-0.6.1",
+    "compose": null
+  },
+  "verify": {
+    "verdict": "REFUSED",
+    "code": "E_BAD_RESPONSE",
+    "root": "INTEL",
+    "checks": [
+      {
+        "name": "response well-formed, fresh 32-byte nonce",
+        "ok": false,
+        "detail": "E_BAD_RESPONSE"
+      },
+      {
+        "name": "quote structure (TDX v4)",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "TEE type is TDX",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "pinned root == registry root == verifier root",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "quote signature chain to root",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "Intel TCB status accepted",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "TD debug attribute clear",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "report_data binds router keys",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "report_data binds client nonce as a session quote (SHA256(\"PLR-v1/session-nonce\" ‖ nonce))",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "event log digests and boot sequence",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "event log replays to RTMR3",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "app-compose matches measured compose-hash",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "dstack compose: images pinned by digest, exit logging disabled",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "compose hash allowed by registry",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "OS measurement allowed by registry",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "instance registered with matching keys",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "registry re-check before each connection (compose, OS, instance)",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "destinations resolved by the exit (remote DNS); the client never resolves them",
+        "ok": false,
+        "detail": "not checked"
+      }
+    ]
+  },
+  "instance": null,
+  "registry": {
+    "account": "vpnreg.pe-owner-erhan.testnet",
+    "owner": null,
+    "root": null,
+    "code_hash": null,
+    "full_access_keys": null,
+    "reproducible_build": true,
+    "events": []
+  },
+  "receipts": {
+    "anchors": []
+  },
+  "replay": {
+    "captured_at": "2026-11-12T12:44:15.834Z",
+    "verdict": "VERIFIED",
+    "code": null,
+    "checks": [
+      {
+        "name": "response well-formed, fresh 32-byte nonce",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "quote structure (TDX v4)",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "TEE type is TDX",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "pinned root == registry root == verifier root",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "quote signature chain to root",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "Intel TCB status accepted",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "TD debug attribute clear",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "report_data binds router keys",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "report_data binds client nonce as a session quote (SHA256(\"PLR-v1/session-nonce\" ‖ nonce))",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "event log digests and boot sequence",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "event log replays to RTMR3",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "app-compose matches measured compose-hash",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "dstack compose: images pinned by digest, exit logging disabled",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "compose hash allowed by registry",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "OS measurement allowed by registry",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "instance registered with matching keys",
+        "ok": true,
+        "detail": ""
+      }
+    ],
+    "compose": {
+      "hash": "9411d0f7125c31e0d392a96d956bcc29c04ee801f0494a12be75ac68f081c85c",
+      "image": "ghcr.io/erhantrk/provenexit-exit@sha256:7e53f383a6ea8ea8e537ad35c1d11665ca07540f537fe3d0c656879a92e61ad5",
+      "logging": "none",
+      "allowed_ports": [
+        80,
+        443
+      ],
+      "max_tunnels": 32
+    }
+  },
+  "links": {
+    "repo": "https://github.com/erhantrk/provenexit",
+    "explorer_tx": "https://testnet.nearblocks.io/txns/{tx}"
+  }
+}
