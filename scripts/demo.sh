@@ -91,7 +91,7 @@ ${B}ProvenExit — PLR-VPN-v1 no-logs VPN exit: end-to-end demo${X}
 ${D}The exit runs in a (mock) Intel TDX TD; its code measurement is approved in a NEAR registry contract.
 \`plr vpn\` only tunnels (SOCKS5, remote DNS) to an exit whose no-logs build is approved in the registry, checked
 against a fresh attestation and re-checked on every new connection.
-${Y}MOCK ROOT:${X}${D} attestation is signed by a local test root, not Intel — see README "Limits and trust".${X}
+${Y}MOCK ROOT:${X}${D} attestation is signed by a local test root, not Intel — see docs/LIMITS.md.${X}
 EOF
 
 # ------------------------------------------------------------------------------------------- 1. build

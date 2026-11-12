@@ -89,7 +89,7 @@ export const CODE_HASH_TTL_MS = 30_000;
 
 /**
  * Code hashes of the registries this client ships with: the reproducible build of `contracts/near` deployed at
- * that account (README, "Run it yourself"). `PLR_VPN_REGISTRY_CODE_HASH` overrides / adds a pin.
+ * that account (docs/REPRODUCE.md). `PLR_VPN_REGISTRY_CODE_HASH` overrides / adds a pin.
  */
 export const KNOWN_REGISTRY_CODE_HASHES: Readonly<Record<string, string>> = Object.freeze({
   "vpnreg.pe-owner-erhan.testnet": "C1hvenbrzHKN1n1f2z63Duburr8YXLAKBescrEvarCGM",
