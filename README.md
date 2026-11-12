@@ -51,7 +51,7 @@ You see 16 `✔` lines and `✔ VERIFIED (FIXTURE REPLAY …)`. The full local d
 ## Numbers
 
 - **186.34 Tgas:** one NEAR transaction verified the live exit's real Intel TDX quote inside the contract, **all 13 checks** (DCAP signature, TCB, event log, compose, allowlists, key binding), then listed its keys ([tx `EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN)).
-- **0 access keys** on the registry contract, and its code rebuilds from this repo to the deployed hash (`cargo near build reproducible-wasm` → code hash `C1hvenbr…`): nobody can swap the code that checks the exits.
+- **0 access keys** on the registry contract, and its code rebuilds from this repo (commit `dcd37e6`, `cargo near build reproducible-wasm`) to the deployed code hash `C1hvenbr…`: nobody can swap the code that checks the exits.
 - **1 live exit** on Intel TDX: TCB `UpToDate`, debug off, image pinned by digest, container logging off, only ports 80 and 443, at most 32 tunnels.
 - **299 client tests and 60 contract tests** pass (client suite; contract tests in [`contracts/near/README.md`](contracts/near/README.md)).
 - **Owner revoke and re-allow** transactions ran on the first testnet registry (on the test compose; a client refusing right after a revocation is shown on the local demo stack) ([revoke tx](https://testnet.nearblocks.io/txns/3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz), [re-allow tx](https://testnet.nearblocks.io/txns/642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV)).
@@ -79,7 +79,7 @@ A keyless NEAR contract on testnet ([`vpnreg.pe-owner-erhan.testnet`](https://te
 | the live exit is real Intel TDX, approved and registered | `scripts/try-live.sh` (or `vpn verify` with `deploy/testnet/env.live`) | every check `✔`, `✔ VERIFIED`, then a different IP through the exit |
 | the same, without network | `node client/dist/cli.js vpn verify --fixture fixtures/live-exit` | `✔ VERIFIED (FIXTURE REPLAY …)` |
 | NEAR verified Intel's signature itself | registration tx [`EZDveHx5…`](https://testnet.nearblocks.io/txns/EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN) | success, 186.34 Tgas: all 13 checks ran in the contract |
-| the registry runs this source and nobody can change it | `cd contracts/near && cargo near build reproducible-wasm` (Docker), then compare with `view_account` of `vpnreg.pe-owner-erhan.testnet` | SHA-256 `a39ed48c…0d9e`, code hash `C1hvenbrzHKN1n1f2z63Duburr8YXLAKBescrEvarCGM`; `view_access_key_list` returns no keys |
+| the registry runs this source and nobody can change it | `git checkout dcd37e6 && cd contracts/near && cargo near build reproducible-wasm` (Docker; the build records its commit in the contract's metadata), then compare with `view_account` of `vpnreg.pe-owner-erhan.testnet` | SHA-256 `a39ed48c…0d9e`, code hash `C1hvenbrzHKN1n1f2z63Duburr8YXLAKBescrEvarCGM`; `view_access_key_list` returns no keys |
 | the exit image is pinned and logging is off | `deploy/phala/docker-compose.yml`; `checkDstackComposePolicy` in [`packages/shared/src/attest/compose-policy.ts`](packages/shared/src/attest/compose-policy.ts) | image by digest, `logging.driver: none`; the same check rejects the real 2026-11-09 spike compose (`E_COMPOSE_POLICY`) |
 | image = this source | [`scripts/build-exit-image.sh`](scripts/build-exit-image.sh) builds it from the `vpn-honest` bundle and [`deploy/phala/Dockerfile`](deploy/phala/Dockerfile) | not reproducible yet: a rebuild is not shown to give the same digest (no build provenance) |
 | revocation works | option 1 (MOCK stack) or the testnet revoke/re-allow txs above | `refused with E_COMPOSE_NOT_ALLOWED`, then restored by re-approval |
@@ -156,7 +156,8 @@ A keyless NEAR contract on testnet ([`vpnreg.pe-owner-erhan.testnet`](https://te
 - **Reproducible and keyless.** Built with `cargo near build reproducible-wasm` (image
   `sourcescan/cargo-near:0.23.0-rust-1.99.1`, pinned by digest in `contracts/near/Cargo.toml`): 617 739 bytes,
   SHA-256 `a39ed48c2c7cdad5d5b732031db1f115cb6569400bcb7521c81061368d8a0d9e`, on-chain code hash
-  `C1hvenbrzHKN1n1f2z63Duburr8YXLAKBescrEvarCGM`. Account created [`DnEwrCy4…`](https://testnet.nearblocks.io/txns/DnEwrCy4FNs9AybgXwWnVm9TJy9Spveoio7EWJ5VLPKT),
+  `C1hvenbrzHKN1n1f2z63Duburr8YXLAKBescrEvarCGM`, built from commit `dcd37e6` (rebuilding that commit gives the same
+  SHA-256; a later commit gives a different one, because the commit is recorded in the contract metadata). Account created [`DnEwrCy4…`](https://testnet.nearblocks.io/txns/DnEwrCy4FNs9AybgXwWnVm9TJy9Spveoio7EWJ5VLPKT),
   deployed and initialized (`new`, owner `pe-owner-erhan.testnet`, root `INTEL`, TTL 86 400 000 ms)
   [`HLKDypfv…`](https://testnet.nearblocks.io/txns/HLKDypfvxYKi55j5RnS7pxfwVbTrNNtRWgmTVhvZBg5L), then its only key deleted
   [`58sZ72Aa…`](https://testnet.nearblocks.io/txns/58sZ72Aa7aAtCFjYQnKxxkcZ2PbGoS6D1yhBam343kiz): the code can never change.
