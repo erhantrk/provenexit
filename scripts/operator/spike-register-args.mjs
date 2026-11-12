@@ -1,4 +1,4 @@
-// operator one-off: build register_instance_tdx args from the 2026-11-09 Phala spike dump (S1-F2)
+// operator one-off: build register_instance_tdx args from the 2026-11-09 Phala spike dump
 import { readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 const R = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");

@@ -9,23 +9,23 @@ an account, a key or a payment.
 
 | area | assistant | what exactly |
 |---|---|---|
-| Planning | **Claude** (Anthropic) | a plan and a task list (not published), `SPEC-TDX.md` (the frozen formats) and the day-by-day plan, written 2026-11-08/09 from Erhan's repository and decisions; edited and approved by Erhan |
-| Specifications | **Claude Code** (Anthropic) | the pre-hackathon `SPEC.md` and `SPEC-VPN.md` revisions (and `SPEC-COMBO.md` / `SPEC-CHAINS.md`, removed on 2026-11-12) and their locked tests, and this milestone's `SPEC-TDX.md` (a verbatim copy of the frozen `SPEC-TDX.md` §0–§4; two cross-references updated on 2026-11-12) |
+| Planning | **Claude** (Anthropic) | a plan and a task list (not published), [`docs/spec/SPEC-TDX.md`](docs/spec/SPEC-TDX.md) (the frozen formats) and the day-by-day plan, written 2026-11-08/09 from Erhan's repository and decisions; edited and approved by Erhan |
+| Specifications | **Claude Code** (Anthropic) | the pre-hackathon [`SPEC.md`](docs/spec/SPEC.md) and [`SPEC-VPN.md`](docs/spec/SPEC-VPN.md) revisions (and `SPEC-COMBO.md` / `SPEC-CHAINS.md`, removed on 2026-11-12) and their locked tests, and this milestone's [`SPEC-TDX.md`](docs/spec/SPEC-TDX.md) (a verbatim copy of the frozen SPEC-TDX §0–§4; cross-references updated on 2026-11-12 and 2026-11-13, when the specs moved to `docs/spec/`) |
 | Code and tests | **Claude Code** and a **builder model** running the task list | the October 2026 baseline (mock-root protocol, NEAR registry, VPN exit; also an LLM router and multi-chain registries, removed on 2026-11-12), the November 2026 Intel/dstack path (`packages/shared`, `contracts/near`, `client`, `enclave`), and the tests — see "How the work was split" |
-| VPN-only cleanup | **Claude Code** | on 2026-11-12, removing the LLM router and the EVM/Solana/Stellar/Zcash code from the tree (they stay in the baseline commits), trimming `SPEC.md` to the base the VPN uses, and updating the tests, scripts and docs; `contracts/near`, `deploy/` and `fixtures/` were not touched |
-| Testnet / cloud operations | **Claude** sessions acting as the "operator" | testnet account setup and the contract deploy/allowlist/signed calls (T04, T16, T17), and the harmless Phala Cloud quote-dump test CVM on 2026-11-09. Every owner transaction was signed from Erhan's near-cli-rs keychain; no key was ever printed or given to an AI |
+| VPN-only cleanup | **Claude Code** | on 2026-11-12, removing the LLM router and the EVM/Solana/Stellar/Zcash code from the tree (they stay in the baseline commits), trimming SPEC.md to the base the VPN uses, and updating the tests, scripts and docs; `contracts/near`, `deploy/` and `fixtures/` were not touched |
+| Testnet / cloud operations | **Claude** sessions acting as the "operator" | testnet account setup and the contract deploy/allowlist/signed calls, and the harmless Phala Cloud quote-dump test CVM on 2026-11-09. Every owner transaction was signed from Erhan's near-cli-rs keychain; no key was ever printed or given to an AI |
 | Review | **Claude** | the strict review passes recorded as `fix: day1 review`, `fix: day2 review`, `fix: day3 review` in `git log` |
 
 "Pre-hackathon" / "October baseline" in this file means commits `c2a35e4`..`9bd402e` (2026-10-23/24), the disclosed
-baseline described in the README's "Prior code" section; the judged work is `9bd402e` onward.
+baseline described in the README's "Prior code" section and in [`docs/HISTORY.md`](docs/HISTORY.md); the judged work is `9bd402e` onward.
 
 Humans: **Erhan Türker** — name, design decisions, threat model, review, accounts, keys, Phala account and billing,
-the submission form. The plan's §14 guardrails
+the submission form. The plan's guardrails
 kept keys, mainnet and the submission out of the AI's hands.
 
 ## How the work was split
 
-The hackathon tasks (T01–T30, from that unpublished task list) were executed by an AI **builder** model in
+The hackathon tasks (from that unpublished task list) were executed by an AI **builder** model in
 a headless orchestrator (Conductor), one task per commit, each with its acceptance command run and quoted in the
 commit or in the build log (not published). The builder worked from the frozen interfaces, not from a free hand: any real-world
 disagreement was recorded in that log and escalated to Erhan instead of changing an interface.
@@ -46,12 +46,14 @@ baseline, did the review passes, and ran the testnet/Phala operator work. Commit
   working in. A separate Claude Code agent (Fable 5.2) then re-captured `fixtures/live-exit`,
   rebuilt the status and MCP bundles and samples, and updated the docs; it sent no transaction, pushed nothing and
   did not touch Phala. It could not reach Docker, so it did not rebuild the image itself.
+- The 2026-11-13 docs rewrite (the short README, `docs/VERIFY.md`, `docs/HOW-IT-WORKS.md`, `docs/LIMITS.md`,
+  `docs/REPRODUCE.md`, the specs moved to `docs/spec/`) was written by a Claude Code agent; it sent no transaction,
+  pushed nothing and did not touch Phala.
 - It did not submit the hackathon form.
-- It did not decide the product: the name, the pitch, the tracks, the trust model, the fallbacks used (S1-F2) and
-  the omissions in `README.md` "What it does not prove" are Erhan's calls.
+- It did not decide the product: the name, the pitch, the tracks, the trust model, the fallback used before the live exit existed and
+  the limits in [`docs/LIMITS.md`](docs/LIMITS.md) are Erhan's calls.
 
 ## Exact model names
 
 Per-commit model names and versions were not recorded while the work happened, so this file names the products
-(Claude, Claude Code, the headless builder) rather than claiming versions. Erhan confirms this list before the
-repository is published.
+(Claude, Claude Code, the headless builder) rather than claiming versions.

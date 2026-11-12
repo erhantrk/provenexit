@@ -9,7 +9,7 @@
 #
 # Env: deploy/testnet/env.live is loaded first (public identifiers only: PLR_NEAR_RPC, OWNER_ID, VPN_REGISTRY_ID,
 #      OPERATOR_ID, INTEL_ROOT, and PLR_VPN_URL once the deploy wrote it). PLR_DEMO_ENV=<file> is loaded after it
-#      and wins — e.g. `.run/stack.env` for an S1-F2 local MOCK exit on the local near-sandbox registry.
+#      and wins — e.g. `.run/stack.env` for a local MOCK exit on the local near-sandbox registry.
 #      PLR_VPN_URL (required), PLR_VPN_REGISTRY (default: VPN_REGISTRY_ID), PLR_TRUSTED_ROOT (default: INTEL_ROOT),
 #      PLR_VPN_SOCKS_PORT (default 18180). PLR_VPN_ENTRY_URL is ignored: the live demo is one hop.
 set -euo pipefail
@@ -47,7 +47,7 @@ export PLR_NEAR_RPC="${PLR_NEAR_RPC:-https://rpc.testnet.fastnear.com}"
 [[ -n $PLR_TRUSTED_ROOT ]] || die "PLR_TRUSTED_ROOT (or INTEL_ROOT in $ENV_LIVE) is required"
 [[ -n "${PLR_VPN_URL:-}" ]] || die "PLR_VPN_URL is not set.
   live exit:        add it to $ENV_LIVE (T17 step 2: \`phala cvms get provenexit-exit --json\` → the URL containing -18200.)
-  local S1-F2 exit: PLR_DEMO_ENV=.run/stack.env bash scripts/demo-live.sh"
+  local mock exit: PLR_DEMO_ENV=.run/stack.env bash scripts/demo-live.sh"
 if [[ -n "${PLR_VPN_ENTRY_URL:-}" ]]; then
   info "PLR_VPN_ENTRY_URL is set: the live demo is one hop, ignoring the entry"
   unset PLR_VPN_ENTRY_URL
@@ -115,7 +115,7 @@ RC=${PIPESTATUS[0]}
 set -e
 [[ $RC -eq 0 ]] || die "verification failed (exit $RC): nothing would be tunnelled through this exit"
 if grep -q 'MOCK ROOT' "$VERIFY_LOG"; then
-  info "MOCK ROOT: the offline test root, not Intel (S1-F2: the live exit runs on this machine)"
+  info "MOCK ROOT: the offline test root, not Intel (the exit runs on this machine)"
 fi
 ok "exit verified: quote chain to the pinned root, measured compose, registered keys, build approved by the registry"
 COMPOSE="$(sed -n 's/^ *compose hash: *\([0-9a-f]\{64\}\)$/\1/p' "$VERIFY_LOG" | head -1)"
@@ -156,7 +156,7 @@ if [[ $RC -ne 0 || -z $VIA ]]; then bad "the fetch through the tunnel failed (cu
 ok "your traffic leaves from $VIA"
 if [[ -n $DIRECT ]]; then
   if [[ $VIA == "$DIRECT" ]]; then
-    info "same as this machine's own address ($DIRECT): this exit runs on this machine (S1-F2 mock exit)"
+    info "same as this machine's own address ($DIRECT): this exit runs on this machine (local mock exit)"
   else
     ok "and not this machine's address ($DIRECT): the exit relayed it"
   fi

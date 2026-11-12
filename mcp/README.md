@@ -41,4 +41,4 @@ build time); override with `PLR_VPN_URL`, `PLR_VPN_REGISTRY`, `PLR_VPN_REGISTRY_
 
 Only what goes through `fetch_via_exit` is protected by the exit. The agent's other traffic (its model API calls,
 its other tools, any command it runs) does not use the exit. The exit sees the destinations of the requests you send
-through it; TLS hides the content, not the host. Testnet only; see "Limits and trust" in the main README.
+through it; TLS hides the content, not the host. Testnet only; see [`docs/LIMITS.md`](../docs/LIMITS.md).

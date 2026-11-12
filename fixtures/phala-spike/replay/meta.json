@@ -1,6 +1,6 @@
 {
   "captured_at_ms": 1794405700000,
-  "exit_url": "no live exit (S1-F2): Phala Cloud tdx.small test CVM 2026-11-09, /dump of a TDX quote only — the VPN exit is not deployed on Phala",
+  "exit_url": "no live exit: Phala Cloud tdx.small test VM of 2026-11-09, a /dump of a TDX quote only (the VPN exit did not run on Phala yet)",
   "network": "testnet",
   "registry": "pe-vpnreg-erhan.testnet",
   "registration_tx": "9AUTujEQv8p1R1z7SKEpNa5BYFw3a9ZZerkKmpQb5NRB",
