@@ -4,7 +4,7 @@ Status: FROZEN rev 1 (2026-11-10), INTEL/dstack mode.
 
 This document specifies the INTEL/dstack mode next to the existing MOCK mode of [`SPEC.md`](SPEC.md) and
 [`SPEC-VPN.md`](SPEC-VPN.md). The byte formats here are the ones `packages/shared` and `contracts/near` implement;
-the measured deployment files are in [`deploy/phala/`](deploy/phala).
+the measured deployment files are in [`deploy/phala/`](../../deploy/phala).
 
 Notation as in SPEC.md: `‖` = concatenation, hex = lowercase, no `0x`, even length.
 
@@ -68,7 +68,7 @@ Same header/body layout as SPEC.md §2.1/§2.2 (absolute offsets unchanged: `td_
 | `os_measurement` | `345469a462dafe286b728237091da824ce7508ebf14b390a47b1766c9c22cd65` |
 
 Copy both files into the repo as `packages/shared/test/vectors/dcap/tdx_quote.bin` and
-`packages/shared/test/vectors/dcap/tdx_quote_collateral.json` (MIT-licensed, credit in README §Libraries).
+`packages/shared/test/vectors/dcap/tdx_quote_collateral.json` (MIT-licensed, credit in [`docs/HOW-IT-WORKS.md`](../HOW-IT-WORKS.md#libraries) §Libraries).
 Source: `https://crates.io/api/v1/crates/dcap-qvl/0.7.1/download` → `dcap-qvl-0.7.1/sample/`.
 
 ### 1.2 Collateral JSON (canonical wire form)
@@ -192,7 +192,7 @@ SPEC §6.2 shape plus one field. `root_kind` becomes `"INTEL"`, `app_compose` is
 Client rules: missing `collateral`, or `collateral` not a plain object of strings, gives `E_BAD_RESPONSE`.
 `app_compose` up to 32 768 bytes. The collateral is Intel-signed and freshness-checked against the client's
 clock, so taking it from the (untrusted) exit is safe. The residual risk (an exit can serve a CRL that is stale
-but not yet expired) is listed in the README's limits.
+but not yet expired) is listed in [`docs/LIMITS.md`](../LIMITS.md#collateral-freshness).
 
 ---
 
@@ -459,7 +459,7 @@ fixtures/phala-2026-11-12/
 contractId: meta.registry, verifiesOnChain: true, now: () => meta.captured_at_ms }), trustedRoot: INTEL_ROOT_P256,
 now: meta.captured_at_ms })`. It prints every check and a final line
 `✔ VERIFIED (FIXTURE REPLAY of <exit_url>, captured <ISO date>; registry snapshot of <registry>; registration tx <hash>)`.
-It needs **no network**. The DCAP check runs at `captured_at` time, so a fixture verifies forever. The README states this
+It needs **no network**. The DCAP check runs at `captured_at` time, so a fixture verifies forever. [`docs/LIMITS.md`](../LIMITS.md#the-fixture-replay-proves-the-past) states this
 honestly ("proves the recorded exit was genuine at capture time").
 
 Mock-mode fixture: none needed. `bash scripts/demo.sh` is the fully offline judge path.
@@ -561,9 +561,9 @@ This is safe because nothing relies on TLS for authenticity.
 
 ## 5. Docker image and dstack compose
 
-The measured files are [`deploy/phala/Dockerfile`](deploy/phala/Dockerfile) and
-[`deploy/phala/docker-compose.yml`](deploy/phala/docker-compose.yml); the live values and deploy steps are in
-[`deploy/phala/README.md`](deploy/phala/README.md). Any change to the compose gives a new compose hash, which the owner
+The measured files are [`deploy/phala/Dockerfile`](../../deploy/phala/Dockerfile) and
+[`deploy/phala/docker-compose.yml`](../../deploy/phala/docker-compose.yml); the live values and deploy steps are in
+[`deploy/phala/README.md`](../../deploy/phala/README.md). Any change to the compose gives a new compose hash, which the owner
 must approve again (`allow_compose`).
 
 ---

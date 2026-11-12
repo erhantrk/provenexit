@@ -34,7 +34,7 @@ Earlier, on the same CVM (same app id and URL):
 - before that, the same image first registered on the retired registry `pe-vpnreg-erhan.testnet`, compose
   `6b56436b…`, tx `HSQqnRMu…`.
 
-## The image (T13)
+## The image
 
 `ghcr.io/erhantrk/provenexit-exit@sha256:74c6d1c52e2ce72698fb238e52e27d03eefe1770af00a1dae3405d3474f22785` (public,
 `linux/amd64`, an OCI image manifest). [`Dockerfile`](Dockerfile): `node:22-bookworm-slim` pinned by digest, plus the
@@ -122,7 +122,8 @@ epoch, pinned BuildKit v0.34.2 builder), all on one machine:
 A second machine: the CI job [`verify-exit-image.yml`](../../.github/workflows/verify-exit-image.yml) runs
 `scripts/verify-exit-image.sh` on a GitHub-hosted `linux/amd64` runner (no emulation) on every push to `main` or
 `provenexit`, and on manual dispatch. Its result (`MATCH` or not, the digest, the BuildKit version) is in that run's
-Actions log and job summary; this file does not record it as passed.
+Actions log and job summary. It printed `MATCH` with the same digest, for example run
+[43319605400](https://github.com/erhantrk/provenexit/actions/runs/43319605400) on commit `47d9794` (2026-11-12).
 
 The scripts' logic is tested against a fake `docker` (`enclave/test/exit-image-scripts.test.ts`). **Not run:** the
 changed tag read-back of `build-exit-image.sh` (index digest and manifest digest)
@@ -171,12 +172,12 @@ the IMR3 event log and the CVM info read from `/var/run/dstack.sock`.
 
 It is **not** a proxy, not a VPN and not the exit: it copies no traffic and opens no tunnel. It exists only because
 the 2026-11-09 spike CVM produced the real-TDX evidence in `fixtures/phala-spike/phala-dump.json`, which backs the
-demo's "same attestation code path, real Intel quote" claim (S1-F2). Its image is deliberately unpinned and it has
+demo's "same attestation code path, real Intel quote" claim (from before the live exit existed). Its image is deliberately unpinned and it has
 no `exit` service, so `checkDstackComposePolicy` rejects it — correctly, it must never be approved as an exit
 compose on chain.
 
 **Known exception (disclosed):** that compose hash (`b9823a79…d05f`) *is* allowlisted on the INTEL testnet registry,
-only so checks 1–12 could be shown on the real quote (README "NEAR's role"). The client still refuses it with
+only so checks 1–12 could be shown on the real quote ([`docs/LIMITS.md`](../../docs/LIMITS.md#closed-limits)). The client still refuses it with
 `E_COMPOSE_POLICY`. It was revoked on that retired registry on 2026-11-12 (tx
 `3DmY4RqrDAVknLov5pDYMgAQvjmMpM354eeGZdWifh7n`) and was never allowed on the live registry
 `vpnreg.pe-owner-erhan.testnet`.
