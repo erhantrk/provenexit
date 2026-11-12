@@ -3,6 +3,7 @@ import {
   fmtDate, fmtTime, fmtHM, fmtDateTime, fmtDateHM, fmtSpan, short, platformItems, safeUrl, txUrl, accountUrl,
 } from "./state.js";
 import { CONFIG } from "./config.js";
+import { startMotion, scanMotion, setFlowStop } from "./motion.js";
 
 const POLL_MS = 15_000;
 const FETCH_TIMEOUT_MS = 70_000;
@@ -146,14 +147,16 @@ function pipsHtml(state) {
 function underPlate(state) {
   const run = `<a href="#run" data-key="run-yourself">Run the check yourself</a> to leave this page out of it.`;
   if (state === "loading") return "";
+  if (sample) return `Sample data: a saved status response from ${esc(fmtDate(checkedAt()) || "an earlier day")}, shown on this machine only. Nothing here was checked just now. ${run}`;
   if (!checkedAt()) return run;
   const verb = state === "error" ? "Tried" : "Checked";
   return `${verb} by this site's server <span id="age"></span> ago. ${run}`;
 }
 
 function renderHero(state, animate) {
+  $("plate-badge").hidden = !sample;
   const face = state === "verified" ? "go" : state === "refused" ? "stop" : "unlit";
-  const chip = () => put("chip-text", state === "verified" && checkedAt() ? `Verified <span class="chip-time">${esc(fmtHM(checkedAt()))}</span>` : WORDS[state]);
+  const chip = () => put("chip-text", (state === "verified" && checkedAt() ? `Verified <span class="chip-time">${esc(fmtHM(checkedAt()))}</span>` : WORDS[state]) + (sample ? ` <span class="chip-sample">sample</span>` : ""));
   put("platform", platformItems(json?.exit?.platform).map((p) => `<li>${esc(p)}</li>`).join(""));
   put("under-plate", underPlate(state));
   if (checkedAt()) tick("age", fmtSpan(now() - Date.parse(checkedAt())));
@@ -289,6 +292,41 @@ function lightChain() {
   setTimeout(() => chain.classList.remove("lighting"), Math.ceil(parts.length / 2) * 150 + 400);
 }
 
+// ---- cards ------------------------------------------------------------------------------------
+const CARD_ICONS = {
+  log: '<rect x="7" y="4" width="18" height="24" rx="2"/><path d="M11 10h10M11 15h10M11 20h5"/><path d="M4 28L28 4"/>',
+  ports: '<rect x="4" y="9" width="24" height="14" rx="2"/><path d="M9 14v4M14 14v4M19 14v4M24 14v4"/>',
+  tunnel: '<path d="M4 26V15a12 12 0 0 1 24 0v11"/><path d="M10 26V16a6 6 0 0 1 12 0v10"/>',
+  image: '<path d="M16 4l11 6v12l-11 6-11-6V10z"/><path d="M5 10l11 6 11-6M16 16v12"/>',
+  chain: '<path d="M13 19l6-6"/><path d="M11 15l-3 3a4.2 4.2 0 0 0 6 6l3-3M21 17l3-3a4.2 4.2 0 0 0-6-6l-3 3"/>',
+  gas: '<path d="M6 27V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v20M4 27h18M10 10h6"/><path d="M20 13h3a2 2 0 0 1 2 2v7a2 2 0 0 0 4 0V11l-4-4"/>',
+  clock: '<circle cx="16" cy="16" r="11"/><path d="M16 9v7l5 3"/>',
+  contract: '<path d="M8 4h12l6 6v18H8z"/><path d="M20 4v6h6M12 16h10M12 21h7"/>',
+  key: '<circle cx="11" cy="16" r="5"/><path d="M16 16h12M24 16v5M28 16v4"/>',
+  person: '<circle cx="16" cy="11" r="5"/><path d="M6 27a10 10 0 0 1 20 0"/>',
+  globe: '<circle cx="16" cy="16" r="11"/><path d="M5 16h22M16 5c3.5 3.2 5 7 5 11s-1.5 7.8-5 11c-3.5-3.2-5-7-5-11s1.5-7.8 5-11z"/>',
+  you: '<rect x="5" y="7" width="22" height="15" rx="2"/><path d="M2 25h28"/>',
+  exit: '<rect x="6" y="5" width="20" height="9" rx="2"/><rect x="6" y="18" width="20" height="9" rx="2"/><path d="M10 9.5h2M10 22.5h2"/>',
+};
+const icon = (name) => `<span class="card-icon" aria-hidden="true"><svg viewBox="0 0 32 32" focusable="false">${CARD_ICONS[name]}</svg></span>`;
+
+/** One card: an icon and a label, a big value, an optional unit line, then free text. */
+function card({ ic, k, big = "", unit = "", body = "", hl = false, small = false }) {
+  return `<article class="card${hl ? " card-hl" : ""}">
+<div class="card-top">${icon(ic)}<h3 class="card-k">${k}</h3></div>
+${big ? `<p class="card-big${small ? " sm" : ""}">${big}</p>` : ""}${unit ? `<p class="card-unit">${unit}</p>` : ""}
+${body ? `<div class="card-body">${body}</div>` : ""}
+</article>`;
+}
+
+/** A raw value in full, in mono, with a copy button. */
+function rawRow(id, label, value, note = "") {
+  if (value === null || value === undefined || value === "") return "";
+  return `<div class="raw-row"><p class="raw-k">${label}</p><div class="raw-v"><code class="mono" id="${id}">${esc(value)}</code><button class="copy copy-sm" type="button" data-copy-from="${id}" data-key="copy-${id}"><span>Copy</span><span class="vh"> ${label.toLowerCase()}</span></button></div>${note ? `<p class="raw-note">${note}</p>` : ""}</div>`;
+}
+const raws = (rows) => (rows.join("") ? `<div class="raw">${rows.join("")}</div>` : "");
+const countAttr = (n, key, suffix = "") => (typeof n === "number" && Number.isFinite(n) && n > 0 ? ` data-count="${n}" data-count-key="${key}"${suffix ? ` data-count-suffix="${suffix}"` : ""}` : "");
+
 // ---- build ------------------------------------------------------------------------------------
 const unavailable = (state, what = "the check could not run") =>
   state === "loading"
@@ -312,19 +350,20 @@ function renderBuild(state) {
     label = `<p class="label-recorded">Recorded ${time(json.replay.captured_at)}. ${why}, so these are not live values.</p>`;
   }
   let allow = `<span class="quiet">The history read at ${esc(atTime())} does not show this hash.</span>`;
-  if (status?.allowed) allow = `${mark("pass", "allowed")} Allowed on NEAR, ${time(status.event.at)}. ${txLink(status.event.tx)}`;
-  else if (status) allow = `${mark("fail", "revoked")} Revoked on NEAR, ${time(status.event.at)}. The registry no longer allows this build. ${txLink(status.event.tx)}`;
+  if (status?.allowed) allow = `<span class="live">${mark("pass", "allowed")}</span> Allowed on NEAR, ${time(status.event.at)}. ${txLink(status.event.tx)}`;
+  else if (status) allow = `<span class="live">${mark("fail", "revoked")}</span> Revoked on NEAR, ${time(status.event.at)}. The registry no longer allows this build. ${txLink(status.event.tx)}`;
   const ports = Array.isArray(c.allowed_ports) ? c.allowed_ports.join(", ") : null;
-  const row = (k, v, note) => `<div class="row"><dt>${k}</dt><dd>${v}</dd><dd class="row-note">${note}</dd></div>`;
+  const pinned = typeof c.image === "string" && c.image.includes("@sha256:");
+  const v = (x) => (x === null || x === undefined || x === "" ? "–" : esc(x));
   return put(
     "build-body",
-    `${label}<dl class="rows live">
-${row("Image", whole(c.image), typeof c.image === "string" && c.image.includes("@sha256:") ? "Pinned by digest." : "")}
-${row("Logging", whole(c.logging), c.logging === "none" ? "Container logging is off." : "")}
-${row("Ports", whole(ports), ports ? "The exit dials nothing else." : "")}
-${row("Tunnels", whole(c.max_tunnels), c.max_tunnels != null ? "At most, at once." : "")}
-<div class="row"><dt>Compose hash</dt><dd>${hash(c.hash)}</dd><dd>${allow}</dd></div>
-</dl>`,
+    `${label}<div class="cards cards-4">
+${card({ ic: "log", k: "Logging", big: c.logging ? `<span class="mono">logging: ${esc(c.logging)}</span>` : "–", body: c.logging === "none" ? "<p>Container logging is off.</p>" : "", hl: c.logging === "none" })}
+${card({ ic: "ports", k: "Ports", big: v(ports), body: ports ? "<p>The exit dials nothing else.</p>" : "" })}
+${card({ ic: "tunnel", k: "Tunnels", big: `<span${countAttr(c.max_tunnels, "tunnels")}>${v(c.max_tunnels)}</span>`, body: c.max_tunnels != null ? "<p>At most, at once.</p>" : "" })}
+${card({ ic: "image", k: "Image", big: pinned ? "Pinned by digest" : "–", small: true, body: pinned ? "<p>The exact image, named by its sha256.</p>" : "" })}
+</div>
+${raws([rawRow("raw-image", "Image", c.image), rawRow("raw-compose", "Compose hash", c.hash, allow)])}`,
   );
 }
 
@@ -334,27 +373,32 @@ function renderNear(state) {
   if (state === "error") return put("near-body", unavailable(state, `the registry could not be read at ${esc(atTime())}`));
   const i = json.instance;
   if (!i) return put("near-body", `<p class="note-line">No registration found for this exit at ${esc(atTime())}.</p>`);
-  const gas = typeof i.registration_gas_tgas === "number" ? `, ${esc(i.registration_gas_tgas)} Tgas` : "";
+  const gasN = typeof i.registration_gas_tgas === "number" ? i.registration_gas_tgas : null;
+  const gas = gasN !== null ? `, ${esc(gasN)} Tgas` : "";
   const exp = expiryOf(i, now());
   let expires = "–";
   if (exp?.expired) expires = `Expired ${time(i.expires_at)}. The exit registers again when it runs.`;
-  else if (exp) expires = `${time(i.expires_at)}, in <span id="expires-in"></span>. The exit re-registers every 6 hours while it runs.`;
-  const row = (k, v) => `<div class="row"><dt>${k}</dt><dd>${v}</dd><dd></dd></div>`;
+  else if (exp) expires = `Expires ${time(i.expires_at)}, in <span id="expires-in"></span>. The exit re-registers every 6 hours while it runs.`;
   const refusedNote = state === "refused"
     ? `<p class="note-line">A registration can stay in place while a build is revoked. The client reads the registry again before every connection.</p>`
     : "";
+  const fact = (k, val) => `<div><dt>${k}</dt><dd>${val}</dd></div>`;
+  const txUrlFull = txUrl(json?.links, i.registration_tx);
   put(
     "near-body",
     `<p class="gas">Before the registry listed this exit's keys, the contract verified the exit's Intel quote on chain: 13 checks in one transaction${gas}.</p>
-${refusedNote}<dl class="rows">
-${i.registration_tx ? row("Transaction", txLink(i.registration_tx)) : ""}
-${row("Registered", time(i.registered_at))}
-${row("Expires", expires)}
-${row("Operator", whole(i.operator))}
-${row("Organisation", whole(i.organization))}
-${row("Registry", whole(json.registry?.account))}
-${row("Root", whole(json.registry?.root))}
-</dl>`,
+${refusedNote}<div class="cards cards-3">
+${card({ ic: "chain", k: "Intel check on chain", big: `<span data-count="13" data-count-key="near13" data-count-suffix="/13">13/13</span>`, unit: "checks, run by the NEAR contract", hl: true })}
+${gasN !== null ? card({ ic: "gas", k: "Gas for the whole check", big: `<span${countAttr(gasN, "gas")}>${esc(gasN)}</span>`, unit: "Tgas, one transaction" }) : ""}
+${card({ ic: "clock", k: "Registered", big: time(i.registered_at), small: true, body: `<p>${expires}</p>` })}
+</div>
+<dl class="facts">
+${fact("Operator", whole(i.operator))}
+${fact("Organisation", whole(i.organization))}
+${fact("Registry", whole(json.registry?.account))}
+${fact("Root", whole(json.registry?.root))}
+</dl>
+${raws([rawRow("raw-reg-tx", "Registration transaction", i.registration_tx, txUrlFull ? `<a href="${esc(txUrlFull)}" rel="noopener noreferrer">Open it on NearBlocks</a>` : "")])}`,
   );
   if (exp && !exp.expired) tick("expires-in", fmtSpan(exp.at - now()));
 }
@@ -367,11 +411,16 @@ function renderKeys(state) {
   const waiting = `<p class="quiet">Fetching the latest check.</p>`;
   const blank = state === "loading" ? waiting : notRead;
 
-  let regWho = "–";
+  let regBig = "–";
+  let regUnit = "";
+  let regWho = "";
   let regEv = blank;
+  let codeRaw = "";
   if (read && typeof r?.full_access_keys === "number") {
     const n = r.full_access_keys;
     const acct = r.account ? `The account <span class="mono">${esc(r.account)}</span>` : "The account";
+    regBig = `<span class="big-num">${esc(n)}</span>`;
+    regUnit = n === 1 ? "full-access key" : "full-access keys";
     if (n === 0) {
       regWho = "Nobody.";
       regEv = `<ul><li>${mark("pass", "confirmed")}<span>${acct} has 0 full-access keys, so no one can deploy different code under its name.</span></li>`;
@@ -381,19 +430,21 @@ function renderKeys(state) {
     }
     if (r.code_hash) {
       regEv += r.reproducible_build === true
-        ? `<li>${mark("pass", "confirmed")}<span>Code hash ${hash(r.code_hash)}. It rebuilds from the repo to this hash.</span></li>`
-        : `<li><span>Code hash ${hash(r.code_hash)}.</span></li>`;
+        ? `<li>${mark("pass", "confirmed")}<span>It rebuilds from the repo to its code hash.</span></li>`
+        : `<li><span>Its code hash is below.</span></li>`;
+      codeRaw = raws([rawRow("raw-code", "Code hash", r.code_hash)]);
     }
     regEv += "</ul>";
   }
 
   let exitEv = blank;
+  let keyRaw = "";
   if (read) {
     const kh = json.instance?.key_hash;
     if (!kh) {
       exitEv = `<p>No registration found for this exit at ${esc(atTime())}, so there is no key hash to show.</p>`;
     } else {
-      exitEv = `<p>The hash of its keys, ${hash(kh)}, is inside the Intel-signed quote and in its NEAR registration. Nobody else can answer as this exit.</p>`;
+      exitEv = `<p>The hash of its keys is inside the Intel-signed quote and in its NEAR registration. Nobody else can answer as this exit.</p>`;
       if (state === "offline") {
         const rec = checksOf(json.replay).filter((c) => KEY_CHECKS.includes(c.name) && c.ok === true).length;
         if (rec === KEY_CHECKS.length) exitEv += `<p>Both checks that bind the keys are in the <a href="#recorded">recorded check</a>.</p>`;
@@ -401,19 +452,19 @@ function renderKeys(state) {
         const rows = groupChecks(json.verify.checks).flatMap((s) => s.rows).filter((x) => KEY_CHECKS.includes(x.name));
         if (rows.length) exitEv += `<ul>${rows.map((x) => `<li>${mark(x.status)}<span class="mono">${esc(x.name)}</span></li>`).join("")}</ul>`;
       }
+      keyRaw = raws([rawRow("raw-keyhash", "Key hash", kh)]);
     }
   }
 
   const owner = json?.registry?.owner;
-  const ownerWho = owner ? `One NEAR account, <span class="mono">${esc(owner)}</span>.` : "One NEAR account.";
-  const row = (h, who, ev) => `<div class="ledger-row"><h3>${h}</h3><p class="ledger-who">${who}</p><div class="ledger-ev">${ev}</div></div>`;
+  const who = (text) => (text ? `<p class="card-who">${text}</p>` : "");
   return put(
     "keys-body",
-    `<div class="ledger live">
-${row("Registry contract", regWho, regEv)}
-${row("The exit", "The exit, in memory only.", exitEv)}
-${row("The owner", ownerWho, `<p>It allows and revokes builds from the command line. Every call is a transaction in the <a href="#history">history below</a>.</p>`)}
-${row("This site", "No key.", "<p>No wallet, no signing, no transactions. It reads the registry and the exit and shows the result.</p>")}
+    `<div class="cards cards-2 live">
+${card({ ic: "contract", k: "Registry contract", big: regBig, unit: regUnit, body: who(regWho) + regEv + codeRaw, hl: regWho === "Nobody." })}
+${card({ ic: "key", k: "The exit", big: "In memory only", small: true, body: exitEv + keyRaw })}
+${card({ ic: "person", k: "The owner", big: "One NEAR account", small: true, body: `<p>It allows and revokes builds from the command line. Every call is a transaction in the <a href="#history">history below</a>.</p>${owner ? raws([rawRow("raw-owner", "Owner account", owner)]) : ""}` })}
+${card({ ic: "globe", k: "This site", big: "No key", small: true, body: "<p>No wallet, no signing, no transactions. It reads the registry and the exit and shows the result.</p>" })}
 </div>`,
   );
 }
@@ -471,7 +522,7 @@ function renderTraffic(state) {
   } else if (state === "loading") {
     exit = `<p class="pair-value word">Checking</p>`;
   }
-  return put("traffic-body", `<div class="pair"><div><p class="pair-label">You, now</p>${you}</div><div><p class="pair-label">Through the exit</p>${exit}</div></div>${line}`);
+  return put("traffic-body", `<div class="pair"><div class="pair-card"><p class="pair-label">${icon("you")}You, now</p>${you}</div><div class="pair-arrow" aria-hidden="true"><svg viewBox="0 0 48 24" focusable="false"><path d="M2 12h42M34 3l10 9-10 9"/></svg></div><div class="pair-card pair-exit"><p class="pair-label">${icon("exit")}Through the exit</p>${exit}</div></div>${line}`);
 }
 
 // ---- run it, agents ---------------------------------------------------------------------------
@@ -569,6 +620,14 @@ function render() {
     document.title = `ProvenExit: verified ${fmtHM(checkedAt())}`;
   }
   renderHero(state, animate);
+  // The hero flow stops at the gate of the failing check when the client refused; otherwise it is the illustration.
+  let gate = null;
+  if (state === "refused") {
+    const f = failingCheck(json);
+    const stage = f && groupChecks(json.verify.checks).find((x) => x.rows.some((r) => r.number === f.number));
+    gate = { hardware: 1, keys: 1, image: 2 }[stage?.id] ?? 3;
+  }
+  setFlowStop(gate);
   renderChecks(state);
   if (animate) lightChain();
   renderBindings();
@@ -579,6 +638,7 @@ function render() {
   renderTraffic(state);
   renderRun(state);
   renderAgents(state);
+  scanMotion();
 }
 
 // ---- data -------------------------------------------------------------------------------------
@@ -721,6 +781,7 @@ function sampleTag() {
 
 // ---- start ------------------------------------------------------------------------------------
 sampleTag();
+startMotion();
 render();
 load();
 loadIp();

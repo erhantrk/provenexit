@@ -7,7 +7,7 @@
 <meta name="description" content="A VPN exit on Intel TDX. The client checks Intel's signature on what is running and asks a NEAR registry whether that build is still allowed, before a byte leaves your machine. NEAR testnet only.">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="light">
-<meta name="theme-color" content="#FAFBFA">
+<meta name="theme-color" content="#FCFCFF">
 <meta property="og:title" content="ProvenExit">
 <meta property="og:description" content="The VPN exit you verify before you connect. NEAR testnet only.">
 <meta property="og:type" content="website">
@@ -15,6 +15,7 @@
 <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
 <link rel="preload" href="/assets/fonts/overpass.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/assets/styles.css">
+<script src="/assets/motion-flag.js"></script>
 <noscript><link rel="stylesheet" href="/assets/noscript.css"></noscript>
 <script type="module" src="/assets/app.js"></script>
 </head>
@@ -57,7 +58,7 @@
 <section class="hero" id="top">
   <div class="wrap hero-grid">
     <div class="hero-text">
-      <p class="notice">NEAR testnet only.</p>
+      <p class="notice"><span class="notice-dot" aria-hidden="true"></span>NEAR testnet only.</p>
       <h1>
         <span class="h1-line"><span>The VPN exit you</span></span>
         <span class="h1-line"><span>verify before</span></span>
@@ -72,6 +73,7 @@
     <div class="hero-sign">
       <div class="plate" id="plate" data-face="unlit">
         <p class="vh" id="live" role="status" aria-live="polite"></p>
+        <p class="plate-badge" id="plate-badge" hidden><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 3h6M10 3v6L4.5 18.5A1.7 1.7 0 0 0 6 21h12a1.7 1.7 0 0 0 1.5-2.5L14 9V3"/><path d="M7 15h10"/></svg>Sample data, not live</p>
         <div class="plate-text" id="plate-text">
           <p class="plate-word js-only">Checking</p>
           <p class="plate-line js-only">Fetching the latest check.</p>
@@ -86,11 +88,41 @@
       <p class="under-plate" id="under-plate"></p>
     </div>
   </div>
+  <div class="wrap">
+    <figure class="flow" id="flow" aria-labelledby="flow-cap">
+      <figcaption class="flow-cap" id="flow-cap">How the client decides, before the first byte</figcaption>
+      <div class="flow-track" aria-hidden="true">
+        <div class="flow-rail"><i class="flow-fill"></i></div>
+        <span class="flow-packet"></span>
+        <div class="flow-stop flow-end-a">
+          <span class="flow-icon"><svg viewBox="0 0 32 32"><rect x="5" y="7" width="22" height="15" rx="2"/><path d="M2 25h28"/></svg></span>
+          <span class="flow-name">Your machine</span>
+        </div>
+        <div class="flow-stop flow-gate" data-gate="1">
+          <span class="flow-icon"><svg class="g-icon" viewBox="0 0 32 32"><rect x="8" y="8" width="16" height="16" rx="2"/><rect x="12.5" y="12.5" width="7" height="7"/><path d="M12 4v4M16 4v4M20 4v4M12 24v4M16 24v4M20 24v4M4 12h4M4 16h4M4 20h4M24 12h4M24 16h4M24 20h4"/></svg><svg class="g-tick" viewBox="0 0 32 32"><path d="M9 16.5l4.5 4.5L23 11"/></svg><svg class="g-cross" viewBox="0 0 32 32"><path d="M11 11l10 10M21 11L11 21"/></svg></span>
+          <span class="flow-name">Intel quote</span>
+        </div>
+        <div class="flow-stop flow-gate" data-gate="2">
+          <span class="flow-icon"><svg class="g-icon" viewBox="0 0 32 32"><path d="M16 4l11 6v12l-11 6-11-6V10z"/><path d="M5 10l11 6 11-6M16 16v12"/></svg><svg class="g-tick" viewBox="0 0 32 32"><path d="M9 16.5l4.5 4.5L23 11"/></svg><svg class="g-cross" viewBox="0 0 32 32"><path d="M11 11l10 10M21 11L11 21"/></svg></span>
+          <span class="flow-name">Approved image</span>
+        </div>
+        <div class="flow-stop flow-gate" data-gate="3">
+          <span class="flow-icon"><svg class="g-icon" viewBox="0 0 32 32"><rect x="5" y="5" width="22" height="22" rx="3"/><path d="M10 11h12M10 16h12M10 21h7"/></svg><svg class="g-tick" viewBox="0 0 32 32"><path d="M9 16.5l4.5 4.5L23 11"/></svg><svg class="g-cross" viewBox="0 0 32 32"><path d="M11 11l10 10M21 11L11 21"/></svg></span>
+          <span class="flow-name">NEAR registry</span>
+        </div>
+        <div class="flow-stop flow-end-b">
+          <span class="flow-icon"><svg viewBox="0 0 32 32"><rect x="6" y="5" width="20" height="9" rx="2"/><rect x="6" y="18" width="20" height="9" rx="2"/><path d="M10 9.5h2M10 22.5h2"/></svg></span>
+          <span class="flow-name">The exit</span>
+        </div>
+      </div>
+      <p class="flow-say" id="flow-say">The client checks the exit's Intel quote, the image it runs and the NEAR registry. Only then does it open the tunnel.</p>
+    </figure>
+  </div>
 </section>
 
 <section class="sec" id="checks" aria-labelledby="checks-h">
   <div class="wrap">
-    <header class="sec-head">
+    <header class="sec-head reveal" data-label="01  The checks">
       <h2 id="checks-h">The checks, in the order the client runs them</h2>
       <p class="sec-lead">If one fails, the client stops there and opens no tunnel.</p>
     </header>
@@ -102,10 +134,10 @@
 
 <section class="sec sec-unlit" id="route" aria-labelledby="route-h">
   <div class="wrap">
-    <header class="sec-head">
+    <header class="sec-head reveal" data-label="02  How it works">
       <h2 id="route-h">How one connection is decided</h2>
     </header>
-    <div class="route">
+    <div class="route" id="route-fig">
       <div class="route-registry">
         <p class="station-name">The NEAR registry</p>
         <p class="station-sub mono" data-bind="registry.account">–</p>
@@ -130,46 +162,47 @@
         </li>
       </ol>
     </div>
-    <ol class="steps">
+    <ol class="steps" id="route-steps">
       <li>Your client sends the exit a fresh random number and asks for its Intel quote.</li>
       <li>It checks Intel's signature, that debug is off, and that the quote contains the exit's keys and your number.</li>
       <li>It reads the NEAR registry: is this build allowed, is this OS allowed, is this exit registered.</li>
       <li>Only then it opens an encrypted tunnel to the key in the quote. If the owner revokes the build, the next connection is refused.</li>
     </ol>
+    <p class="replay-line"><button class="ghost-btn" type="button" id="route-replay" hidden>Play the steps again</button></p>
   </div>
 </section>
 
 <section class="sec" id="build" aria-labelledby="build-h">
   <div class="wrap">
-    <header class="sec-head">
+    <header class="sec-head reveal" data-label="03  The build">
       <h2 id="build-h">The image the exit runs</h2>
       <p class="sec-lead">These values are part of the measurement Intel signs.<span id="build-lead"></span></p>
     </header>
-    <div id="build-body"></div>
+    <div id="build-body" class="stagger"></div>
   </div>
 </section>
 
 <section class="sec" id="near" aria-labelledby="near-h">
   <div class="wrap">
-    <header class="sec-head">
+    <header class="sec-head reveal" data-label="04  On NEAR">
       <h2 id="near-h">NEAR ran the Intel check itself</h2>
     </header>
-    <div id="near-body"></div>
+    <div id="near-body" class="stagger"></div>
   </div>
 </section>
 
 <section class="sec sec-unlit" id="keys" aria-labelledby="keys-h">
   <div class="wrap">
-    <header class="sec-head">
+    <header class="sec-head reveal" data-label="05  Keys">
       <h2 id="keys-h">Who holds each key</h2>
     </header>
-    <div id="keys-body">
-      <div class="ledger">
-        <div class="ledger-row">
-          <h3>This site</h3>
-          <p class="ledger-who">No key.</p>
-          <div class="ledger-ev"><p>No wallet, no signing, no transactions. It reads the registry and the exit and shows the result.</p></div>
-        </div>
+    <div id="keys-body" class="stagger">
+      <div class="cards cards-2">
+        <article class="card">
+          <div class="card-top"><span class="card-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="11"/><path d="M5 16h22M16 5c3.5 3.2 5 7 5 11s-1.5 7.8-5 11c-3.5-3.2-5-7-5-11s1.5-7.8 5-11z"/></svg></span><h3 class="card-k">This site</h3></div>
+          <p class="card-big">No key</p>
+          <div class="card-body"><p>No wallet, no signing, no transactions. It reads the registry and the exit and shows the result.</p></div>
+        </article>
       </div>
     </div>
   </div>
@@ -177,7 +210,7 @@
 
 <section class="sec" id="history" aria-labelledby="history-h">
   <div class="wrap">
-    <header class="sec-head">
+    <header class="sec-head reveal" data-label="06  History">
       <h2 id="history-h">Every change to the allowlist</h2>
       <p class="sec-lead">Approvals, revocations and registrations on <span class="mono" data-bind="registry.account">the registry</span>, newest first.</p>
     </header>
@@ -187,17 +220,17 @@
 
 <section class="sec" id="traffic" aria-labelledby="traffic-h">
   <div class="wrap">
-    <header class="sec-head">
+    <header class="sec-head reveal" data-label="07  Traffic">
       <h2 id="traffic-h">The address websites see</h2>
     </header>
-    <div id="traffic-body"></div>
+    <div id="traffic-body" class="stagger"></div>
     <p class="quiet disclosure">Your address is read by this site and is not stored. The exit's address comes from api.ipify.org, asked through the tunnel.</p>
   </div>
 </section>
 
 <section class="sec sec-unlit" id="run" aria-labelledby="run-h">
   <div class="wrap">
-    <header class="sec-head">
+    <header class="sec-head reveal" data-label="08  Run it">
       <h2 id="run-h">Check the exit from your own machine</h2>
       <p class="sec-lead">Node 22 and a network connection. No accounts.</p>
     </header>
@@ -218,7 +251,7 @@
 
 <section class="sec" id="agents" aria-labelledby="agents-h">
   <div class="wrap">
-    <header class="sec-head">
+    <header class="sec-head reveal" data-label="09  For agents">
       <h2 id="agents-h">An MCP server for AI agents</h2>
       <p class="sec-lead">Your agent checks the exit, then fetches pages through it. If any check fails, it fetches nothing and returns the error code.</p>
     </header>
@@ -256,10 +289,10 @@
 
 <section class="sec" id="limits" aria-labelledby="limits-h">
   <div class="wrap">
-    <header class="sec-head">
+    <header class="sec-head reveal" data-label="10  Limits">
       <h2 id="limits-h">What this does not prove</h2>
     </header>
-    <ol class="limits">
+    <ol class="limits stagger">
       <li>
         <h3>Testnet only.</h3>
         <p>The registry is on NEAR testnet.</p>
