@@ -6,7 +6,7 @@
  *
  * This is the live half of T24: `AttestationCache.attest()` feeds the same function's output to the verifier via the
  * bundle's `collateral` field (client/test/pccs.test.ts covers that wiring). A whole `plr vpn verify` needs a live
- * INTEL exit on real TDX, which S1-F2 does not deploy (PLAN §7 S1-F2: the exit runs MOCK locally).
+ * INTEL exit on real TDX (the live exit: `scripts/try-live.sh`).
  *
  * usage: PLR_PCCS_URL=https://pccs.phala.network node scripts/pccs-live-check.mjs
  *        (build first: npx tsc -b)

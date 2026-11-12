@@ -19,7 +19,7 @@ Notation as in SPEC.md: `‖` = concatenation, hex = lowercase, no `0x`, even le
 | `INTEL_ROOT_P256` | `0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f567918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394` | public key (x‖y) of `CN=Intel SGX Root CA` (notAfter 2049-12-31), extracted with `openssl` from `dcap-qvl-0.7.1/src/TrustedRootCA.der` |
 | `INTEL_QE_VENDOR_ID` | `939a7233f79c4ca9940a0db3957f0607` | SPEC.md §2.1 (already in `packages/shared/src/tdx/quote.ts`) |
 | `DSTACK_EVENT_TYPE` | `0x08000001` (= 134217729) | dstack `cc-eventlog/src/runtime_events.rs` |
-| `ACCEPTED_TCB_STATUSES` | `["UpToDate", "SWHardeningNeeded"]` | project decision. Day-0 spike S1 may require adding `"OutOfDate"`, but only with the human's OK (see PLAN §7) |
+| `ACCEPTED_TCB_STATUSES` | `["UpToDate", "SWHardeningNeeded"]` | project decision. Day-0 spike S1 may require adding `"OutOfDate"`, but only with the human's OK |
 | `MAX_TDX_QUOTE_BYTES` | `8192` (hex: 16384 chars) | project decision. Real quotes are about 5 006 bytes |
 | `MAX_COLLATERAL_JSON_BYTES` | `32768` | project decision. The sample collateral is 16 072 bytes |
 | `MAX_DSTACK_COMPOSE_BYTES` | `32768` | project decision. Phala's `app-compose.json` may embed a pre-launch script |
@@ -105,7 +105,7 @@ the same shape `@phala/dstack-sdk` 0.5.8 declares (`interface EventLog { imr; ev
 
 Digest rule **V1 only** (dstack `RuntimeEvent::preimage`, `EventLogVersion::V1`):
 `digest = SHA384(u32le(0x08000001) ‖ ":" ‖ utf8(event) ‖ ":" ‖ payload)`. The CVM is deployed with
-`--event-log-version 1` (PLAN §9). A V2 (JCS JSON) digest fails with `E_EVENT_LOG` ("digest mismatch").
+`--event-log-version 1`. A V2 (JCS JSON) digest fails with `E_EVENT_LOG` ("digest mismatch").
 
 `verifyEventLogDstack(events, rtmr3)` (TS) / `verify_event_log_dstack(events, rtmr3)` (Rust). The rules, in order:
 
@@ -194,7 +194,7 @@ SPEC §6.2 shape plus one field. `root_kind` becomes `"INTEL"`, `app_compose` is
 Client rules: missing `collateral`, or `collateral` not a plain object of strings, gives `E_BAD_RESPONSE`.
 `app_compose` up to 32 768 bytes. The collateral is Intel-signed and freshness-checked against the client's
 clock, so taking it from the (untrusted) exit is safe. The residual risk (an exit can serve a CRL that is stale
-but not yet expired) is listed in PLAN §13.
+but not yet expired) is listed in the README's limits.
 
 ---
 
@@ -548,4 +548,4 @@ Unchanged (SPEC-VPN §3): `GET /v1/attestation`, `GET /v1/tunnel` (Upgrade `plr-
 gateway; the tunnel inside is end-to-end encrypted to the attested key, so the gateway sees only ciphertext).
 Fallback if the gateway breaks the Upgrade (spike S1 step 6): `https://<app-id>-18443s.<gateway-domain>` (TLS passthrough),
 with the exit terminating TLS itself using a boot-time self-signed cert and the client env `PLR_VPN_TLS_VERIFY=0`.
-This is safe because nothing relies on TLS for authenticity; see PLAN §7 S1-F.
+This is safe because nothing relies on TLS for authenticity.

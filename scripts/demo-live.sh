@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ProvenExit live demo, one command (PLAN §10.1 order), for the video and for judges:
+# ProvenExit live demo, one command (verify → browse → revoke → refusal → re-allow), for the video and for judges:
 #   env → `plr vpn verify` → `plr vpn` (local SOCKS5) → curl through the attested tunnel → the nearblocks page
 #   → YOU revoke the exit's build on NEAR → curl and `plr vpn verify` show the next connection refused
 #   → YOU re-allow it on NEAR → curl works again → stop.
