@@ -1,0 +1,18 @@
+{
+  "name": "provenexit",
+  "version": "0.1.0",
+  "description": "Check a VPN exit before you use it: Intel TDX attestation, verified against a NEAR registry (testnet).",
+  "type": "module",
+  "bin": {
+    "provenexit": "dist/provenexit.mjs",
+    "provenexit-mcp": "dist/provenexit-mcp.mjs"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "engines": { "node": ">=22" },
+  "license": "MIT",
+  "author": "erhantrk",
+  "homepage": "https://provenexit.vercel.app",
+  "repository": { "type": "git", "url": "git+https://github.com/erhantrk/provenexit.git" },
+  "bugs": { "url": "https://github.com/erhantrk/provenexit/issues" },
+  "keywords": ["vpn", "tee", "intel-tdx", "attestation", "near", "no-logs", "mcp"]
+}

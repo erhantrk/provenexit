@@ -153,15 +153,18 @@ async function serveBundle(make: (nonce: Uint8Array) => AttestationBundle): Prom
   };
 }
 
-/** Runs `plr vpn inspect` against a server for `defect`, with the stub DCAP verifier. */
-async function inspect(o: { defect?: Defect; verifier?: StubVerifier; fail?: PlrErrorCode } = {}) {
+/**
+ * Runs `plr vpn inspect` against a server for `defect`, with the stub DCAP verifier. `PLR_PCCS_URL=exit` unless
+ * `pccs` says otherwise: a synthetic quote has no PCK chain a PCCS could answer for, and no test may need Intel.
+ */
+async function inspect(o: { defect?: Defect; verifier?: StubVerifier; fail?: PlrErrorCode; pccs?: string } = {}) {
   const srv = await serveBundle((nonce) => buildBundle(nonce, o.defect ?? "none"));
   closers.push(srv.close);
   const out: string[] = [];
   const err: string[] = [];
   const code = await runCli(
     ["vpn", "inspect"],
-    { PLR_VPN_URL: srv.url },
+    { PLR_VPN_URL: srv.url, PLR_PCCS_URL: o.pccs ?? "exit" },
     { out: (s) => out.push(s), err: (s) => err.push(s) },
     undefined,
     o.verifier ?? stubVerifier(o.fail),
@@ -230,6 +233,29 @@ describe("plr vpn inspect: every failing check exits 1 with ✘ <code>", () => {
       expect(r.text).not.toMatch(/^(compose hash|OS measurement|key hash|tcb|image):/m);
     });
   }
+});
+
+describe("plr vpn inspect: collateral source", () => {
+  it("says the exit's copy is used under PLR_PCCS_URL=exit", async () => {
+    const r = await inspect();
+    expect(r.code).toBe(0);
+    expect(r.text).toContain("collateral: the exit's own copy (PLR_PCCS_URL=exit)");
+  });
+
+  it("fetches from the PCCS otherwise and refuses with E_COLLATERAL_FETCH when it cannot be reached", async () => {
+    const r = await inspect({ pccs: "https://127.0.0.1:1" });
+    expect(r.code).toBe(1);
+    expect(r.text).toContain("collateral: fetched fresh by this client from https://127.0.0.1:1");
+    expect(r.text).toContain("✘ E_COLLATERAL_FETCH");
+    expect(r.text).not.toMatch(/^(compose hash|OS measurement|key hash|tcb|image):/m);
+  });
+
+  it("rejects a PLR_PCCS_URL that is neither https nor `exit`", async () => {
+    const err: string[] = [];
+    const io = { out: () => undefined, err: (s: string) => err.push(s) };
+    expect(await runCli(["vpn", "inspect"], { PLR_VPN_URL: "http://127.0.0.1:1", PLR_PCCS_URL: "http://pccs.example" }, io)).toBe(2);
+    expect(err.join("\n")).toContain("PLR_PCCS_URL");
+  });
 });
 
 describe("plr vpn inspect: usage", () => {

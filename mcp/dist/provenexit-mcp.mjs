@@ -54,7 +54,7 @@ var __toCommonJS = (mod3) => __copyProps(__defProp({}, "__esModule", { value: tr
 var define_STATUS_DEFAULTS_default;
 var init_define_STATUS_DEFAULTS = __esm({
   "<define:__STATUS_DEFAULTS__>"() {
-    define_STATUS_DEFAULTS_default = { exitUrl: "https://d2c65be0bde4f9b7628ef399310823e9e6339251-18200.dstack-pha1-prod9.phala.network", registry: "vpnreg.pe-owner-erhan.testnet", trustedRoot: "0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f567918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394", rpcUrl: "https://rpc.testnet.fastnear.com", operator: "pe-op-erhan.testnet", platform: "Intel TDX · Phala Cloud · dstack-0.6.1", reproducibleBuild: true };
+    define_STATUS_DEFAULTS_default = { exitUrl: "https://d2c65be0bde4f9b7628ef399310823e9e6339251-18200.dstack-pha1-prod9.phala.network", registry: "vpnreg.pe-owner-erhan.testnet", registryCodeHash: "C1hvenbrzHKN1n1f2z63Duburr8YXLAKBescrEvarCGM", trustedRoot: "0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f567918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394", rpcUrl: "https://rpc.testnet.fastnear.com", operator: "pe-op-erhan.testnet", platform: "Intel TDX · Phala Cloud · dstack-0.6.1", reproducibleBuild: true };
   }
 });
 
@@ -76075,6 +76075,51 @@ var {
 } = actions;
 
 // client/dist/near-registry.js
+var E_REGISTRY_CODE_HASH = "E_REGISTRY_CODE_HASH";
+var RegistryCodeHashError = class extends PlrError {
+  constructor() {
+    super("E_REGISTRY_UNAVAILABLE");
+    this.code = E_REGISTRY_CODE_HASH;
+    this.message = `${E_REGISTRY_CODE_HASH}: registry account code hash differs from the pin`;
+  }
+};
+function isRegistryCodeHashError(e) {
+  return e instanceof PlrError && e.code === E_REGISTRY_CODE_HASH;
+}
+async function checkRegistryCode(registry2) {
+  const f = registry2?.checkCodeHash;
+  if (typeof f !== "function")
+    return;
+  try {
+    await f.call(registry2);
+  } catch (e) {
+    if (isRegistryCodeHashError(e))
+      throw e;
+    throw new PlrError("E_REGISTRY_UNAVAILABLE", "view_account");
+  }
+}
+var CODE_HASH_TTL_MS = 3e4;
+var KNOWN_REGISTRY_CODE_HASHES = Object.freeze({
+  "vpnreg.pe-owner-erhan.testnet": "C1hvenbrzHKN1n1f2z63Duburr8YXLAKBescrEvarCGM"
+});
+var CODE_HASH_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+var NO_CODE_HASH = "1".repeat(32);
+function isCodeHash(v) {
+  return typeof v === "string" && CODE_HASH_RE.test(v) && v !== NO_CODE_HASH;
+}
+function resolveRegistryCodeHash(contractId, explicit, intel) {
+  if (explicit !== void 0 && explicit !== "") {
+    if (!isCodeHash(explicit))
+      throw new Error("PLR_VPN_REGISTRY_CODE_HASH must be the registry account's code hash (base58, as view_account prints it)");
+    return explicit;
+  }
+  const known = Object.hasOwn(KNOWN_REGISTRY_CODE_HASHES, contractId) ? KNOWN_REGISTRY_CODE_HASHES[contractId] : void 0;
+  if (known !== void 0)
+    return known;
+  if (intel)
+    throw new Error(`PLR_VPN_REGISTRY_CODE_HASH is required for registry ${contractId} (no shipped code-hash pin; INTEL mode refuses an unpinned registry)`);
+  return void 0;
+}
 var MAX_RESULT_BYTES = 64 * 1024;
 var DEFAULT_TIMEOUT_MS = 1e4;
 var ACCOUNT_ID_RE = /^(?:(?:[a-z\d]+[-_])*[a-z\d]+\.)*(?:[a-z\d]+[-_])*[a-z\d]+$/;
@@ -76141,6 +76186,10 @@ var NearRegistry = class {
   #provider;
   #timeoutMs;
   #finality;
+  /** The pinned `code_hash`, or undefined when only the account id is pinned. */
+  pinnedCodeHash;
+  #codeOkUntil = 0;
+  #codePending;
   constructor(o) {
     if (typeof o !== "object" || o === null)
       throw new PlrError("E_BAD_INPUT", "NearRegistry options required");
@@ -76157,10 +76206,61 @@ var NearRegistry = class {
     this.contractId = o.contractId;
     this.#timeoutMs = timeoutMs;
     this.#finality = finality;
+    if (o.codeHash !== void 0 && !isCodeHash(o.codeHash))
+      throw new PlrError("E_BAD_INPUT", "codeHash is not a base58 code hash");
+    this.pinnedCodeHash = o.codeHash;
     this.#provider = new JsonRpcProvider({ url: url.href }, { retries: 2, wait: 100, backoff: 1.5 });
   }
-  /** Raw view call: returns the JSON-decoded result. Rejects on any error or timeout. */
+  /** With a pin: true while the last code-hash check passed and is still fresh. Without a pin: undefined. */
+  get codeHashVerified() {
+    return this.pinnedCodeHash === void 0 ? void 0 : performance.now() < this.#codeOkUntil;
+  }
+  /**
+   * Checks the registry account's `code_hash` against the pin (no-op without one, or within the reuse window);
+   * concurrent callers share one `view_account`.
+   * @throws RegistryCodeHashError (different code); NearRegistryError (RPC failed / malformed / timeout)
+   */
+  async checkCodeHash() {
+    if (this.pinnedCodeHash === void 0 || performance.now() < this.#codeOkUntil)
+      return;
+    this.#codePending ??= this.#fetchAndCompareCode().finally(() => {
+      this.#codePending = void 0;
+    });
+    return this.#codePending;
+  }
+  async #fetchAndCompareCode() {
+    this.#codeOkUntil = 0;
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new NearRegistryError("view_account: timeout")), this.#timeoutMs);
+      timer.unref?.();
+    });
+    let hash;
+    try {
+      const acct = await Promise.race([
+        this.#provider.query({ request_type: "view_account", finality: this.#finality, account_id: this.contractId }),
+        timeout
+      ]);
+      hash = typeof acct === "object" && acct !== null ? acct.code_hash : void 0;
+    } catch (e) {
+      if (e instanceof NearRegistryError)
+        throw e;
+      throw new NearRegistryError("view_account: RPC failed");
+    } finally {
+      clearTimeout(timer);
+    }
+    if (typeof hash !== "string" || !CODE_HASH_RE.test(hash))
+      throw new NearRegistryError("view_account: malformed reply");
+    if (hash !== this.pinnedCodeHash)
+      throw new RegistryCodeHashError();
+    this.#codeOkUntil = performance.now() + CODE_HASH_TTL_MS;
+  }
+  /**
+   * Raw view call: returns the JSON-decoded result. Rejects on any error or timeout; with a code-hash pin, first
+   * rejects with {@link RegistryCodeHashError} when the account runs other code.
+   */
   async view(method, args) {
+    await this.checkCodeHash();
     let timer;
     const timeout = new Promise((_, reject) => {
       timer = setTimeout(() => reject(new NearRegistryError(`${method}: timeout`)), this.#timeoutMs);
@@ -76277,6 +76377,66 @@ function decodeResult(method, raw) {
 // client/dist/verify-report.js
 init_define_STATUS_DEFAULTS();
 init_define_STATUS_REPLAY();
+
+// client/dist/pccs.js
+init_define_STATUS_DEFAULTS();
+init_define_STATUS_REPLAY();
+import { createRequire as createRequire2 } from "node:module";
+var DEFAULT_PCCS_URL = "https://api.trustedservices.intel.com";
+var COLLATERAL_FROM_EXIT = "exit";
+var PCCS_TIMEOUT_MS = 8e3;
+function collateralSource(pccsUrl) {
+  if (pccsUrl === COLLATERAL_FROM_EXIT)
+    return { source: "exit" };
+  return { source: "pccs", url: pccsUrl === void 0 || pccsUrl === "" ? DEFAULT_PCCS_URL : pccsUrl };
+}
+var E_COLLATERAL_FETCH = "E_COLLATERAL_FETCH";
+var COLLATERAL_LINE = "fresh Intel collateral fetched by the client from the PCCS (not the exit's copy)";
+var CollateralFetchError = class extends PlrError {
+  constructor(detail) {
+    super("E_COLLATERAL");
+    this.code = E_COLLATERAL_FETCH;
+    this.message = detail === void 0 ? E_COLLATERAL_FETCH : `${E_COLLATERAL_FETCH}: ${detail}`;
+  }
+};
+function isCollateralFetchError(e) {
+  return e instanceof PlrError && e.code === E_COLLATERAL_FETCH;
+}
+var dcap2;
+function getDcap2() {
+  dcap2 ??= createRequire2(import.meta.url)("@phala/dcap-qvl");
+  return dcap2;
+}
+async function fetchPccsCollateral(pccsUrl, quote, timeoutMs = PCCS_TIMEOUT_MS) {
+  let timer;
+  try {
+    const work = getDcap2().getCollateral(pccsUrl, Buffer.from(quote));
+    work.catch(() => void 0);
+    const raw = await Promise.race([
+      work,
+      new Promise((_, rej) => {
+        timer = setTimeout(() => rej(new Error("timeout")), timeoutMs);
+      })
+    ]);
+    return canonicalCollateral(raw);
+  } catch {
+    throw new CollateralFetchError("PCCS");
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function isPccsUrl(u) {
+  if (u.length > 2048)
+    return false;
+  try {
+    return new URL(u).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+// client/dist/verify-report.js
+var REGISTRY_CODE_LINE = "registry contract code hash matches the pinned build (view_account.code_hash)";
 var TracingRegistry = class {
   inner;
   lastCall;
@@ -76288,6 +76448,16 @@ var TracingRegistry = class {
   }
   get contractId() {
     return this.inner.contractId;
+  }
+  /** The inner reader's code-hash pin state (a `NearRegistry` with `codeHash`), else undefined. */
+  get codeHashState() {
+    const v = this.inner.codeHashVerified;
+    return v === true ? "verified" : v === false ? "unverified" : void 0;
+  }
+  /** Forwards the inner reader's code-hash check (no-op for a reader without one). */
+  checkCodeHash() {
+    const f = this.inner.checkCodeHash;
+    return typeof f === "function" ? f.call(this.inner) : Promise.resolve();
   }
   getRoot() {
     this.lastCall = "getRoot";
@@ -76313,14 +76483,15 @@ var TracingRegistry = class {
 var INTEL_ONLY = /* @__PURE__ */ new Set(["TCB", "COMPOSE_POLICY"]);
 var ALL_CHECKS = Object.keys(CHECKS);
 var MOCK_ORDER = ALL_CHECKS.filter((k) => !INTEL_ONLY.has(k));
-var INTEL_ORDER = MOCK_ORDER.flatMap((k) => k === "QUOTE_SIG" ? [k, "TCB"] : k === "COMPOSE" ? [k, "COMPOSE_POLICY"] : [k]);
+var INTEL_ORDER = MOCK_ORDER.flatMap((k) => k === "QUOTE_SIG" ? ["COLLATERAL", k, "TCB"] : k === "COMPOSE" ? [k, "COMPOSE_POLICY"] : [k]);
 function orderFor(o) {
-  return [...o.intel === true ? INTEL_ORDER : MOCK_ORDER];
+  const base = [...o.intel === true ? INTEL_ORDER : MOCK_ORDER];
+  return o.codeHash === void 0 ? base : ["REGISTRY_CODE", ...base];
 }
 var LABELS = {
   NONCE: `report_data binds client nonce as a session quote (SHA256("PLR-v1/session-nonce" ‖ nonce))`
 };
-var label = (k) => LABELS[k] ?? CHECKS[k];
+var label = (k) => k === "REGISTRY_CODE" ? REGISTRY_CODE_LINE : k === "COLLATERAL" ? COLLATERAL_LINE : LABELS[k] ?? CHECKS[k];
 var CODE_TO_CHECK = {
   E_BAD_RESPONSE: "RESPONSE",
   E_QUOTE_FORMAT: "QUOTE_FORMAT",
@@ -76347,14 +76518,28 @@ var REGISTRY_STEP = {
   getInstance: "INSTANCE",
   getAnchor: "INSTANCE"
 };
+var COLLATERAL_NOTES = {
+  exit: "not checked: PLR_PCCS_URL=exit, the exit's own copy is used",
+  recorded: "not checked: offline replay uses the recorded collateral"
+};
 function checkLines(err, lastRegistryCall, o = {}) {
+  const mode = o.collateral ?? "pccs";
+  if (mode === "pccs")
+    return rawCheckLines(err, lastRegistryCall, o);
+  const note = COLLATERAL_NOTES[mode];
+  return rawCheckLines(err, lastRegistryCall, o).map((l) => l.name === COLLATERAL_LINE ? { name: l.name, status: "skipped", note } : l);
+}
+function rawCheckLines(err, lastRegistryCall, o) {
   const order = orderFor(o);
   if (err === void 0)
     return order.map((k) => ({ name: label(k), status: "pass" }));
-  const code = err instanceof PlrError ? err.code : "E_BAD_RESPONSE";
-  let failing = CODE_TO_CHECK[code];
-  if (code === "E_REGISTRY_UNAVAILABLE")
+  const code = isRegistryCodeHashError(err) ? E_REGISTRY_CODE_HASH : isCollateralFetchError(err) ? E_COLLATERAL_FETCH : err instanceof PlrError ? err.code : "E_BAD_RESPONSE";
+  let failing = code === E_REGISTRY_CODE_HASH ? "REGISTRY_CODE" : code === E_COLLATERAL_FETCH ? "COLLATERAL" : CODE_TO_CHECK[code];
+  if (code === "E_REGISTRY_UNAVAILABLE") {
     failing = lastRegistryCall ? REGISTRY_STEP[lastRegistryCall] : "ROOT";
+    if (o.codeHash === "unverified")
+      failing = "REGISTRY_CODE";
+  }
   const found = failing === void 0 ? -1 : order.indexOf(failing);
   const idx = found < 0 ? 0 : found;
   return order.map((k, i) => {
@@ -76415,7 +76600,9 @@ function parseProofReply(j) {
 async function chainAnchor(registry2, id2) {
   try {
     return await registry2.getAnchor(id2);
-  } catch {
+  } catch (e) {
+    if (isRegistryCodeHashError(e))
+      throw e;
     throw new PlrError("E_REGISTRY_UNAVAILABLE", "get_anchor");
   }
 }
@@ -76475,28 +76662,6 @@ init_define_STATUS_REPLAY();
 init_define_STATUS_DEFAULTS();
 init_define_STATUS_REPLAY();
 import { randomBytes as randomBytes8 } from "node:crypto";
-
-// client/dist/pccs.js
-init_define_STATUS_DEFAULTS();
-init_define_STATUS_REPLAY();
-import { createRequire as createRequire2 } from "node:module";
-var dcap2;
-function getDcap2() {
-  dcap2 ??= createRequire2(import.meta.url)("@phala/dcap-qvl");
-  return dcap2;
-}
-async function fetchPccsCollateral(pccsUrl, quote) {
-  let raw;
-  try {
-    raw = await getDcap2().getCollateral(pccsUrl, Buffer.from(quote));
-  } catch {
-    throw new PlrError("E_COLLATERAL", "PCCS");
-  }
-  return canonicalCollateral(raw);
-}
-
-// client/dist/attestation.js
-var MAX_PCCS_QUOTE_HEX = 2 * 8192;
 var AttestationCache = class {
   #o;
   #session;
@@ -76507,19 +76672,31 @@ var AttestationCache = class {
   get ttlMs() {
     return this.#o.ttlMs;
   }
+  /** Where an INTEL verification takes its collateral from; undefined for a MOCK verifier (it has no collateral). */
+  get collateral() {
+    return this.#o.verifier.rootKind === "INTEL" ? collateralSource(this.#o.pccsUrl) : void 0;
+  }
   /** Fetches and verifies a fresh attestation (new random nonce every call) and caches it. @throws PlrError */
   async attest() {
     const nonce = new Uint8Array(randomBytes8(32));
     try {
-      const bundle = await this.#withFreshCollateral(await this.#o.fetchBundle(nonce));
-      const verified = await verifyAttestation({
+      await checkRegistryCode(this.#o.registry);
+      const bundle = await this.#o.fetchBundle(nonce);
+      const src = this.collateral;
+      const verified = src?.source === "pccs" ? await this.#verifyWithFreshCollateral(bundle, nonce, src.url) : await verifyAttestation({
         bundle,
         nonce,
         verifier: this.#o.verifier,
         registry: this.#o.registry,
         trustedRoot: this.#o.trustedRoot
       });
-      const session = { verified, attNonce: nonce, at: this.#o.clock(), appCompose: bundle.app_compose };
+      const session = {
+        verified,
+        attNonce: nonce,
+        at: this.#o.clock(),
+        appCompose: bundle.app_compose,
+        ...src !== void 0 ? { collateral: src } : {}
+      };
       this.#session = session;
       return session;
     } catch (e) {
@@ -76530,21 +76707,68 @@ var AttestationCache = class {
     }
   }
   /**
-   * SPEC-TDX §1.5 / TASKS T24: in INTEL mode with `pccsUrl` set, replace the exit's `collateral` with a fresh
-   * copy fetched from the PCCS (`getCollateral`) before verification. The fetch is async and runs here, so
-   * `verifyAttestation` stays synchronous and receives the value through the bundle field. The exit's own copy is
-   * untrusted anyway; a stale or missing one must not decide whether the client can verify.
-   * @throws PlrError E_BAD_RESPONSE (malformed quote), E_COLLATERAL (PCCS unreachable / not collateral)
+   * INTEL verification on collateral this client fetched itself. `@plr/shared`'s `verifyAttestation` is part of the
+   * measured exit image and has no hook for it, so the client runs it twice:
+   *  1. with a verifier that stops where the DCAP check would start. Every check before it (response shape, quote
+   *     structure, TEE type, pinned root) runs on the exit's bundle and fails with its own code; the real verifier
+   *     is not called, so the exit's collateral is never used for a DCAP check.
+   *  2. if that point was reached: fetch fresh collateral for the quote from the PCCS (any failure, or an answer
+   *     that is not collateral, is `E_COLLATERAL_FETCH`: there is no fallback to the exit's copy), then the full
+   *     verification of the same bundle with `collateral` replaced by the fresh copy.
+   * The registry root is read once and reused by the second run.
+   * @throws PlrError (incl. CollateralFetchError)
    */
-  async #withFreshCollateral(bundle) {
-    const pccsUrl = this.#o.pccsUrl;
-    if (pccsUrl === void 0 || this.#o.verifier.rootKind !== "INTEL")
-      return bundle;
-    const q = bundle.quote;
-    if (typeof q !== "string" || !isHex(q) || q.length === 0 || q.length > MAX_PCCS_QUOTE_HEX) {
-      throw new PlrError("E_BAD_RESPONSE", "quote");
+  async #verifyWithFreshCollateral(bundle, nonce, pccsUrl) {
+    const real = this.#o.verifier;
+    const inner = this.#o.registry;
+    let root;
+    const registry2 = {
+      get chain() {
+        return inner.chain;
+      },
+      get contractId() {
+        return inner.contractId;
+      },
+      getRoot: () => root ??= inner.getRoot(),
+      isComposeAllowed: (h) => inner.isComposeAllowed(h),
+      isOsAllowed: (h) => inner.isOsAllowed(h),
+      getInstance: (k) => inner.getInstance(k),
+      getAnchor: (id2) => inner.getAnchor(id2)
+    };
+    let reached = false;
+    const stop = {
+      rootKind: real.rootKind,
+      get rootPublicKey() {
+        return real.rootPublicKey;
+      },
+      verify: () => {
+        reached = true;
+        throw new PlrError("E_QUOTE_SIG");
+      }
+    };
+    try {
+      await verifyAttestation({ bundle, nonce, verifier: stop, registry: registry2, trustedRoot: this.#o.trustedRoot });
+    } catch (e) {
+      if (!reached)
+        throw e;
     }
-    return { ...bundle, collateral: await fetchPccsCollateral(pccsUrl, fromHex(q)) };
+    if (!reached)
+      throw new PlrError("E_BAD_RESPONSE");
+    let fresh;
+    try {
+      fresh = await (this.#o.fetchCollateral ?? fetchPccsCollateral)(pccsUrl, fromHex(bundle.quote));
+    } catch {
+      throw new CollateralFetchError();
+    }
+    if (!isCollateralJson(fresh))
+      throw new CollateralFetchError("not collateral");
+    return verifyAttestation({
+      bundle: { ...bundle, collateral: fresh },
+      nonce,
+      verifier: real,
+      registry: registry2,
+      trustedRoot: this.#o.trustedRoot
+    });
   }
   /** The cached verification if it is younger than `ttlMs`, else a fresh one (shared between concurrent callers). */
   async current() {
@@ -76565,7 +76789,9 @@ async function regCall(f, valid) {
   let v;
   try {
     v = await f();
-  } catch {
+  } catch (e) {
+    if (isRegistryCodeHashError(e))
+      throw e;
     throw new PlrError("E_REGISTRY_UNAVAILABLE");
   }
   if (!valid(v))
@@ -76575,6 +76801,7 @@ async function regCall(f, valid) {
 var isBool2 = (v) => typeof v === "boolean";
 var isInstanceOrNull = (v) => v === null || isInstanceRecord(v);
 async function recheckRegistry(registry2, v, now = Date.now()) {
+  await checkRegistryCode(registry2);
   const composeHex = toHex(v.composeHash);
   const osHex = toHex(v.osMeasurement);
   if (!await regCall(() => registry2.isComposeAllowed(composeHex), isBool2))
@@ -77250,6 +77477,10 @@ var ExitHop = class {
       ...o.pccsUrl !== void 0 ? { pccsUrl: o.pccsUrl } : {}
     });
   }
+  /** Where an INTEL verification takes its collateral from (undefined in MOCK mode). */
+  get collateral() {
+    return this.#attestation.collateral;
+  }
   /** Fresh attestation (new nonce, SPEC §9 checks 1–10). @throws PlrError */
   attest() {
     return this.#attestation.attest();
@@ -77399,6 +77630,10 @@ var VpnClient = class {
   get rootKind() {
     return this.#hop.verifier.rootKind;
   }
+  /** Where an INTEL verification takes its collateral from: the client's PCCS (default) or the exit; undefined in MOCK mode. */
+  get collateral() {
+    return this.#hop.collateral;
+  }
   /** Fetches and verifies a fresh attestation (new random nonce, SPEC §9 against the VPN registry). @throws PlrError */
   async attest() {
     return (await this.#hop.attest()).verified;
@@ -77455,12 +77690,17 @@ var errCode = (e) => isPlrError(e) ? e.code : e instanceof Error ? e.message : "
 var fromLine = (l) => ({
   name: l.name,
   ok: l.status === "pass",
-  detail: l.status === "pass" ? "" : l.status === "fail" ? l.code ?? "error" : "not checked"
+  detail: l.status === "pass" ? "" : l.status === "fail" ? l.code ?? "error" : "not checked",
+  ...l.note !== void 0 ? { note: l.note } : {}
 });
 async function verifyVpnReport(client, registry2) {
   const root = client.rootKind;
   const intel = root === "INTEL";
-  const opts = { intel };
+  const opts = () => ({
+    intel,
+    collateral: client.collateral?.source ?? "pccs",
+    codeHash: registry2.codeHashState
+  });
   const refused = (e, lines, recheck) => {
     const code = errCode(e);
     const checks2 = lines.map(fromLine);
@@ -77472,9 +77712,9 @@ async function verifyVpnReport(client, registry2) {
   try {
     session = await client.attestSession();
   } catch (e) {
-    return refused(e, checkLines(e, registry2.lastCall, opts), "skip");
+    return refused(e, checkLines(e, registry2.lastCall, opts()), "skip");
   }
-  const passed = checkLines(void 0, void 0, opts);
+  const passed = checkLines(void 0, void 0, opts());
   try {
     await recheckRegistry(registry2, session.verified);
   } catch (e) {
@@ -77704,6 +77944,8 @@ function emptyStatus(now) {
     links: { repo: REPO, explorer_tx: EXPLORER_TX }
   };
 }
+var REPLAY_LINES = { intel: true, collateral: "recorded" };
+var replayChecks = (e) => checkLines(e, void 0, REPLAY_LINES).filter((l) => l.note === void 0).map(fromLine);
 async function replayOf(raw, verifier) {
   if (raw === void 0)
     return null;
@@ -77716,7 +77958,7 @@ async function replayOf(raw, verifier) {
         captured_at: iso(f.meta.captured_at_ms),
         verdict: "VERIFIED",
         code: null,
-        checks: checkLines(void 0, void 0, { intel: true }).map((l) => ({ name: l.name, ok: true, detail: "" })),
+        checks: replayChecks(void 0),
         compose: compose(verified)
       };
     } catch (e) {
@@ -77725,11 +77967,7 @@ async function replayOf(raw, verifier) {
         captured_at: iso(f.meta.captured_at_ms),
         verdict: "REFUSED",
         code,
-        checks: checkLines(e, void 0, { intel: true }).map((l) => ({
-          name: l.name,
-          ok: l.status === "pass",
-          detail: l.status === "pass" ? "" : l.status === "fail" ? l.code ?? "error" : "not checked"
-        })),
+        checks: replayChecks(e),
         compose: null
       };
     }
@@ -77813,7 +78051,14 @@ function resolveConfig(o) {
   if (rpcUrl === void 0)
     throw new Error("NEAR RPC not configured (PLR_NEAR_RPC)");
   checkRpcUrl(rpcUrl);
-  return { exitUrl, registry: registry2, trustedRoot, rpcUrl };
+  const explicit = o.registryCodeHash || env.PLR_VPN_REGISTRY_CODE_HASH || (registry2 === BAKED.registry ? BAKED.registryCodeHash : void 0);
+  const codeHash = resolveRegistryCodeHash(registry2, explicit, isIntelRoot(trustedRoot));
+  const envPccs = env.PLR_PCCS_URL || void 0;
+  if (o.pccsUrl === void 0 && envPccs !== void 0 && envPccs !== COLLATERAL_FROM_EXIT && !isPccsUrl(envPccs)) {
+    throw new Error(`PLR_PCCS_URL must be an https URL or "${COLLATERAL_FROM_EXIT}"`);
+  }
+  const pccsUrl = o.pccsUrl ?? envPccs;
+  return { exitUrl, registry: registry2, trustedRoot, rpcUrl, codeHash, ...pccsUrl !== void 0 ? { pccsUrl } : {} };
 }
 async function getStatus(opts = {}) {
   const status = emptyStatus(Date.now());
@@ -77830,7 +78075,7 @@ async function getStatus(opts = {}) {
   }
   status.exit.url = cfg.exitUrl;
   status.registry.account = cfg.registry;
-  const near = new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.registry, timeoutMs: T.chain });
+  const near = new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.registry, timeoutMs: T.chain, ...cfg.codeHash !== void 0 ? { codeHash: cfg.codeHash } : {} });
   const tracing = new TracingRegistry(near);
   const nearBlocks = (opts.nearBlocksApi ?? DEFAULT_NEARBLOCKS).replace(/\/+$/, "");
   const archival = opts.archivalRpc ?? DEFAULT_ARCHIVAL;
@@ -77842,7 +78087,8 @@ async function getStatus(opts = {}) {
         registry: tracing,
         trustedRoot: cfg.trustedRoot,
         ...opts.verifier !== void 0 ? { verifier: opts.verifier } : {},
-        timeouts: { attestMs: Math.min(15e3, T.verify), connectMs: T.egress }
+        timeouts: { attestMs: Math.min(15e3, T.verify), connectMs: T.egress },
+        ...cfg.pccsUrl !== void 0 ? { pccsUrl: cfg.pccsUrl } : {}
       });
     } catch {
       return void 0;
@@ -77982,13 +78228,14 @@ async function getRegistryStatus(opts = {}) {
 function openExit(opts = {}) {
   const cfg = resolveConfig(opts);
   const T = { verify: 25e3, egress: 15e3, chain: 8e3, ...opts.timeouts ?? {} };
-  const registry2 = new TracingRegistry(new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.registry, timeoutMs: T.chain }));
+  const registry2 = new TracingRegistry(new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.registry, timeoutMs: T.chain, ...cfg.codeHash !== void 0 ? { codeHash: cfg.codeHash } : {} }));
   const client = new VpnClient({
     exitUrl: cfg.exitUrl,
     registry: registry2,
     trustedRoot: cfg.trustedRoot,
     ...opts.verifier !== void 0 ? { verifier: opts.verifier } : {},
-    timeouts: { attestMs: Math.min(15e3, T.verify), connectMs: T.egress }
+    timeouts: { attestMs: Math.min(15e3, T.verify), connectMs: T.egress },
+    ...cfg.pccsUrl !== void 0 ? { pccsUrl: cfg.pccsUrl } : {}
   });
   return { exitUrl: cfg.exitUrl, registryId: cfg.registry, rpcUrl: cfg.rpcUrl, client, registry: registry2 };
 }

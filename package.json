@@ -18,7 +18,8 @@
     "test:contract": "cd contracts/near && cargo test",
     "e2e": "npm test -w e2e",
     "build:status": "tsc -b && node scripts/build-status.mjs",
-    "build:mcp": "tsc -b && node mcp/build.mjs"
+    "build:mcp": "tsc -b && node mcp/build.mjs",
+    "build:npm": "npm run build:mcp && node scripts/build-npm.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -12,15 +12,17 @@ import { isIP } from "node:net";
 import {
   fromHex,
   isHex,
+  isIntelRoot,
   isValidP256Pub,
   keyHash,
   toHex,
   type QuoteVerifier,
 } from "@plr/shared";
-import { NearRegistry, checkRpcUrl, isNearAccountId } from "./near-registry.js";
+import { NearRegistry, checkRpcUrl, isNearAccountId, resolveRegistryCodeHash } from "./near-registry.js";
 import { TracingRegistry, checkLines } from "./verify-report.js";
 import { VpnClient } from "./vpn/client.js";
-import { composeFacts, verifyVpnReport, type ComposeFacts, type VerifyCheck } from "./vpn-report.js";
+import { composeFacts, fromLine, verifyVpnReport, type ComposeFacts, type VerifyCheck } from "./vpn-report.js";
+import { COLLATERAL_FROM_EXIT, isPccsUrl } from "./pccs.js";
 import { parseFixture, verifyFixtureData, type RawFixture } from "./fixture.js";
 
 /** Replaced by esbuild (`scripts/build-status.mjs`) with the values of deploy/testnet/env.live and the live-exit fixture. */
@@ -30,6 +32,8 @@ declare const __STATUS_REPLAY__: RawFixture | undefined;
 export interface StatusDefaults {
   exitUrl?: string;
   registry?: string;
+  /** deploy/testnet/env.live `PLR_VPN_REGISTRY_CODE_HASH`: the pinned code hash of that registry account. */
+  registryCodeHash?: string;
   trustedRoot?: string;
   rpcUrl?: string;
   /** deploy/testnet/env.live `OPERATOR_ID`. */
@@ -60,12 +64,22 @@ export interface StatusOptions {
   exitUrl?: string;
   /** VPN registry account id. */
   registry?: string;
+  /**
+   * Pinned code hash of the registry account (else `PLR_VPN_REGISTRY_CODE_HASH`, else the baked / shipped pin of
+   * that registry). Required with the Intel root; without one a MOCK root checks the account id only.
+   */
+  registryCodeHash?: string;
   /** Pinned root, 128 hex. */
   trustedRoot?: string;
   rpcUrl?: string;
   /** Operator account whose registration transaction is looked up (default: the instance's operator). */
   operator?: string;
-  /** Env to read PLR_VPN_URL, PLR_VPN_REGISTRY, PLR_TRUSTED_ROOT, PLR_NEAR_RPC from (default `process.env`). */
+  /**
+   * The PCCS the live check fetches fresh Intel collateral from (INTEL mode). Default: `PLR_PCCS_URL`, else
+   * `DEFAULT_PCCS_URL` (Intel's PCS); `"exit"` uses the exit's copy.
+   */
+  pccsUrl?: string;
+  /** Env to read PLR_VPN_URL, PLR_VPN_REGISTRY, PLR_TRUSTED_ROOT, PLR_NEAR_RPC, PLR_PCCS_URL from (default `process.env`). */
   env?: Record<string, string | undefined>;
   /** NearBlocks API v3 base (default testnet). Plain http is allowed here (tests). */
   nearBlocksApi?: string;
@@ -265,6 +279,13 @@ function emptyStatus(now: number): Status {
   };
 }
 
+/**
+ * The replay verifies the recorded collateral and contacts no PCCS, so the client-fetched-collateral line is not
+ * one of its checks: the replay list stays the 16 checks that ran.
+ */
+const REPLAY_LINES = { intel: true, collateral: "recorded" } as const;
+const replayChecks = (e: unknown): StatusCheck[] => checkLines(e, undefined, REPLAY_LINES).filter((l) => l.note === undefined).map(fromLine);
+
 async function replayOf(raw: RawFixture | undefined, verifier: QuoteVerifier | undefined): Promise<Status["replay"]> {
   if (raw === undefined) return null;
   try {
@@ -277,7 +298,7 @@ async function replayOf(raw: RawFixture | undefined, verifier: QuoteVerifier | u
         captured_at: iso(f.meta.captured_at_ms),
         verdict: "VERIFIED",
         code: null,
-        checks: checkLines(undefined, undefined, { intel: true }).map((l) => ({ name: l.name, ok: true, detail: "" })),
+        checks: replayChecks(undefined),
         compose: compose(verified),
       };
     } catch (e) {
@@ -286,11 +307,7 @@ async function replayOf(raw: RawFixture | undefined, verifier: QuoteVerifier | u
         captured_at: iso(f.meta.captured_at_ms),
         verdict: "REFUSED",
         code,
-        checks: checkLines(e, undefined, { intel: true }).map((l) => ({
-          name: l.name,
-          ok: l.status === "pass",
-          detail: l.status === "pass" ? "" : l.status === "fail" ? (l.code ?? "error") : "not checked",
-        })),
+        checks: replayChecks(e),
         compose: null,
       };
     }
@@ -354,6 +371,10 @@ interface Cfg {
   registry: string;
   trustedRoot: Uint8Array;
   rpcUrl: string;
+  /** Pinned code hash of the registry account; undefined only with a MOCK root and an unpinned registry. */
+  codeHash: string | undefined;
+  /** undefined = the default PCCS (Intel PCS); "exit" = the exit's copy. */
+  pccsUrl?: string;
 }
 
 function resolveConfig(o: StatusOptions): Cfg {
@@ -370,7 +391,16 @@ function resolveConfig(o: StatusOptions): Cfg {
   if (!isValidP256Pub(trustedRoot)) throw new Error("PLR_TRUSTED_ROOT is not a valid P-256 public key");
   if (rpcUrl === undefined) throw new Error("NEAR RPC not configured (PLR_NEAR_RPC)");
   checkRpcUrl(rpcUrl);
-  return { exitUrl, registry, trustedRoot, rpcUrl };
+  // The baked pin belongs to the baked registry only: another registry needs its own (or a shipped) pin.
+  const explicit = o.registryCodeHash || env.PLR_VPN_REGISTRY_CODE_HASH || (registry === BAKED.registry ? BAKED.registryCodeHash : undefined);
+  const codeHash = resolveRegistryCodeHash(registry, explicit, isIntelRoot(trustedRoot));
+  // Fresh Intel collateral is fetched by this process (default: Intel's PCS). Only the env value is validated here.
+  const envPccs = env.PLR_PCCS_URL || undefined;
+  if (o.pccsUrl === undefined && envPccs !== undefined && envPccs !== COLLATERAL_FROM_EXIT && !isPccsUrl(envPccs)) {
+    throw new Error(`PLR_PCCS_URL must be an https URL or "${COLLATERAL_FROM_EXIT}"`);
+  }
+  const pccsUrl = o.pccsUrl ?? envPccs;
+  return { exitUrl, registry, trustedRoot, rpcUrl, codeHash, ...(pccsUrl !== undefined ? { pccsUrl } : {}) };
 }
 
 /**
@@ -393,7 +423,7 @@ export async function getStatus(opts: StatusOptions = {}): Promise<Status> {
   }
   status.exit.url = cfg.exitUrl;
   status.registry.account = cfg.registry;
-  const near = new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.registry, timeoutMs: T.chain });
+  const near = new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.registry, timeoutMs: T.chain, ...(cfg.codeHash !== undefined ? { codeHash: cfg.codeHash } : {}) });
   const tracing = new TracingRegistry(near);
   const nearBlocks = (opts.nearBlocksApi ?? DEFAULT_NEARBLOCKS).replace(/\/+$/, "");
   const archival = opts.archivalRpc ?? DEFAULT_ARCHIVAL;
@@ -412,6 +442,7 @@ export async function getStatus(opts: StatusOptions = {}): Promise<Status> {
         trustedRoot: cfg.trustedRoot,
         ...(opts.verifier !== undefined ? { verifier: opts.verifier } : {}),
         timeouts: { attestMs: Math.min(15_000, T.verify), connectMs: T.egress },
+        ...(cfg.pccsUrl !== undefined ? { pccsUrl: cfg.pccsUrl } : {}),
       });
     } catch {
       return undefined;
@@ -578,19 +609,20 @@ export interface OpenedExit {
 
 /**
  * Builds the {@link VpnClient} for the configured exit (defaults baked at build time, overridable by `opts` and
- * `PLR_VPN_URL` / `PLR_VPN_REGISTRY` / `PLR_TRUSTED_ROOT` / `PLR_NEAR_RPC`).
+ * `PLR_VPN_URL` / `PLR_VPN_REGISTRY` / `PLR_VPN_REGISTRY_CODE_HASH` / `PLR_TRUSTED_ROOT` / `PLR_NEAR_RPC`).
  * @throws Error with a readable message when the configuration is invalid
  */
 export function openExit(opts: StatusOptions = {}): OpenedExit {
   const cfg = resolveConfig(opts);
   const T = { verify: 25_000, egress: 15_000, chain: 8_000, ...(opts.timeouts ?? {}) };
-  const registry = new TracingRegistry(new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.registry, timeoutMs: T.chain }));
+  const registry = new TracingRegistry(new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.registry, timeoutMs: T.chain, ...(cfg.codeHash !== undefined ? { codeHash: cfg.codeHash } : {}) }));
   const client = new VpnClient({
     exitUrl: cfg.exitUrl,
     registry,
     trustedRoot: cfg.trustedRoot,
     ...(opts.verifier !== undefined ? { verifier: opts.verifier } : {}),
     timeouts: { attestMs: Math.min(15_000, T.verify), connectMs: T.egress },
+    ...(cfg.pccsUrl !== undefined ? { pccsUrl: cfg.pccsUrl } : {}),
   });
   return { exitUrl: cfg.exitUrl, registryId: cfg.registry, rpcUrl: cfg.rpcUrl, client, registry };
 }

@@ -46,7 +46,7 @@ Offline (no network): the same exit's quote and registry state, captured 2026-11
 npm ci && npx tsc -b && node client/dist/cli.js vpn verify --fixture fixtures/live-exit
 ```
 
-You see 16 `✔` lines and `✔ VERIFIED (FIXTURE REPLAY …)`. The full local demo with revocation (needs Rust) is [option 1](#try-it-all-options).
+You see 16 `✔` lines, one `·` line (the replay uses the recorded Intel collateral instead of fetching fresh collateral) and `✔ VERIFIED (FIXTURE REPLAY …)`. The full local demo with revocation (needs Rust) is [option 1](#try-it-all-options).
 
 ## Numbers
 
@@ -110,8 +110,9 @@ A keyless NEAR contract on testnet ([`vpnreg.pe-owner-erhan.testnet`](https://te
    npm ci && npx tsc -b && node client/dist/cli.js vpn verify --fixture fixtures/live-exit
    ```
 
-   - see: every check `✔`, then `✔ VERIFIED (FIXTURE REPLAY …)` with the registration tx. No network is used; the
-     DCAP check runs at the capture time (2026-11-12).
+   - see: every check `✔`, then `✔ VERIFIED (FIXTURE REPLAY …)` with the registration tx. No network is used: the
+     DCAP check runs at the capture time (2026-11-12) on the recorded collateral, so the one line a live run adds
+     (`fresh Intel collateral fetched by the client from the PCCS`) is printed as `·` not checked.
    - the older test-VM quote (2026-11-09, before the exit existed) is kept too:
      `node client/dist/cli.js vpn verify --fixture fixtures/phala-spike/replay`. It shows `✔ quote signature chain to root`, `✔ Intel TCB status accepted`, then the expected refusal
      `✘ E_REPORT_DATA_KEYS` — the recorded 2026-11-09 Phala CVM asked dstack for `report_data = 64 × 0x42`, so it
@@ -190,9 +191,10 @@ A keyless NEAR contract on testnet ([`vpnreg.pe-owner-erhan.testnet`](https://te
   [`G24JXkyL…`](https://testnet.nearblocks.io/txns/G24JXkyLJZQjV8FFHeG9x5ZGy9mNVgwKtSi8p8xEZHL1), the live exit's first 13/13 registration
   [`HSQqnRMu…`](https://testnet.nearblocks.io/txns/HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8) (188.08 Tgas). The client no longer uses it.
   - Allowlists for the **spike** (not an exit) compose `b9823a79…d05f` and OS measurement `821d442f…d323d`. They are
-  allowed on the INTEL registry **only to demonstrate checks 1–12**; the client refuses that compose with
-  `E_COMPOSE_POLICY` (no `exit` service, unpinned image), but the registry itself would list a registration under it,
-  so the owner should `revoke_compose b9823a79…` once the demo video is recorded (not done here): txs
+  allowed on that registry **only to demonstrate checks 1–12** (the client refuses that compose with `E_COMPOSE_POLICY`:
+  no `exit` service, unpinned image). The compose was revoked there on 2026-11-12
+  ([`3DmY4Rqr…`](https://testnet.nearblocks.io/txns/3DmY4RqrDAVknLov5pDYMgAQvjmMpM354eeGZdWifh7n)); it was never allowed
+  on the live registry. Allow txs
   [`EmWz2Uawni6PicfCqrG8YwkZeZwgkyQMTCbGACQwq6sM`](https://testnet.nearblocks.io/txns/EmWz2Uawni6PicfCqrG8YwkZeZwgkyQMTCbGACQwq6sM)
   and [`E3to6jCjasF37vLqRtsFKLsehLpXL2J1xK7PNFbHnwbX`](https://testnet.nearblocks.io/txns/E3to6jCjasF37vLqRtsFKLsehLpXL2J1xK7PNFbHnwbX).
   - Revocation works on testnet: `revoke_compose b9823a79…` tx
@@ -252,24 +254,33 @@ Every limit and disclosure from the earlier README that applies to the code in t
   (`MOCK ROOT (local test root, NOT Intel)`). Mock-host limits, which real TDX removes: the quote socket is a 0600
   Unix socket of the operator's uid (any same-uid process can obtain a genuine quote for **any** `report_data`), the
   root secret is a 0600 file of the same uid, and the TD is a set of same-uid processes.
-- **Collateral freshness window (R7).** The exit serves the Intel collateral (PCK CRL, TCB info, QE identity) it
-  fetched from a PCCS. `dcap-qvl` checks it against the client's clock, so it cannot be expired — but an exit can
-  serve a CRL that is *stale yet unexpired* and hide a freshly revoked platform. Setting `PLR_PCCS_URL` on the client
-  makes the client fetch fresh collateral itself (T24); the residual window is the CRL's own update interval.
+- **Collateral freshness window (R7).** In INTEL mode the client fetches the Intel collateral (PCK CRL, TCB info,
+  QE identity) itself, by default from Intel's PCS (`https://api.trustedservices.intel.com`; `PLR_PCCS_URL` names
+  another PCCS), and refuses the exit with `E_COLLATERAL_FETCH` when it cannot — it never falls back to the exit's
+  copy. The residual window is the CRL's own update interval. `PLR_PCCS_URL=exit` opts out (the exit's copy, which
+  can be *stale yet unexpired*), and the offline fixture replay uses the recorded collateral; both say so in
+  `vpn verify`.
 - **The OS measurement was observed, not reproduced (T26 not done).** The allowlisted value `821d442f…d323d` is the
   `SHA256(mr_td ‖ rtmr0 ‖ rtmr1 ‖ rtmr2)` of the dstack OS image that booted, read from the quote. It was not
   re-derived with `dstack-mr` from the dstack release. The owner approves the value they saw, not one computed from
   source.
 - **The image rebuild was shown on one machine.** `scripts/verify-exit-image.sh` rebuilds the exit image and compares
   it with the pinned digest. Run so far: two fresh clones on one machine with the pinned BuildKit gave the same
-  digest, the one pushed and deployed. Not run: a build on a second machine. A `MATCH` says the image is what this source builds, not that the source is honest; the base image
-  is trusted by its digest and the npm packages by the lockfile's hashes.
+  digest, the one pushed and deployed. A second machine: a CI job (`.github/workflows/verify-exit-image.yml`) re-runs
+  the script on a GitHub-hosted `linux/amd64` runner on every push. Whether it printed `MATCH` there is in that run's
+  Actions log and job summary (digest and BuildKit version); it is not recorded here as passed. A `MATCH` says the
+  image is what this source builds, not that the source is honest; the base image is trusted by its digest and the
+  npm packages by the lockfile's hashes.
 - **A single owner key decides the allowlist (R12).** `pe-owner-erhan.testnet` is one NEAR account: whoever holds that
   key can allow or revoke builds and operators. The client pins the Intel root and the registry contract, not the
   owner. Multisig / a DAO (e.g. Sputnik) is future work.
 - **The contract account's own key: closed.** The registry the client uses has no access keys, so nobody can deploy a
-  different wasm under its name, and its code rebuilds from this repo to the deployed hash. The client still pins
-  only the contract id (pinning `view_account.code_hash` as well is future work). The first registry
+  different wasm under its name, and its code rebuilds from this repo to the deployed hash. The client pins the
+  contract id and its code hash: before it uses any registry answer it reads `view_account.code_hash` and compares it
+  with the pin (`PLR_VPN_REGISTRY_CODE_HASH`; shipped for the live registry), and refuses with
+  `E_REGISTRY_CODE_HASH` on a difference. `vpn verify` shows it as its own check line. A passed check is reused for
+  30 seconds. Any other registry needs its own pin with the Intel root; only the local MOCK demo runs without one
+  (it prints a warning). The hash comes from the same RPC as the views, so the RPC stays trusted (see below). The first registry
   (`pe-vpnreg-erhan.testnet`) still has a full-access key and a non-reproducible build; it is retired.
 - **In a cloud deployment, Phala's dstack-gateway terminates TLS.** HTTPS to the exit ends at the gateway
   (`https://<app-id>-18200.<gateway-domain>`), which then speaks to the container; the tunnel inside is end-to-end
@@ -371,7 +382,7 @@ Older history (commit timeline, the removed router and multi-chain code, the Oct
 `@phala/dstack-sdk` 0.5.8 (Apache-2.0), `yaml` 2.8.1, `@modelcontextprotocol/sdk`, `zod`, `esbuild`,
 `vitest`, `near-sdk` 5.29.1, the `dcap-qvl` 0.7.1 crate (MIT), `sha2`, `p256`, `ed25519-dalek`.
 Test vectors from dcap-qvl's `sample/` (MIT). Infrastructure: Phala Cloud (dstack: the live exit and a test CVM), NEAR testnet,
-FASTNEAR RPC, Phala PCCS.
+FASTNEAR RPC, Phala PCCS (the exit), Intel PCS (the client).
 
 ## Other project by the same submitter (rule Q-015)
 

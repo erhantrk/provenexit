@@ -4,7 +4,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { toHex, type RegistryReader } from "@plr/shared";
+import { INTEL_ROOT_P256, toHex, type RegistryReader } from "@plr/shared";
 import { getStatus, type Status } from "../src/status.js";
 import { startFakeExit, type FakeExit } from "./fake-exit.js";
 
@@ -143,6 +143,45 @@ describe("getStatus: exit running and verified", () => {
     const capturedAt = new Date(JSON.parse(readFileSync(new URL(`${FIXTURE}/meta.json`, import.meta.url), "utf8")).captured_at_ms).toISOString();
     expect(s.replay).toMatchObject({ verdict: "VERIFIED", code: null, captured_at: capturedAt });
     expect(s.replay!.checks).toHaveLength(16);
+  });
+});
+
+describe("getStatus: registry code-hash pin", () => {
+  const CODE_LINE = "registry contract code hash matches the pinned build (view_account.code_hash)";
+  const run = async (registryCodeHash: string): Promise<Status> => {
+    const X: FakeExit = await startFakeExit({ operator: OPERATOR });
+    closers.push(X.close);
+    const chain = await startChain(X.registry, Date.now());
+    return getStatus({
+      env: {}, exitUrl: X.url, registry: REGISTRY_ACCOUNT, registryCodeHash, trustedRoot: toHex(X.root.publicKey), rpcUrl: chain.rpc,
+      nearBlocksApi: chain.blocks, archivalRpc: chain.rpc, replay: rawFixture(), egress: null,
+    });
+  };
+
+  it("match: VERIFIED and the code-hash check is in the list, before the root check", async () => {
+    const s = await run("CodeHash11111111111111111111111111111111111");
+    expect(s.error).toBeNull();
+    expect(s.verify.verdict).toBe("VERIFIED");
+    const names = s.verify.checks.map((c) => c.name);
+    expect(names).toContain(CODE_LINE);
+    expect(s.verify.checks[names.indexOf(CODE_LINE)]).toMatchObject({ ok: true, detail: "" });
+    expect(names.indexOf(CODE_LINE)).toBeLessThan(names.findIndex((n) => n.includes("root")));
+  });
+
+  it("mismatch: REFUSED with E_REGISTRY_CODE_HASH, nothing green", async () => {
+    const s = await run("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi");
+    expect(s.verify.verdict).toBe("REFUSED");
+    expect(s.verify.code).toBe("E_REGISTRY_CODE_HASH");
+    expect(s.verify.checks.find((c) => c.name === CODE_LINE)).toMatchObject({ ok: false, detail: "E_REGISTRY_CODE_HASH" });
+    expect(s.verify.checks.every((c) => !c.ok)).toBe(true);
+    expect(s.error).toContain("E_REGISTRY_CODE_HASH");
+    expect(s.instance).toBeNull();
+  });
+
+  it("the Intel root with an unpinned registry is a configuration error", async () => {
+    const s = await getStatus({ env: {}, exitUrl: "http://127.0.0.1:1", registry: REGISTRY_ACCOUNT, trustedRoot: toHex(INTEL_ROOT_P256), rpcUrl: "http://127.0.0.1:1", replay: rawFixture(), egress: null });
+    expect(s.error).toContain("PLR_VPN_REGISTRY_CODE_HASH is required");
+    expect(s.verify.verdict).toBe("REFUSED");
   });
 });
 

@@ -7,7 +7,7 @@ import { randomBytes } from "node:crypto";
 import {
   PlrError,
   fromHex,
-  isHex,
+  isCollateralJson,
   isInstanceRecord,
   isPlrError,
   toHex,
@@ -18,10 +18,8 @@ import {
   type RegistryReader,
   type VerifiedRouter,
 } from "@plr/shared";
-import { fetchPccsCollateral } from "./pccs.js";
-
-/** `MAX_TDX_QUOTE_BYTES` (SPEC-TDX §0) in hex. */
-const MAX_PCCS_QUOTE_HEX = 2 * 8192;
+import { CollateralFetchError, collateralSource, fetchPccsCollateral, type CollateralSource } from "./pccs.js";
+import { checkRegistryCode, isRegistryCodeHashError } from "./near-registry.js";
 
 /** A verified attestation plus the nonce it was verified with (the tunnel / session binds that nonce). */
 export interface AttestationSession {
@@ -31,6 +29,8 @@ export interface AttestationSession {
   at: number;
   /** The published `app-compose.json` exactly as received (its hash was verified against the quote). */
   appCompose: string;
+  /** INTEL mode only: where the collateral of this verification came from (the client's PCCS, or the exit). */
+  collateral?: CollateralSource;
 }
 
 export interface AttestationCacheOptions {
@@ -45,10 +45,13 @@ export interface AttestationCacheOptions {
   /** Monotonic clock in ms. */
   clock: () => number;
   /**
-   * `PLR_PCCS_URL` (TASKS T24): fetch fresh Intel collateral for the quote from this PCCS instead of using the
-   * exit's copy. INTEL mode only; unset ⇒ the bundle's `collateral` field is used as before.
+   * `PLR_PCCS_URL` (TASKS T24), INTEL mode only: the PCCS this client fetches fresh Intel collateral from, instead
+   * of using the exit's copy. Unset ⇒ `DEFAULT_PCCS_URL` (on by default, fails closed with `E_COLLATERAL_FETCH`);
+   * `"exit"` ⇒ opt out and use the bundle's `collateral` field.
    */
   pccsUrl?: string;
+  /** Tests only: replaces the PCCS fetch (default `fetchPccsCollateral`), so no test needs Intel's service. */
+  fetchCollateral?: (pccsUrl: string, quote: Uint8Array) => Promise<Record<string, unknown>>;
 }
 
 export class AttestationCache {
@@ -64,19 +67,38 @@ export class AttestationCache {
     return this.#o.ttlMs;
   }
 
+  /** Where an INTEL verification takes its collateral from; undefined for a MOCK verifier (it has no collateral). */
+  get collateral(): CollateralSource | undefined {
+    return this.#o.verifier.rootKind === "INTEL" ? collateralSource(this.#o.pccsUrl) : undefined;
+  }
+
   /** Fetches and verifies a fresh attestation (new random nonce every call) and caches it. @throws PlrError */
   async attest(): Promise<AttestationSession> {
     const nonce = new Uint8Array(randomBytes(32));
     try {
-      const bundle = await this.#withFreshCollateral(await this.#o.fetchBundle(nonce));
-      const verified = await verifyAttestation({
-        bundle,
-        nonce,
-        verifier: this.#o.verifier,
-        registry: this.#o.registry,
-        trustedRoot: this.#o.trustedRoot,
-      });
-      const session: AttestationSession = { verified, attNonce: nonce, at: this.#o.clock(), appCompose: bundle.app_compose };
+      // First of all: a registry whose account does not run the pinned code answers nothing we would trust.
+      await checkRegistryCode(this.#o.registry);
+      const bundle = await this.#o.fetchBundle(nonce);
+      // SPEC-TDX §1.5 / TASKS T24: by default the collateral comes from the client's own PCCS fetch, made right
+      // before the DCAP check. The exit's copy is untrusted for freshness.
+      const src = this.collateral;
+      const verified =
+        src?.source === "pccs"
+          ? await this.#verifyWithFreshCollateral(bundle, nonce, src.url)
+          : await verifyAttestation({
+              bundle,
+              nonce,
+              verifier: this.#o.verifier,
+              registry: this.#o.registry,
+              trustedRoot: this.#o.trustedRoot,
+            });
+      const session: AttestationSession = {
+        verified,
+        attNonce: nonce,
+        at: this.#o.clock(),
+        appCompose: bundle.app_compose,
+        ...(src !== undefined ? { collateral: src } : {}),
+      };
       this.#session = session;
       return session;
     } catch (e) {
@@ -87,20 +109,66 @@ export class AttestationCache {
   }
 
   /**
-   * SPEC-TDX §1.5 / TASKS T24: in INTEL mode with `pccsUrl` set, replace the exit's `collateral` with a fresh
-   * copy fetched from the PCCS (`getCollateral`) before verification. The fetch is async and runs here, so
-   * `verifyAttestation` stays synchronous and receives the value through the bundle field. The exit's own copy is
-   * untrusted anyway; a stale or missing one must not decide whether the client can verify.
-   * @throws PlrError E_BAD_RESPONSE (malformed quote), E_COLLATERAL (PCCS unreachable / not collateral)
+   * INTEL verification on collateral this client fetched itself. `@plr/shared`'s `verifyAttestation` is part of the
+   * measured exit image and has no hook for it, so the client runs it twice:
+   *  1. with a verifier that stops where the DCAP check would start. Every check before it (response shape, quote
+   *     structure, TEE type, pinned root) runs on the exit's bundle and fails with its own code; the real verifier
+   *     is not called, so the exit's collateral is never used for a DCAP check.
+   *  2. if that point was reached: fetch fresh collateral for the quote from the PCCS (any failure, or an answer
+   *     that is not collateral, is `E_COLLATERAL_FETCH`: there is no fallback to the exit's copy), then the full
+   *     verification of the same bundle with `collateral` replaced by the fresh copy.
+   * The registry root is read once and reused by the second run.
+   * @throws PlrError (incl. CollateralFetchError)
    */
-  async #withFreshCollateral(bundle: AttestationBundle): Promise<AttestationBundle> {
-    const pccsUrl = this.#o.pccsUrl;
-    if (pccsUrl === undefined || this.#o.verifier.rootKind !== "INTEL") return bundle;
-    const q = bundle.quote;
-    if (typeof q !== "string" || !isHex(q) || q.length === 0 || q.length > MAX_PCCS_QUOTE_HEX) {
-      throw new PlrError("E_BAD_RESPONSE", "quote");
+  async #verifyWithFreshCollateral(bundle: AttestationBundle, nonce: Uint8Array, pccsUrl: string): Promise<VerifiedRouter> {
+    const real = this.#o.verifier;
+    const inner = this.#o.registry;
+    let root: ReturnType<RegistryReader["getRoot"]> | undefined;
+    const registry: RegistryReader = {
+      get chain() {
+        return inner.chain;
+      },
+      get contractId() {
+        return inner.contractId;
+      },
+      getRoot: () => (root ??= inner.getRoot()),
+      isComposeAllowed: (h) => inner.isComposeAllowed(h),
+      isOsAllowed: (h) => inner.isOsAllowed(h),
+      getInstance: (k) => inner.getInstance(k),
+      getAnchor: (id) => inner.getAnchor(id),
+    };
+    let reached = false;
+    const stop: QuoteVerifier = {
+      rootKind: real.rootKind,
+      get rootPublicKey() {
+        return real.rootPublicKey;
+      },
+      verify: () => {
+        reached = true;
+        throw new PlrError("E_QUOTE_SIG");
+      },
+    };
+    try {
+      await verifyAttestation({ bundle, nonce, verifier: stop, registry, trustedRoot: this.#o.trustedRoot });
+    } catch (e) {
+      if (!reached) throw e;
     }
-    return { ...bundle, collateral: await fetchPccsCollateral(pccsUrl, fromHex(q)) };
+    if (!reached) throw new PlrError("E_BAD_RESPONSE");
+    // The first run accepted the bundle's shape, so `quote` is non-empty hex.
+    let fresh: unknown;
+    try {
+      fresh = await (this.#o.fetchCollateral ?? fetchPccsCollateral)(pccsUrl, fromHex(bundle.quote));
+    } catch {
+      throw new CollateralFetchError();
+    }
+    if (!isCollateralJson(fresh)) throw new CollateralFetchError("not collateral");
+    return verifyAttestation({
+      bundle: { ...bundle, collateral: fresh },
+      nonce,
+      verifier: real,
+      registry,
+      trustedRoot: this.#o.trustedRoot,
+    });
   }
 
   /** The cached verification if it is younger than `ttlMs`, else a fresh one (shared between concurrent callers). */
@@ -123,7 +191,8 @@ async function regCall<T>(f: () => Promise<unknown>, valid: (v: unknown) => v is
   let v: unknown;
   try {
     v = await f();
-  } catch {
+  } catch (e) {
+    if (isRegistryCodeHashError(e)) throw e;
     throw new PlrError("E_REGISTRY_UNAVAILABLE");
   }
   if (!valid(v)) throw new PlrError("E_REGISTRY_UNAVAILABLE", "malformed registry reply");
@@ -138,9 +207,11 @@ const isInstanceOrNull = (v: unknown): v is InstanceRecord | null => v === null 
  * hash and OS measurement are still allowed and the instance is still registered, unexpired, with exactly these
  * keys / compose / OS. Used on every new connection, even with a cached attestation, so an owner revocation
  * applies to the very next connection. Returns the live instance record (incl. its operator's `org_id`).
- * @throws PlrError E_COMPOSE_NOT_ALLOWED, E_OS_NOT_ALLOWED, E_INSTANCE_NOT_REGISTERED, E_REGISTRY_UNAVAILABLE
+ * @throws PlrError E_COMPOSE_NOT_ALLOWED, E_OS_NOT_ALLOWED, E_INSTANCE_NOT_REGISTERED, E_REGISTRY_UNAVAILABLE,
+ *         E_REGISTRY_CODE_HASH (a pinned registry whose account runs other code)
  */
 export async function recheckRegistry(registry: RegistryReader, v: VerifiedRouter, now: number = Date.now()): Promise<InstanceRecord> {
+  await checkRegistryCode(registry);
   const composeHex = toHex(v.composeHash);
   const osHex = toHex(v.osMeasurement);
   if (!(await regCall(() => registry.isComposeAllowed(composeHex), isBool))) throw new PlrError("E_COMPOSE_NOT_ALLOWED");

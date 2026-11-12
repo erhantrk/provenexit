@@ -87,7 +87,7 @@ function run(script: string, args: string[] = [], env: Record<string, string> = 
   // `builds` are the `docker buildx build` calls; `calls` is every docker call, in order
   return { status: r.status, stdout: r.stdout, stderr: r.stderr, calls, builds: calls.filter((c) => c.argv[1] === "build") };
 }
-const sub = (calls: { argv: string[] }[], ...words: string[]) => calls.filter((c) => words.every((w, i) => c.argv[i] === w));
+const sub = <T extends { argv: string[] }>(calls: T[], ...words: string[]): T[] => calls.filter((c) => words.every((w, i) => c.argv[i] === w));
 
 const opt = (argv: string[], name: string) => argv[argv.indexOf(name) + 1] ?? "";
 const pin = (digest: string) => writeFileSync(join(repo, "deploy/phala/docker-compose.yml"), `services:\n  exit:\n    image: ghcr.io/example/exit@${digest}\n    restart: always\n`);
@@ -353,7 +353,8 @@ describe("exit image scripts (fake docker)", () => {
     const two = INDEX.replace("DIGEST", A).replace(/\n  \]\n\}$/, `,\n    {\n      "mediaType": "application/vnd.oci.image.manifest.v1+json",\n      "digest": "${B}",\n      "size": 1\n    }\n  ]\n}`);
     expect(two).toContain(A);
     expect(two).toContain(B);
-    for (const env of [{ FAKE_TAG_RAW: two }, { FAKE_TAG_RAW: MANIFEST }, { FAKE_INSPECT_FAIL: "1" }]) {
+    const envs: Record<string, string>[] = [{ FAKE_TAG_RAW: two }, { FAKE_TAG_RAW: MANIFEST }, { FAKE_INSPECT_FAIL: "1" }];
+    for (const env of envs) {
       r = run("build-exit-image.sh", [], { PUSH: "1", ...env });
       expect(r.status).toBe(1);
       expect(r.stderr).toMatch(/do not deploy by tag/);

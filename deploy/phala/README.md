@@ -119,8 +119,13 @@ epoch, pinned BuildKit v0.34.2 builder), all on one machine:
   compose hash, the exit registered (13 checks) and `vpn verify` against it printed `VERIFIED`, before and after the
   old compose was revoked.
 
-The scripts' logic is tested against a fake `docker` (`enclave/test/exit-image-scripts.test.ts`). **Not run:** a
-build on a second machine, and the changed tag read-back of `build-exit-image.sh` (index digest and manifest digest)
+A second machine: the CI job [`verify-exit-image.yml`](../../.github/workflows/verify-exit-image.yml) runs
+`scripts/verify-exit-image.sh` on a GitHub-hosted `linux/amd64` runner (no emulation) on every push to `main` or
+`provenexit`, and on manual dispatch. Its result (`MATCH` or not, the digest, the BuildKit version) is in that run's
+Actions log and job summary; this file does not record it as passed.
+
+The scripts' logic is tested against a fake `docker` (`enclave/test/exit-image-scripts.test.ts`). **Not run:** the
+changed tag read-back of `build-exit-image.sh` (index digest and manifest digest)
 against a real registry: it is covered by the fake-`docker` test and was checked by hand against the raw index the
 registry serves for the `6740b3f` tag, but no push was made with it.
 
@@ -172,9 +177,9 @@ compose on chain.
 
 **Known exception (disclosed):** that compose hash (`b9823a79…d05f`) *is* allowlisted on the INTEL testnet registry,
 only so checks 1–12 could be shown on the real quote (README "NEAR's role"). The client still refuses it with
-`E_COMPOSE_POLICY`, but the registry would accept a registration under it. Revoke it
-(`scripts/owner.sh revoke_compose '{"hash":"b9823a79…d05f"}'`, full hash from `fixtures/phala-spike`) after the demo
-video is recorded; this has not been done.
+`E_COMPOSE_POLICY`. It was revoked on that retired registry on 2026-11-12 (tx
+`3DmY4RqrDAVknLov5pDYMgAQvjmMpM354eeGZdWifh7n`) and was never allowed on the live registry
+`vpnreg.pe-owner-erhan.testnet`.
 
 ## `scripts/owner.sh`
 

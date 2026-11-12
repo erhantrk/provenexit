@@ -1,0 +1,52 @@
+name: verify exit image
+# Rebuilds the exit image on a second machine (a GitHub-hosted linux/amd64 runner) and compares its digest with the
+# one deploy/phala/docker-compose.yml pins. Nothing is pushed; no secrets. See deploy/phala/README.md.
+on:
+  push:
+    branches: [main, provenexit]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    name: rebuild and compare with the pinned digest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      # No setup-buildx step: the runner ships Docker with buildx, and the script creates its own docker-container
+      # builder that runs the BuildKit image pinned by digest in scripts/exit-image-common.sh.
+      - name: host
+        run: |
+          uname -m
+          docker version --format 'docker client {{.Client.Version}}, server {{.Server.Version}}'
+          docker buildx version
+      - name: scripts/verify-exit-image.sh
+        id: verify
+        run: |
+          set -o pipefail
+          scripts/verify-exit-image.sh | tee "$RUNNER_TEMP/verify.out"
+      - name: job summary
+        if: always()
+        env:
+          OUTCOME: ${{ steps.verify.outcome }}
+        run: |
+          out="$RUNNER_TEMP/verify.out"
+          touch "$out"
+          field() { sed -n "s/^$1[[:space:]]*//p" "$out" | head -n 1; }
+          result="$(grep -E '^(MATCH|MISMATCH)$' "$out" | head -n 1 || true)"
+          {
+            echo "### Exit image rebuild on $(uname -m) ($RUNNER_OS)"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| result | ${result:-no result (the build did not finish)} |"
+            echo "| step outcome | $OUTCOME |"
+            echo "| source | \`$(field source)\` |"
+            echo "| built digest | \`$(field built)\` |"
+            echo "| pinned digest | \`$(field pinned)\` |"
+            echo "| builder (BuildKit version) | $(field builder) |"
+            echo "| buildx | $(docker buildx version) |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -15,6 +15,7 @@
  *    upgrades `/v1/tunnel` over it, runs handshake v2 with the exit and CONNECTs inside the inner tunnel.
  * 4. The stream's `receipt()` is the exit's receipt, `entryReceipt()` the entry tunnel's; both are verified.
  */
+import type { CollateralSource } from "../pccs.js";
 import { PlrError, isPlrError, isVpnReceipt, validateDestination, type InstanceRecord, type QuoteVerifier, type RegistryReader, type VerifiedRouter, type VpnReceipt } from "@plr/shared";
 import type { AttestationSession } from "../attestation.js";
 import { verifyVpnReceiptAnchored } from "../anchored.js";
@@ -42,7 +43,7 @@ export interface TwoHopClientOptions {
   timeouts?: Partial<VpnClientTimeouts>;
   /** Monotonic clock in ms for the attestation caches. Tests only. */
   clock?: () => number;
-  /** `PLR_PCCS_URL`: fetch fresh Intel collateral from this PCCS instead of using each hop's copy (INTEL mode). */
+  /** `PLR_PCCS_URL` (INTEL mode): the PCCS the client fetches fresh collateral from; unset = `DEFAULT_PCCS_URL`, `"exit"` = use each hop's copy. */
   pccsUrl?: string;
 }
 
@@ -120,6 +121,11 @@ export class TwoHopClient {
   }
 
   /** Root kind of the configured verifier ("MOCK" | "INTEL"). */
+  /** Where both hops' INTEL verifications take their collateral from (undefined in MOCK mode). */
+  get collateral(): CollateralSource | undefined {
+    return this.#entry.collateral;
+  }
+
   get rootKind(): QuoteVerifier["rootKind"] {
     return this.#entry.verifier.rootKind;
   }
