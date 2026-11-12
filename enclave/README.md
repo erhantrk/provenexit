@@ -39,6 +39,8 @@ The LLM router, the mock LLM, the llama.cpp builds and the "combo" build that th
 | `build-info.json` | `runtime.node_sha256` and every bundle and compose hash (under the `vpn` key) |
 
 The build measures only node (the runtime that runs the exit); it needs no llama.cpp.
+`node build.mjs --node-exe-only` (used by the exit image build, `deploy/phala/Dockerfile`) pins the node executable
+file alone instead of the Mach-O closure, so the build also runs on Linux.
 
 ## Mock TDX host
 

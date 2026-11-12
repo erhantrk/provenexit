@@ -13,7 +13,11 @@ PORT="${PLR_VPN_SOCKS_PORT:-18180}"
 export PLR_VPN_SOCKS_PORT="$PORT"
 
 echo "== 1. verify the exit before any byte leaves"
-$CLI vpn verify
+$CLI vpn verify || {
+  echo; echo "verify failed. If the first check says E_BAD_RESPONSE, the exit could not be reached: the client connects"
+  echo "directly and does not use HTTP(S)_PROXY. Offline replay: $CLI vpn verify --fixture fixtures/live-exit"
+  exit 1
+}
 
 echo; echo "== 2. local SOCKS5 proxy on socks5h://127.0.0.1:$PORT"
 LOG="$(mktemp -t plr-vpn.XXXXXX)"

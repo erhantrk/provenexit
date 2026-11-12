@@ -4,21 +4,21 @@
     "p256": "0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f567918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394"
   },
   "compose": [
-    "9411d0f7125c31e0d392a96d956bcc29c04ee801f0494a12be75ac68f081c85c"
+    "2f4100e62c7794139867276f8bc9fa525bc85808380501e3975bfac3fd08dabf"
   ],
   "os": [
     "821d442f07d638c696f4c5e1e4962bf4e28515ba5d790f5cf502b1c0d4dd323d"
   ],
   "instances": {
-    "ccd1d0ba8d34bc8dbd581908a6fa463b1f64fc44d7be1a5a46b82d3fe0888c74": {
-      "compose_hash": "9411d0f7125c31e0d392a96d956bcc29c04ee801f0494a12be75ac68f081c85c",
+    "9f7434d4a895d3256efb6cd15216f04e2e2c7fcdfee9fa4b28e38d85b15bba8f": {
+      "compose_hash": "2f4100e62c7794139867276f8bc9fa525bc85808380501e3975bfac3fd08dabf",
       "os_measurement": "821d442f07d638c696f4c5e1e4962bf4e28515ba5d790f5cf502b1c0d4dd323d",
-      "x25519": "12ece028b67e6f731aee882e4780ecf19d65c8c46ee3f1bf004bfbf6e0a58362",
-      "ed25519": "f518475917bb3b31ea22482b251430a0ecddf338e87000afd4f05d521db06be3",
+      "x25519": "18e21dae80c19790ffc4c3ee2059074eb1b26001c101b2e5770fea5938e9c16e",
+      "ed25519": "0f18f6fe920efaefe36577911a606db64c51eaf9faa7bc264baead18c609be7f",
       "operator": "pe-op-erhan.testnet",
       "org_id": "erhan-demo",
-      "registered_at_ms": 1794487400841,
-      "expires_at_ms": 1794573800841,
+      "registered_at_ms": 1794513979996,
+      "expires_at_ms": 1794600379996,
       "next_seq": 0
     }
   }

@@ -41,6 +41,11 @@ baseline, did the review passes, and ran the testnet/Phala operator work. Commit
   deleted right after.
 - On Erhan's instruction, Claude Opus 5.5 acted as operator: it deployed the VPN exit on Phala (2026-11-12), deployed
   the keyless registry and sent the owner transactions, and pushed the repository. Erhan decided each of those steps.
+- The 2026-11-12 redeploy from the reproducible image (image build and push, the Phala update of the same CVM, the
+  owner transactions `allow_compose` and `revoke_compose`) was run by the Claude Code session Erhan was
+  working in. A separate Claude Code agent (Fable 5.2) then re-captured `fixtures/live-exit`,
+  rebuilt the status and MCP bundles and samples, and updated the docs; it sent no transaction, pushed nothing and
+  did not touch Phala. It could not reach Docker, so it did not rebuild the image itself.
 - It did not submit the hackathon form.
 - It did not decide the product: the name, the pitch, the tracks, the trust model, the fallbacks used (S1-F2) and
   the omissions in `README.md` "What it does not prove" are Erhan's calls.

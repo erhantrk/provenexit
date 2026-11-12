@@ -1,0 +1,25 @@
+# Inputs of the exit image (deploy/phala/Dockerfile, context = repo root): everything is excluded, then the inputs
+# are let back in. Keep this list equal to EXIT_IMAGE_INPUTS in scripts/exit-image-common.sh (a test compares them).
+*
+!package.json
+!package-lock.json
+!tsconfig.base.json
+!packages/shared
+!enclave
+!client/package.json
+!mcp/package.json
+!e2e/package.json
+# tests are not built into the image (EXIT_IMAGE_INPUTS excludes the same two directories)
+enclave/test
+packages/shared/test
+# never inputs, even inside the directories above: build output and what .gitignore keeps out of the repo
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/target
+**/.sandbox
+**/.run
+**/.env
+**/*.log
+**/.DS_Store
+**/.claude
