@@ -2,7 +2,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/logo-dark.png">
-  <img alt="ProvenExit" src="docs/img/logo-light.png" width="434">
+  <img alt="ProvenExit" src="docs/img/logo-light.png" width="440">
 </picture>
 
 ### Every VPN says "no logs". This one proves it.
