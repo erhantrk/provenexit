@@ -6,9 +6,10 @@ on:
 permissions:
   contents: read
 jobs:
+  # macOS: the local mock-TDX host measures the node runtime as a Mach-O binary (enclave/src/mock-tdx/runtime.ts)
   suites:
     name: unit suites + live-exit replay
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
