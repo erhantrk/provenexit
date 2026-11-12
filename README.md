@@ -124,6 +124,18 @@ A keyless NEAR contract on testnet ([`vpnreg.pe-owner-erhan.testnet`](https://te
    demo sequence (`vpn verify` → browse → owner revoke → refusal → re-allow) against it; it signs nothing itself.
    The exit is paid by the hour, so it runs during judging but may be stopped afterwards; option 2 needs no exit.
 
+4. **Status bundle** (for the demo site): [`status/provenexit-status.mjs`](status/provenexit-status.mjs) is one self-contained
+   file (Node 22, no install). `node provenexit-status.mjs` prints the status JSON of the live testnet deployment
+   (the same ordered checks as `vpn verify`, the exit's egress IP fetched through the attested tunnel, the NEAR registry's owner,
+   code hash and event history, the embedded offline replay of `fixtures/live-exit`); `import { getStatus }` from it in a
+   serverless function. Rebuild with `npm run build:status`. [`status/sample-offline.json`](status/sample-offline.json) is
+   a real run while the exit was stopped.
+
+5. **MCP server for AI agents:** [`mcp/dist/provenexit-mcp.mjs`](mcp/dist/provenexit-mcp.mjs) (tools `verify_exit`,
+   `fetch_via_exit`, `registry_status`; `fetch_via_exit` refuses unless every check passes and fetches only through the
+   attested tunnel). `claude mcp add provenexit -- node /path/to/provenexit-mcp.mjs`; details in [`mcp/README.md`](mcp/README.md).
+   Rebuild with `npm run build:mcp`.
+
 ## What it does
 
 - `plr vpn` runs a local SOCKS5 proxy (`socks5h://127.0.0.1:18180`, CONNECT only, remote DNS). Before every new
