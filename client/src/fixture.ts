@@ -81,7 +81,7 @@ function parseMeta(v: unknown): FixtureMeta {
   };
 }
 
-/** Registry snapshot → {@link MemoryRegistryOptions}: tier A, clocked at the capture (SPEC-TDX §3.3). */
+/** Registry snapshot → {@link MemoryRegistryOptions}, clocked at the capture (SPEC-TDX §3.3). */
 function registryOptions(v: unknown, meta: FixtureMeta): MemoryRegistryOptions {
   if (!isPlainObject(v)) return bad("registry.json is not an object");
   const root = v.root;

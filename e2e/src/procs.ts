@@ -1,11 +1,11 @@
 /**
  * Child-process supervision for the e2e harness and the dev stack.
  *
- * Every long-running program (near-sandbox, the mock TDX host and through it the router + LLM) is started
+ * Every long-running program (near-sandbox, the mock TDX host and through it the VPN exit) is started
  * under a tiny Node "lifeline" wrapper that is the leader of its OWN process group, so the whole subtree can be
  * signalled at once:
  *
- *  - `stop()` sends SIGTERM to the group (graceful: the mock host stops router + LLM and removes its private
+ *  - `stop()` sends SIGTERM to the group (graceful: the mock host stops the exit and removes its private
  *    dir), waits at most `timeoutMs` (default 10 s), then SIGKILLs the group and sweeps any straggler.
  *  - The lifeline's stdin is a pipe from this process. When this process goes away for ANY reason (normal exit,
  *    crash, SIGKILL of a vitest worker) the pipe reaches EOF; the lifeline then SIGTERMs its child and, after its

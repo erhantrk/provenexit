@@ -228,8 +228,8 @@ async function up(values: Record<string, string | boolean | undefined>): Promise
 }
 
 /**
- * `KEY=value` with the value single-quoted when the shell would split or interpret it (e.g. the Stellar network
- * passphrase "Standalone Network ; February 2017"), so `set -a; . stack.env` works; {@link readEnvFile} unquotes.
+ * `KEY=value` with the value single-quoted when the shell would split or interpret it (e.g. a value with spaces or
+ * `;`), so `set -a; . stack.env` works; {@link readEnvFile} unquotes.
  */
 function shellSafeLine(line: string): string {
   const m = /^(PLR_[A-Z0-9_]+)=(.*)$/.exec(line);

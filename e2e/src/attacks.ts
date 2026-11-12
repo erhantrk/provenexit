@@ -42,7 +42,6 @@ export function fwdHeaders(h: http.IncomingHttpHeaders): http.OutgoingHttpHeader
   return out;
 }
 
-/** One SSE event of the router stream: `data: {"seq":n,"ct":"<base64>"}`. */
 export interface Upstream {
   host: string;
   port: number;
@@ -62,7 +61,7 @@ export function request(up: Upstream, method: string, path: string, headers: htt
   });
 }
 
-/** Attestation-response attacks shared by the router and the VPN-exit proxies. */
+/** Attestation-response attacks of the VPN-exit proxies. */
 export type AttestationAttack = "mitm-key" | "replay-quote" | "none";
 
 export interface AttestationTamperer {

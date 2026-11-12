@@ -169,7 +169,7 @@ function parseBundle(b: unknown, expectedKind: RootKind): ParsedBundle {
 }
 
 /**
- * Verifies a router attestation bundle against the client's nonce, pinned root, quote verifier and the
+ * Verifies an attestation bundle (the VPN exit's) against the client's nonce, pinned root, quote verifier and the
  * on-chain registry, in SPEC §9 order. Fails closed: the first failing check throws `PlrError(code)`.
  */
 export async function verifyAttestation(p: VerifyAttestationParams): Promise<VerifiedRouter> {

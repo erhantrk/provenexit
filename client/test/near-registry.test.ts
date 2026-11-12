@@ -22,11 +22,11 @@ async function fakeExit(): Promise<FakeExit> {
 }
 
 async function setup() {
-  const router = await fakeExit();
-  const rpc = await startFakeRpc(registryHandler(router.registry));
+  const exitFake = await fakeExit();
+  const rpc = await startFakeRpc(registryHandler(exitFake.registry));
   rpcs.push(rpc);
   const reg = new NearRegistry({ rpcUrl: rpc.url, contractId: "registry.test.near", timeoutMs: 1_000 });
-  return { router, rpc, reg };
+  return { exitFake, rpc, reg };
 }
 
 async function freePort(): Promise<number> {
@@ -41,21 +41,21 @@ async function freePort(): Promise<number> {
 
 describe("NearRegistry", () => {
   it("reads root, allowlists, instance and anchor via view calls", async () => {
-    const { router, rpc, reg } = await setup();
+    const { exitFake, rpc, reg } = await setup();
     expect(reg.chain).toBe("near");
     expect(reg.contractId).toBe("registry.test.near");
-    expect(await reg.getRoot()).toEqual(await router.registry.getRoot());
-    expect(await reg.isComposeAllowed(router.composeHash)).toBe(true);
-    expect(await reg.isOsAllowed(router.osHash)).toBe(true);
+    expect(await reg.getRoot()).toEqual(await exitFake.registry.getRoot());
+    expect(await reg.isComposeAllowed(exitFake.composeHash)).toBe(true);
+    expect(await reg.isOsAllowed(exitFake.osHash)).toBe(true);
     expect(await reg.isComposeAllowed("ab".repeat(32))).toBe(false);
-    expect(await reg.getInstance(router.keyHash)).toEqual(router.record);
+    expect(await reg.getInstance(exitFake.keyHash)).toEqual(exitFake.record);
     expect(await reg.getInstance("cd".repeat(32))).toBeNull();
     expect(await reg.getAnchor(0)).toBeNull();
     expect(rpc.calls.map((c) => c.method)).toEqual([
       "get_root", "is_compose_allowed", "is_os_allowed", "is_compose_allowed", "get_instance", "get_instance", "get_anchor",
     ]);
-    expect(rpc.calls[1]!.args).toEqual({ hash: router.composeHash });
-    expect(rpc.calls[4]!.args).toEqual({ key_hash: router.keyHash });
+    expect(rpc.calls[1]!.args).toEqual({ hash: exitFake.composeHash });
+    expect(rpc.calls[4]!.args).toEqual({ key_hash: exitFake.keyHash });
     expect(rpc.calls[6]!.args).toEqual({ id: 0 });
     expect(rpc.calls.every((c) => c.finality === "optimistic")).toBe(true);
   });
@@ -70,35 +70,35 @@ describe("NearRegistry", () => {
   });
 
   it("accepts u64 fields encoded as decimal strings (near-sdk U64)", async () => {
-    const router = await fakeExit();
+    const exitFake = await fakeExit();
     const rpc = await startFakeRpc(async (m) => {
-      if (m === "get_instance") return { ...router.record, registered_at_ms: "1", expires_at_ms: String(router.record.expires_at_ms), next_seq: "7" };
-      if (m === "get_anchor") return { id: "0", key_hash: router.keyHash, root: "ee".repeat(32), first_seq: "0", count: "3", at_ms: 5 };
+      if (m === "get_instance") return { ...exitFake.record, registered_at_ms: "1", expires_at_ms: String(exitFake.record.expires_at_ms), next_seq: "7" };
+      if (m === "get_anchor") return { id: "0", key_hash: exitFake.keyHash, root: "ee".repeat(32), first_seq: "0", count: "3", at_ms: 5 };
       throw new Error("x");
     });
     rpcs.push(rpc);
     const reg = new NearRegistry({ rpcUrl: rpc.url, contractId: "registry.test.near" });
-    expect((await reg.getInstance(router.keyHash))!.next_seq).toBe(7);
-    expect(await reg.getAnchor(0)).toEqual({ id: 0, key_hash: router.keyHash, root: "ee".repeat(32), first_seq: 0, count: 3, at_ms: 5 });
+    expect((await reg.getInstance(exitFake.keyHash))!.next_seq).toBe(7);
+    expect(await reg.getAnchor(0)).toEqual({ id: 0, key_hash: exitFake.keyHash, root: "ee".repeat(32), first_seq: 0, count: 3, at_ms: 5 });
   });
 
   it("copies org_id (SPEC §7 rev 1.2): approved org or null; a missing or malformed org_id is a malformed reply", async () => {
-    const router = await fakeExit();
-    let reply: unknown = { ...router.record, org_id: "org-a" };
+    const exitFake = await fakeExit();
+    let reply: unknown = { ...exitFake.record, org_id: "org-a" };
     const rpc = await startFakeRpc(async (m) => {
       if (m === "get_instance") return reply;
       throw new Error("x");
     });
     rpcs.push(rpc);
     const reg = new NearRegistry({ rpcUrl: rpc.url, contractId: "registry.test.near" });
-    expect((await reg.getInstance(router.keyHash))!.org_id).toBe("org-a");
-    reply = { ...router.record, org_id: null };
-    expect((await reg.getInstance(router.keyHash))!.org_id).toBeNull();
-    reply = { ...router.record, org_id: "org-a", extra: 1 };
-    expect(Object.keys((await reg.getInstance(router.keyHash))!)).not.toContain("extra");
-    for (const bad of [{ ...router.record, org_id: "Org-A" }, { ...router.record, org_id: 7 }, { ...router.record, org_id: "-x" }, (({ org_id: _, ...r }) => r)(router.record)]) {
+    expect((await reg.getInstance(exitFake.keyHash))!.org_id).toBe("org-a");
+    reply = { ...exitFake.record, org_id: null };
+    expect((await reg.getInstance(exitFake.keyHash))!.org_id).toBeNull();
+    reply = { ...exitFake.record, org_id: "org-a", extra: 1 };
+    expect(Object.keys((await reg.getInstance(exitFake.keyHash))!)).not.toContain("extra");
+    for (const bad of [{ ...exitFake.record, org_id: "Org-A" }, { ...exitFake.record, org_id: 7 }, { ...exitFake.record, org_id: "-x" }, (({ org_id: _, ...r }) => r)(exitFake.record)]) {
       reply = bad;
-      await expect(reg.getInstance(router.keyHash), JSON.stringify(bad)).rejects.toThrow();
+      await expect(reg.getInstance(exitFake.keyHash), JSON.stringify(bad)).rejects.toThrow();
     }
   });
 
@@ -169,16 +169,16 @@ describe("NearRegistry", () => {
   });
 
   it("drives verifyAttestation end to end; an unreachable RPC maps to E_REGISTRY_UNAVAILABLE", async () => {
-    const { router, reg } = await setup();
-    const c = new VpnClient({ exitUrl: router.url, registry: reg, trustedRoot: router.root.publicKey });
+    const { exitFake, reg } = await setup();
+    const c = new VpnClient({ exitUrl: exitFake.url, registry: reg, trustedRoot: exitFake.root.publicKey });
     await expect(c.attest()).resolves.toMatchObject({ rootKind: "MOCK" });
 
     const dead = new NearRegistry({ rpcUrl: `http://127.0.0.1:${await freePort()}`, contractId: "registry.test.near", timeoutMs: 2_000 });
     const nonce = crypto.getRandomValues(new Uint8Array(32));
-    const bundleRes = await fetch(`${router.url}/v1/attestation?nonce=${Buffer.from(nonce).toString("hex")}`);
+    const bundleRes = await fetch(`${exitFake.url}/v1/attestation?nonce=${Buffer.from(nonce).toString("hex")}`);
     const err = await verifyAttestation({
-      bundle: (await bundleRes.json()) as never, nonce, verifier: new MockVerifier(router.root.publicKey),
-      registry: dead, trustedRoot: fromHex(Buffer.from(router.root.publicKey).toString("hex"), 64),
+      bundle: (await bundleRes.json()) as never, nonce, verifier: new MockVerifier(exitFake.root.publicKey),
+      registry: dead, trustedRoot: fromHex(Buffer.from(exitFake.root.publicKey).toString("hex"), 64),
     }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(PlrError);
     expect((err as PlrError).code).toBe("E_REGISTRY_UNAVAILABLE");

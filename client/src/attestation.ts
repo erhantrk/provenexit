@@ -1,7 +1,6 @@
 /**
- * Attestation session shared by {@link PrivateClient} (LLM router, SPEC §9/§12) and `VpnClient` (VPN exit,
- * SPEC-VPN §7): fresh 32-byte random nonce per attestation, `verifyAttestation` against the pinned root and the
- * registry, a time-bounded cache of the last verification, and single-flight sharing of one in-flight
+ * Attestation session of `VpnClient` and each hop of `TwoHopClient` (SPEC §9, SPEC-VPN §7): fresh 32-byte random
+ * nonce per attestation, `verifyAttestation` against the pinned root and the registry, a time-bounded cache of the last verification, and single-flight sharing of one in-flight
  * attestation between concurrent callers. Fails closed: any failure clears the cache and throws `PlrError`.
  */
 import { randomBytes } from "node:crypto";

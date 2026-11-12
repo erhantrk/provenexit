@@ -31,7 +31,7 @@ export { VPN_ATTEST_TTL_MS, type VpnClientTimeouts };
 export interface VpnClientOptions {
   /** Exit base URL (`http:` / `https:`), e.g. `http://127.0.0.1:18200`. */
   exitUrl: string;
-  /** The **VPN** registry (a separate deployment from the LLM router registry). */
+  /** The NEAR VPN registry. */
   registry: RegistryReader;
   /** Pinned attestation root, 64-byte P-256 `x‖y`. */
   trustedRoot: Uint8Array;
@@ -126,7 +126,7 @@ export class VpnClient {
    * Checks that a verified session receipt is included in an on-chain anchor of the VPN registry: fetches the
    * exit's proof (`/v1/receipts/proof`) and verifies it against `get_anchor` with the CHAIN's
    * `first_seq` / `count` / `root`. Resolves `true`.
-   * @throws PlrError E_NOT_ANCHORED (retry later), E_ANCHOR_MISMATCH, E_ANCHOR_SIG (tier B/C), E_BAD_RESPONSE, E_REGISTRY_UNAVAILABLE, E_BAD_INPUT
+   * @throws PlrError E_NOT_ANCHORED (retry later), E_ANCHOR_MISMATCH, E_BAD_RESPONSE, E_REGISTRY_UNAVAILABLE, E_BAD_INPUT
    */
   async verifyAnchored(r: VpnReceipt): Promise<boolean> {
     if (!isVpnReceipt(r)) fail("E_BAD_INPUT", "malformed receipt");
