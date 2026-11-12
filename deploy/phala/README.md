@@ -26,9 +26,59 @@ public testnet values from `deploy/testnet/env.live`:
 
 `ghcr.io/erhantrk/provenexit-exit@sha256:7e53f383a6ea8ea8e537ad35c1d11665ca07540f537fe3d0c656879a92e61ad5` (public,
 `linux/amd64`). [`Dockerfile`](Dockerfile): `node:22-bookworm-slim` pinned by digest, plus the `vpn-honest` bundle and
-its SPEC-VPN §2 policy. Build and push with `scripts/build-exit-image.sh` (`IMAGE=…` to change the registry). Any
-change to the image gives a new digest, so a new compose hash that the owner must approve again (`allow_compose`).
-The build is not reproducible yet: no build provenance is published.
+its SPEC-VPN §2 policy. Any change to the image gives a new digest, so a new compose hash that the owner must approve
+again (`allow_compose`).
+
+That live image was built from an older tree, on the host, before the build was made reproducible. It cannot be
+rebuilt bit for bit, so `scripts/verify-exit-image.sh` prints `MISMATCH` against it. This holds until the exit is
+redeployed from an image built as described below.
+
+## Reproduce the exit image
+
+```sh
+git clone <this repo> && cd provenexit        # a full clone, not --depth 1
+scripts/verify-exit-image.sh                  # rebuilds, compares with the digest in docker-compose.yml: MATCH / MISMATCH
+scripts/verify-exit-image.sh --print-digest   # rebuilds, prints only sha256:<64 hex>
+scripts/build-exit-image.sh                   # the same build; pushes only with PUSH=1, and never from a dirty tree
+```
+
+Needs git and Docker with buildx, nothing else: no node or npm on the host. The builder must be able to write an OCI
+archive (Docker Desktop, the containerd image store, or a `docker-container` builder passed as `BUILDER=<name>`).
+Nothing is pushed or loaded. Exit codes of `verify-exit-image.sh`: 0 `MATCH`, 1 `MISMATCH`, 2 could not build.
+
+What is pinned (all of it in [`Dockerfile`](Dockerfile), [`Dockerfile.dockerignore`](Dockerfile.dockerignore) and
+`scripts/exit-image-common.sh`):
+
+- **Base and build tools.** Both stages start from `node:22-bookworm-slim@sha256:e9f565d3…`. The bundle and the policy
+  are built inside it: `npm ci --ignore-scripts` from `package-lock.json`, `tsc`, then `enclave/build.mjs
+  --node-exe-only`. The final image is the base plus `/app/vpn.bundle.mjs`, `/app/vpn-policy.json` and the `CMD`.
+- **Inputs.** The build context is the repo root filtered by `Dockerfile.dockerignore`: the root `package.json`,
+  `package-lock.json`, `tsconfig.base.json`, `packages/shared`, `enclave` (both without their tests) and the
+  `package.json` of the other workspaces (`npm ci` needs them). Nothing else in the repo can change the image.
+- **Timestamps.** `SOURCE_DATE_EPOCH` with `rewrite-timestamp=true`. The epoch is the commit time of the last commit
+  that changed one of the inputs above (or the Dockerfile). At that commit it is the commit time of `HEAD`; later
+  commits that only touch docs or pin the new digest in `docker-compose.yml` keep it, so the pinned digest can be
+  checked from the commit that pins it. This needs the git history, hence the full clone.
+- **Manifest.** `linux/amd64` only, `--provenance=false --sbom=false`, OCI media types and gzip layers for both the
+  local build and the push. `PUSH=1 scripts/build-exit-image.sh` builds locally first, pushes, and fails if the
+  registry digest differs from the local one.
+
+Not pinned: the BuildKit version of the builder, and the npm registry has to serve the tarballs the lockfile names
+(their integrity hashes are checked). In the policy file, `vpn.node_sha256` is the manifest digest of the node
+executable alone (`--node-exe-only`): the closure walk of the mock host reads Mach-O and does not run on Linux. Nothing
+checks that field in dstack mode; node is pinned by the base image digest.
+
+What a `MATCH` proves: the image the compose pins, which is the image dstack pulls by digest and whose compose hash
+the registry allows, is byte for byte what this checkout builds. What it does not prove: that the source is honest.
+It moves the question from "what is in that image" to "what does this source do", and the source still has to be
+read. It also says nothing about the base image beyond its digest, or about the npm packages beyond the lockfile.
+
+Status of this section (2026-11-12): measured before this Dockerfile existed, with the older single-stage one: two
+`--no-cache` builds with `SOURCE_DATE_EPOCH` and `rewrite-timestamp=true` gave the same digest, and without them
+different ones. Run for the current tree, outside Docker: the build-stage commands in two fresh clones gave the same
+bundle (`c472440f…`) and policy bytes, and the scripts' logic is tested against a fake `docker`
+(`enclave/test/exit-image-scripts.test.ts`). **Not run yet:** the multi-stage build itself, the two-clone digest
+comparison through Docker, and a push (local digest = registry digest is checked by the script at push time).
 
 ## Deploy
 
