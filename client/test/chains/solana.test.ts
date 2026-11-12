@@ -87,7 +87,7 @@ describe("SolanaRegistry", () => {
     expect(R.verifiesOnChain).toBe(false);
     expect(R.contractId).toBe(`solana:${STATE.toBase58()}`);
     expect(parseSolanaContractId(R.contractId)).toBe(STATE.toBase58());
-    for (const bad of ["solana:", "solana:0OIl", `evm:${STATE.toBase58()}`, `solana:${STATE.toBase58()}x`, 5]) expect(parseSolanaContractId(bad)).toBeNull();
+    for (const bad of ["solana:", "solana:0OIl", `evm:${STATE.toBase58()}`, `solana:${STATE.toBase58()}${"x".repeat(8)}`, 5]) expect(parseSolanaContractId(bad)).toBeNull();
   });
 
   it("validates its options", () => {
