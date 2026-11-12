@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Try the live ProvenExit exit (Intel TDX on Phala Cloud, registered on NEAR testnet). Needs: Node 22, `npm ci && npx tsc -b`.
-# 1) verifies the exit (every check printed), 2) starts the local SOCKS5 proxy, 3) sends one request direct and one through
-# the exit and prints both IPs, 4) leaves the proxy running for a browser until Ctrl-C (TRY_LIVE_KEEP=0 to stop at once).
+# 1) verifies the exit (every check printed), 2) starts the local SOCKS5 proxy on 127.0.0.1 only, 3) sends one request
+# direct and one through the exit and prints both IPs, 4) stops. Changes no system settings, needs no sudo, writes nothing
+# outside a temp file. Run in a terminal it keeps the proxy up for a browser until Ctrl-C (TRY_LIVE_KEEP=0: never;
+# TRY_LIVE_KEEP=1: always); run by a script or an AI agent (stdin not a terminal) it stops by itself.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . deploy/testnet/env.live
@@ -26,7 +28,9 @@ echo "your IP:              $(curl -s -m 15 https://ipinfo.io/ip || echo '?')"
 echo "IP through the exit:  $(curl -s -m 30 --proxy "socks5h://127.0.0.1:$PORT" https://ipinfo.io/ip)"
 echo "  (ipinfo.io sees the Phala machine, not you; only ports 80 and 443 are allowed)"
 
-[ "${TRY_LIVE_KEEP:-1}" = "0" ] && exit 0
+KEEP="${TRY_LIVE_KEEP:-auto}"
+if [ "$KEEP" = "auto" ]; then [ -t 0 ] && KEEP=1 || KEEP=0; fi
+[ "$KEEP" = "1" ] || { echo; echo "done (proxy stopped)"; exit 0; }
 echo; echo "Proxy stays up: Firefox → Settings → Network → Manual proxy → SOCKS v5 127.0.0.1:$PORT, tick \"Proxy DNS when using SOCKS v5\"."
 echo "Ctrl-C to stop."
 wait $PID

@@ -16,7 +16,7 @@ Live exit (Node 22, network, no accounts):
 npm ci && npx tsc -b && scripts/try-live.sh
 ```
 
-It prints every check of the live exit (`✔ VERIFIED`), starts a local SOCKS5 proxy, and shows your IP next to the IP a website sees through the exit (the Phala machine). The proxy stays up for a browser until Ctrl-C.
+It prints every check of the live exit (`✔ VERIFIED`), starts a local SOCKS5 proxy on `127.0.0.1:18180`, and shows your IP next to the IP a website sees through the exit (the Phala machine). It changes no system settings, needs no sudo, and nothing else on the machine uses the proxy. Run non-interactively (CI, an AI agent) it stops by itself; in a terminal the proxy stays up for a browser until Ctrl-C.
 
 Offline (no network): the same exit's quote and registry state, captured 2026-11-12, replayed:
 
