@@ -1,6 +1,6 @@
 services:
   exit:
-    image: ghcr.io/erhantrk/provenexit-exit@sha256:5e8c74ff72b68b80fef52e219fb94c56d4e02a65d5a00c12cd302674d7167ce3 # PLACEHOLDER digest, no image published (S1-F2); do NOT allow_compose this file
+    image: ghcr.io/erhantrk/provenexit-exit@sha256:7e53f383a6ea8ea8e537ad35c1d11665ca07540f537fe3d0c656879a92e61ad5
     restart: always
     read_only: true
     cap_drop: [ALL]
@@ -24,3 +24,5 @@ services:
       PLR_ANCHOR_INTERVAL_MS: "60000"
       PLR_REGISTER_DEPOSIT: "100000000000000000000000"
       PLR_PCCS_URL: https://pccs.phala.network
+      PLR_VPN_ALLOWED_PORTS: "80,443"
+      PLR_VPN_MAX_TUNNELS: "32"

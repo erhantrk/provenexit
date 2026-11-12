@@ -26,6 +26,10 @@ export interface ExitConfig {
   registry: RegistryConfig | null;
   /** True if the selected chain's variables were present but incomplete/invalid: registration is disabled (clients refuse). */
   nearConfigError: boolean;
+  /** `PLR_VPN_ALLOWED_PORTS` (comma list, e.g. `80,443`): destination ports the exit dials; null = any port. */
+  allowedPorts: number[] | null;
+  /** `PLR_VPN_MAX_TUNNELS`: concurrent tunnels (default 1024). */
+  maxTunnels: number;
 }
 
 /**
@@ -75,5 +79,13 @@ export function loadExitConfig(env: Env = process.env): ExitConfig {
     stellarRegistryVar: vpnVar("PLR_STELLAR_VPN_REGISTRY", "PLR_STELLAR_REGISTRY"),
     solanaRegistryVar: vpnVar("PLR_SOLANA_VPN_REGISTRY", "PLR_SOLANA_REGISTRY"),
   });
-  return { attester, tdxSocket, composePath, policyPath, pccsUrl, host, port, anchorIntervalMs, near, registry, nearConfigError };
+  const portsRaw = env.PLR_VPN_ALLOWED_PORTS ?? "";
+  let allowedPorts: number[] | null = null;
+  if (portsRaw !== "") {
+    if (portsRaw.length > 256 || !/^\d{1,5}(,\d{1,5})*$/.test(portsRaw)) bad("PLR_VPN_ALLOWED_PORTS");
+    allowedPorts = portsRaw.split(",").map(Number);
+    if (allowedPorts.some((p) => p < 1 || p > 65535)) bad("PLR_VPN_ALLOWED_PORTS");
+  }
+  const maxTunnels = intVar(env, "PLR_VPN_MAX_TUNNELS", 1024, 1, 1024);
+  return { attester, tdxSocket, composePath, policyPath, pccsUrl, host, port, anchorIntervalMs, near, registry, nearConfigError, allowedPorts, maxTunnels };
 }

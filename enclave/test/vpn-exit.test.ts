@@ -533,3 +533,20 @@ describe("no retention (SPEC-VPN §1.3, §5)", () => {
     expect(fromHex("00", 1).length).toBe(1);
   });
 });
+
+describe("allowed destination ports (PLR_VPN_ALLOWED_PORTS)", () => {
+  let e: TestExit | undefined;
+  afterEach(async () => { await e?.close(); e = undefined; });
+  it("dials only the listed ports; any other port gets E_EGRESS_DENIED before a dial", async () => {
+    const up = await startEchoUpstream();
+    try {
+      e = await exitWith({ allowedPorts: [up.port] });
+      expect(await connectOutcome(e, "127.0.0.1", up.port)).toBe("OK");
+      let dialed = 0;
+      await e.close();
+      e = await exitWith({ allowedPorts: [80, 443], dial: async () => { dialed++; throw new Error("must not dial"); } });
+      expect(await connectOutcome(e, "127.0.0.1", up.port)).toBe("E_EGRESS_DENIED");
+      expect(dialed).toBe(0);
+    } finally { await up.close(); }
+  });
+});

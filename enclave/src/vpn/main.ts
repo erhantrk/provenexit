@@ -83,6 +83,8 @@ export async function bootExit(
     ...(collateral ? { collateral } : {}),
     registrationQuote,
     ...(o.dial ? { dial: o.dial } : {}),
+    maxTunnels: cfg.maxTunnels,
+    allowedPorts: cfg.allowedPorts,
   });
   const server = exit.server;
   await new Promise<void>((ok, fail) => {

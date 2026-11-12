@@ -146,6 +146,14 @@ describe("exit config (env from the host)", () => {
       expect(code(() => loadExitConfig({ ...env, ...bad }))).toBe("E_BAD_INPUT");
     }
   });
+  it("PLR_VPN_ALLOWED_PORTS / PLR_VPN_MAX_TUNNELS: defaults any port / 1024, validated", () => {
+    expect([loadExitConfig(env).allowedPorts, loadExitConfig(env).maxTunnels]).toEqual([null, 1024]);
+    const c = loadExitConfig({ ...env, PLR_VPN_ALLOWED_PORTS: "80,443", PLR_VPN_MAX_TUNNELS: "32" });
+    expect([c.allowedPorts, c.maxTunnels]).toEqual([[80, 443], 32]);
+    for (const bad of [{ PLR_VPN_ALLOWED_PORTS: "0" }, { PLR_VPN_ALLOWED_PORTS: "70000" }, { PLR_VPN_ALLOWED_PORTS: "80,,443" }, { PLR_VPN_ALLOWED_PORTS: "http" }, { PLR_VPN_MAX_TUNNELS: "0" }, { PLR_VPN_MAX_TUNNELS: "5000" }]) {
+      expect(code(() => loadExitConfig({ ...env, ...bad }))).toBe("E_BAD_INPUT");
+    }
+  });
   it("registers on PLR_VPN_REGISTRY (else PLR_REGISTRY); partial NEAR config disables registration", () => {
     const near = { PLR_NEAR_RPC: "http://127.0.0.1:3030", PLR_OPERATOR_ID: "op.test.near", PLR_OPERATOR_KEY: "ed25519:" + "1".repeat(64) };
     expect(loadExitConfig({ ...env, ...near, PLR_REGISTRY: "registry.test.near" }).near?.contractId).toBe("registry.test.near");
@@ -156,7 +164,7 @@ describe("exit config (env from the host)", () => {
   it("rev 1.3: no reserved-nonce configuration is left (session quotes are domain-separated instead)", () => {
     const c = loadExitConfig({ ...env, PLR_REGISTRY: "registry.test.near", PLR_VPN_REGISTRY: "vpnregistry.test.near" });
     expect(Object.keys(c).sort()).toEqual([
-      "anchorIntervalMs", "attester", "composePath", "host", "near", "nearConfigError", "pccsUrl", "policyPath", "port", "registry", "tdxSocket",
+      "allowedPorts", "anchorIntervalMs", "attester", "composePath", "host", "maxTunnels", "near", "nearConfigError", "pccsUrl", "policyPath", "port", "registry", "tdxSocket",
     ]);
   });
 });

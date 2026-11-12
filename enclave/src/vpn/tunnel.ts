@@ -70,6 +70,8 @@ export interface TunnelContext {
   /** Timer source for every tunnel deadline (Node timers; tests drive a manual clock). */
   timers: Timers;
   now: () => number;
+  /** Destination ports the exit dials; null/undefined = any port. */
+  allowedPorts?: ReadonlySet<number> | null;
 }
 
 type State = "hello" | "connect" | "dialing" | "relay" | "closing" | "closed";
@@ -270,6 +272,11 @@ export class ExitTunnel {
       dest = parseConnect(payload);
     } catch {
       return this.#connectError("E_BAD_INPUT");
+    }
+    if (this.#ctx.allowedPorts && !this.#ctx.allowedPorts.has(dest.port)) {
+      // Deferred like a dial failure, so a refused port looks the same on the wire as a refused address.
+      queueMicrotask(() => this.#connectError("E_EGRESS_DENIED"));
+      return;
     }
     this.#ctx
       .dial(dest, {

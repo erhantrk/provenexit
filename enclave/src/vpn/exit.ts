@@ -52,6 +52,8 @@ export interface ExitOptions {
   lookup?: LookupAll;
   /** Concurrent tunnels (default 1024); above it new tunnels get 503. */
   maxTunnels?: number;
+  /** Destination ports the exit dials (others get CONNECT_ERR `E_EGRESS_DENIED`); default any port. */
+  allowedPorts?: readonly number[] | null;
   timeouts?: Partial<TunnelTimeouts>;
   /** Timer source of the tunnel deadlines (default Node timers; tests drive a manual clock). */
   timers?: Timers;
@@ -106,6 +108,7 @@ export function createExit(o: ExitOptions): ExitServer {
     timeouts,
     timers: o.timers ?? nodeTimers,
     now: o.now ?? Date.now,
+    allowedPorts: o.allowedPorts ? new Set(o.allowedPorts) : null,
   };
   const open = new Set<ExitTunnel>();
 

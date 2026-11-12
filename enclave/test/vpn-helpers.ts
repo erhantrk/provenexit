@@ -78,7 +78,7 @@ export interface TestExit {
  * An in-process exit on 127.0.0.1:0. Without `lookup` it resolves through the DoH resolvers of its compose
  * (`doh`, default: the test resolver 127.0.0.1:18253 — nothing listens there in unit tests, so names fail E_DNS).
  */
-export async function startTestExit(o: { allowLoopback?: boolean; doh?: readonly string[]; lookup?: LookupAll; dial?: Dialer; timeouts?: Partial<TunnelTimeouts>; timers?: Timers; maxTunnels?: number; /** Measured compose override (e.g. a plr-combo); default a plr-vpn test compose. */ composeBytes?: Uint8Array } = {}): Promise<TestExit> {
+export async function startTestExit(o: { allowLoopback?: boolean; doh?: readonly string[]; lookup?: LookupAll; dial?: Dialer; timeouts?: Partial<TunnelTimeouts>; timers?: Timers; maxTunnels?: number; allowedPorts?: readonly number[]; /** Measured compose override (e.g. a plr-combo); default a plr-vpn test compose. */ composeBytes?: Uint8Array } = {}): Promise<TestExit> {
   const root = MockRoot.generate();
   const cb = o.composeBytes ?? vpnCompose(o.allowLoopback ?? true, o.doh);
   const attester = new MockTdxAttester({ root, composeBytes: cb });
@@ -90,6 +90,7 @@ export async function startTestExit(o: { allowLoopback?: boolean; doh?: readonly
     ...(o.dial ? { dial: o.dial } : {}),
     ...(o.timeouts ? { timeouts: o.timeouts } : {}),
     ...(o.maxTunnels !== undefined ? { maxTunnels: o.maxTunnels } : {}),
+    ...(o.allowedPorts ? { allowedPorts: o.allowedPorts } : {}),
     ...(o.timers ? { timers: o.timers } : {}),
   });
   await new Promise<void>((ok) => exit.server.listen(0, "127.0.0.1", ok));
