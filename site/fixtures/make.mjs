@@ -39,7 +39,8 @@ refused.registry.events.unshift({
   account: null,
   org: null,
   tx: "SampleRevokeNotOnChain11111111111111111111111",
-  at: "2026-11-12T12:55:20.000Z",
+  // 30 s after the online sample's check, so it is always the newest event for that hash.
+  at: new Date(Date.parse(online.checked_at) + 30_000).toISOString(),
 });
 write("refused.json", refused);
 

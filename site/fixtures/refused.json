@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-11-12T12:55:50.318Z",
+  "checked_at": "2026-11-12T20:14:40.857Z",
   "error": null,
   "exit": {
     "url": "https://d2c65be0bde4f9b7628ef399310823e9e6339251-18200.dstack-pha1-prod9.phala.network",
@@ -108,11 +108,11 @@
   "instance": {
     "operator": "pe-op-erhan.testnet",
     "organization": "erhan-demo",
-    "registered_at": "2026-11-12T12:43:20.841Z",
-    "expires_at": "2026-11-13T12:43:20.841Z",
-    "key_hash": "ccd1d0ba8d34bc8dbd581908a6fa463b1f64fc44d7be1a5a46b82d3fe0888c74",
-    "registration_tx": "EZDveHx5571sdsm72MrbC7xayf4rhhpp8BTa6MFcUruN",
-    "registration_gas_tgas": 186.34
+    "registered_at": "2026-11-12T20:06:19.996Z",
+    "expires_at": "2026-11-13T20:06:19.996Z",
+    "key_hash": "9f7434d4a895d3256efb6cd15216f04e2e2c7fcdfee9fa4b28e38d85b15bba8f",
+    "registration_tx": "6yBT47ijg4AgqpYGUk6dUw9tdD3kRFw4iScL7aaSBCp",
+    "registration_gas_tgas": 186.76
   },
   "registry": {
     "account": "vpnreg.pe-owner-erhan.testnet",
@@ -124,11 +124,35 @@
     "events": [
       {
         "kind": "revoke_compose",
-        "hash": "9411d0f7125c31e0d392a96d956bcc29c04ee801f0494a12be75ac68f081c85c",
+        "hash": "2f4100e62c7794139867276f8bc9fa525bc85808380501e3975bfac3fd08dabf",
         "account": null,
         "org": null,
         "tx": "SampleRevokeNotOnChain11111111111111111111111",
-        "at": "2026-11-12T12:55:20.000Z"
+        "at": "2026-11-12T20:15:10.857Z"
+      },
+      {
+        "kind": "revoke_compose",
+        "hash": "9411d0f7125c31e0d392a96d956bcc29c04ee801f0494a12be75ac68f081c85c",
+        "account": null,
+        "org": null,
+        "tx": "9HhvupZAQWnrdFtXDMUuA4w6sVYfzHPF8Mtk4VXuhNVx",
+        "at": "2026-11-12T20:06:50.524Z"
+      },
+      {
+        "kind": "register_instance_tdx",
+        "hash": null,
+        "account": "pe-op-erhan.testnet",
+        "org": null,
+        "tx": "6yBT47ijg4AgqpYGUk6dUw9tdD3kRFw4iScL7aaSBCp",
+        "at": "2026-11-12T20:06:19.481Z"
+      },
+      {
+        "kind": "allow_compose",
+        "hash": "2f4100e62c7794139867276f8bc9fa525bc85808380501e3975bfac3fd08dabf",
+        "account": null,
+        "org": null,
+        "tx": "GdY61VR2ZBFR9SpgwVCmb7e6AN7Mx5PRt59XmKio9HhD",
+        "at": "2026-11-12T20:05:56.986Z"
       },
       {
         "kind": "register_instance_tdx",
@@ -177,7 +201,7 @@
     ]
   },
   "replay": {
-    "captured_at": "2026-11-12T12:44:15.834Z",
+    "captured_at": "2026-11-12T20:13:49.641Z",
     "verdict": "VERIFIED",
     "code": null,
     "checks": [
@@ -263,8 +287,8 @@
       }
     ],
     "compose": {
-      "hash": "9411d0f7125c31e0d392a96d956bcc29c04ee801f0494a12be75ac68f081c85c",
-      "image": "ghcr.io/erhantrk/provenexit-exit@sha256:7e53f383a6ea8ea8e537ad35c1d11665ca07540f537fe3d0c656879a92e61ad5",
+      "hash": "2f4100e62c7794139867276f8bc9fa525bc85808380501e3975bfac3fd08dabf",
+      "image": "ghcr.io/erhantrk/provenexit-exit@sha256:74c6d1c52e2ce72698fb238e52e27d03eefe1770af00a1dae3405d3474f22785",
       "logging": "none",
       "allowed_ports": [
         80,

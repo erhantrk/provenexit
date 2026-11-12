@@ -119,7 +119,7 @@
     "anchors": []
   },
   "replay": {
-    "captured_at": "2026-11-12T12:44:15.834Z",
+    "captured_at": "2026-11-12T20:13:49.641Z",
     "verdict": "VERIFIED",
     "code": null,
     "checks": [
@@ -205,8 +205,8 @@
       }
     ],
     "compose": {
-      "hash": "9411d0f7125c31e0d392a96d956bcc29c04ee801f0494a12be75ac68f081c85c",
-      "image": "ghcr.io/erhantrk/provenexit-exit@sha256:7e53f383a6ea8ea8e537ad35c1d11665ca07540f537fe3d0c656879a92e61ad5",
+      "hash": "2f4100e62c7794139867276f8bc9fa525bc85808380501e3975bfac3fd08dabf",
+      "image": "ghcr.io/erhantrk/provenexit-exit@sha256:74c6d1c52e2ce72698fb238e52e27d03eefe1770af00a1dae3405d3474f22785",
       "logging": "none",
       "allowed_ports": [
         80,
