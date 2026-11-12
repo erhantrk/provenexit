@@ -54,7 +54,7 @@ var __toCommonJS = (mod3) => __copyProps(__defProp({}, "__esModule", { value: tr
 var define_STATUS_DEFAULTS_default;
 var init_define_STATUS_DEFAULTS = __esm({
   "<define:__STATUS_DEFAULTS__>"() {
-    define_STATUS_DEFAULTS_default = { exitUrl: "https://d2c65be0bde4f9b7628ef399310823e9e6339251-18200.dstack-pha1-prod9.phala.network", registry: "vpnreg.pe-owner-erhan.testnet", trustedRoot: "0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f567918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394", rpcUrl: "https://rpc.testnet.fastnear.com", operator: "pe-op-erhan.testnet", platform: "Intel TDX · Phala Cloud · dstack-0.6.1", reproducibleBuild: true };
+    define_STATUS_DEFAULTS_default = { exitUrl: "https://d2c65be0bde4f9b7628ef399310823e9e6339251-18200.dstack-pha1-prod9.phala.network", registry: "vpnreg.pe-owner-erhan.testnet", registryCodeHash: "C1hvenbrzHKN1n1f2z63Duburr8YXLAKBescrEvarCGM", trustedRoot: "0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f567918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394", rpcUrl: "https://rpc.testnet.fastnear.com", operator: "pe-op-erhan.testnet", platform: "Intel TDX · Phala Cloud · dstack-0.6.1", reproducibleBuild: true };
   }
 });
 
@@ -76075,6 +76075,51 @@ var {
 } = actions;
 
 // client/dist/near-registry.js
+var E_REGISTRY_CODE_HASH = "E_REGISTRY_CODE_HASH";
+var RegistryCodeHashError = class extends PlrError {
+  constructor() {
+    super("E_REGISTRY_UNAVAILABLE");
+    this.code = E_REGISTRY_CODE_HASH;
+    this.message = `${E_REGISTRY_CODE_HASH}: registry account code hash differs from the pin`;
+  }
+};
+function isRegistryCodeHashError(e) {
+  return e instanceof PlrError && e.code === E_REGISTRY_CODE_HASH;
+}
+async function checkRegistryCode(registry2) {
+  const f = registry2?.checkCodeHash;
+  if (typeof f !== "function")
+    return;
+  try {
+    await f.call(registry2);
+  } catch (e) {
+    if (isRegistryCodeHashError(e))
+      throw e;
+    throw new PlrError("E_REGISTRY_UNAVAILABLE", "view_account");
+  }
+}
+var CODE_HASH_TTL_MS = 3e4;
+var KNOWN_REGISTRY_CODE_HASHES = Object.freeze({
+  "vpnreg.pe-owner-erhan.testnet": "C1hvenbrzHKN1n1f2z63Duburr8YXLAKBescrEvarCGM"
+});
+var CODE_HASH_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+var NO_CODE_HASH = "1".repeat(32);
+function isCodeHash(v) {
+  return typeof v === "string" && CODE_HASH_RE.test(v) && v !== NO_CODE_HASH;
+}
+function resolveRegistryCodeHash(contractId, explicit, intel) {
+  if (explicit !== void 0 && explicit !== "") {
+    if (!isCodeHash(explicit))
+      throw new Error("PLR_VPN_REGISTRY_CODE_HASH must be the registry account's code hash (base58, as view_account prints it)");
+    return explicit;
+  }
+  const known = Object.hasOwn(KNOWN_REGISTRY_CODE_HASHES, contractId) ? KNOWN_REGISTRY_CODE_HASHES[contractId] : void 0;
+  if (known !== void 0)
+    return known;
+  if (intel)
+    throw new Error(`PLR_VPN_REGISTRY_CODE_HASH is required for registry ${contractId} (no shipped code-hash pin; INTEL mode refuses an unpinned registry)`);
+  return void 0;
+}
 var MAX_RESULT_BYTES = 64 * 1024;
 var DEFAULT_TIMEOUT_MS = 1e4;
 var ACCOUNT_ID_RE = /^(?:(?:[a-z\d]+[-_])*[a-z\d]+\.)*(?:[a-z\d]+[-_])*[a-z\d]+$/;
@@ -76141,6 +76186,10 @@ var NearRegistry = class {
   #provider;
   #timeoutMs;
   #finality;
+  /** The pinned `code_hash`, or undefined when only the account id is pinned. */
+  pinnedCodeHash;
+  #codeOkUntil = 0;
+  #codePending;
   constructor(o) {
     if (typeof o !== "object" || o === null)
       throw new PlrError("E_BAD_INPUT", "NearRegistry options required");
@@ -76157,10 +76206,61 @@ var NearRegistry = class {
     this.contractId = o.contractId;
     this.#timeoutMs = timeoutMs;
     this.#finality = finality;
+    if (o.codeHash !== void 0 && !isCodeHash(o.codeHash))
+      throw new PlrError("E_BAD_INPUT", "codeHash is not a base58 code hash");
+    this.pinnedCodeHash = o.codeHash;
     this.#provider = new JsonRpcProvider({ url: url.href }, { retries: 2, wait: 100, backoff: 1.5 });
   }
-  /** Raw view call: returns the JSON-decoded result. Rejects on any error or timeout. */
+  /** With a pin: true while the last code-hash check passed and is still fresh. Without a pin: undefined. */
+  get codeHashVerified() {
+    return this.pinnedCodeHash === void 0 ? void 0 : performance.now() < this.#codeOkUntil;
+  }
+  /**
+   * Checks the registry account's `code_hash` against the pin (no-op without one, or within the reuse window);
+   * concurrent callers share one `view_account`.
+   * @throws RegistryCodeHashError (different code); NearRegistryError (RPC failed / malformed / timeout)
+   */
+  async checkCodeHash() {
+    if (this.pinnedCodeHash === void 0 || performance.now() < this.#codeOkUntil)
+      return;
+    this.#codePending ??= this.#fetchAndCompareCode().finally(() => {
+      this.#codePending = void 0;
+    });
+    return this.#codePending;
+  }
+  async #fetchAndCompareCode() {
+    this.#codeOkUntil = 0;
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new NearRegistryError("view_account: timeout")), this.#timeoutMs);
+      timer.unref?.();
+    });
+    let hash;
+    try {
+      const acct = await Promise.race([
+        this.#provider.query({ request_type: "view_account", finality: this.#finality, account_id: this.contractId }),
+        timeout
+      ]);
+      hash = typeof acct === "object" && acct !== null ? acct.code_hash : void 0;
+    } catch (e) {
+      if (e instanceof NearRegistryError)
+        throw e;
+      throw new NearRegistryError("view_account: RPC failed");
+    } finally {
+      clearTimeout(timer);
+    }
+    if (typeof hash !== "string" || !CODE_HASH_RE.test(hash))
+      throw new NearRegistryError("view_account: malformed reply");
+    if (hash !== this.pinnedCodeHash)
+      throw new RegistryCodeHashError();
+    this.#codeOkUntil = performance.now() + CODE_HASH_TTL_MS;
+  }
+  /**
+   * Raw view call: returns the JSON-decoded result. Rejects on any error or timeout; with a code-hash pin, first
+   * rejects with {@link RegistryCodeHashError} when the account runs other code.
+   */
   async view(method, args) {
+    await this.checkCodeHash();
     let timer;
     const timeout = new Promise((_, reject) => {
       timer = setTimeout(() => reject(new NearRegistryError(`${method}: timeout`)), this.#timeoutMs);
@@ -76277,6 +76377,7 @@ function decodeResult(method, raw) {
 // client/dist/verify-report.js
 init_define_STATUS_DEFAULTS();
 init_define_STATUS_REPLAY();
+var REGISTRY_CODE_LINE = "registry contract code hash matches the pinned build (view_account.code_hash)";
 var TracingRegistry = class {
   inner;
   lastCall;
@@ -76288,6 +76389,16 @@ var TracingRegistry = class {
   }
   get contractId() {
     return this.inner.contractId;
+  }
+  /** The inner reader's code-hash pin state (a `NearRegistry` with `codeHash`), else undefined. */
+  get codeHashState() {
+    const v = this.inner.codeHashVerified;
+    return v === true ? "verified" : v === false ? "unverified" : void 0;
+  }
+  /** Forwards the inner reader's code-hash check (no-op for a reader without one). */
+  checkCodeHash() {
+    const f = this.inner.checkCodeHash;
+    return typeof f === "function" ? f.call(this.inner) : Promise.resolve();
   }
   getRoot() {
     this.lastCall = "getRoot";
@@ -76315,12 +76426,13 @@ var ALL_CHECKS = Object.keys(CHECKS);
 var MOCK_ORDER = ALL_CHECKS.filter((k) => !INTEL_ONLY.has(k));
 var INTEL_ORDER = MOCK_ORDER.flatMap((k) => k === "QUOTE_SIG" ? [k, "TCB"] : k === "COMPOSE" ? [k, "COMPOSE_POLICY"] : [k]);
 function orderFor(o) {
-  return [...o.intel === true ? INTEL_ORDER : MOCK_ORDER];
+  const base = [...o.intel === true ? INTEL_ORDER : MOCK_ORDER];
+  return o.codeHash === void 0 ? base : ["REGISTRY_CODE", ...base];
 }
 var LABELS = {
   NONCE: `report_data binds client nonce as a session quote (SHA256("PLR-v1/session-nonce" ‖ nonce))`
 };
-var label = (k) => LABELS[k] ?? CHECKS[k];
+var label = (k) => k === "REGISTRY_CODE" ? REGISTRY_CODE_LINE : LABELS[k] ?? CHECKS[k];
 var CODE_TO_CHECK = {
   E_BAD_RESPONSE: "RESPONSE",
   E_QUOTE_FORMAT: "QUOTE_FORMAT",
@@ -76351,10 +76463,13 @@ function checkLines(err, lastRegistryCall, o = {}) {
   const order = orderFor(o);
   if (err === void 0)
     return order.map((k) => ({ name: label(k), status: "pass" }));
-  const code = err instanceof PlrError ? err.code : "E_BAD_RESPONSE";
-  let failing = CODE_TO_CHECK[code];
-  if (code === "E_REGISTRY_UNAVAILABLE")
+  const code = isRegistryCodeHashError(err) ? E_REGISTRY_CODE_HASH : err instanceof PlrError ? err.code : "E_BAD_RESPONSE";
+  let failing = code === E_REGISTRY_CODE_HASH ? "REGISTRY_CODE" : CODE_TO_CHECK[code];
+  if (code === "E_REGISTRY_UNAVAILABLE") {
     failing = lastRegistryCall ? REGISTRY_STEP[lastRegistryCall] : "ROOT";
+    if (o.codeHash === "unverified")
+      failing = "REGISTRY_CODE";
+  }
   const found = failing === void 0 ? -1 : order.indexOf(failing);
   const idx = found < 0 ? 0 : found;
   return order.map((k, i) => {
@@ -76415,7 +76530,9 @@ function parseProofReply(j) {
 async function chainAnchor(registry2, id2) {
   try {
     return await registry2.getAnchor(id2);
-  } catch {
+  } catch (e) {
+    if (isRegistryCodeHashError(e))
+      throw e;
     throw new PlrError("E_REGISTRY_UNAVAILABLE", "get_anchor");
   }
 }
@@ -76511,6 +76628,7 @@ var AttestationCache = class {
   async attest() {
     const nonce = new Uint8Array(randomBytes8(32));
     try {
+      await checkRegistryCode(this.#o.registry);
       const bundle = await this.#withFreshCollateral(await this.#o.fetchBundle(nonce));
       const verified = await verifyAttestation({
         bundle,
@@ -76565,7 +76683,9 @@ async function regCall(f, valid) {
   let v;
   try {
     v = await f();
-  } catch {
+  } catch (e) {
+    if (isRegistryCodeHashError(e))
+      throw e;
     throw new PlrError("E_REGISTRY_UNAVAILABLE");
   }
   if (!valid(v))
@@ -76575,6 +76695,7 @@ async function regCall(f, valid) {
 var isBool2 = (v) => typeof v === "boolean";
 var isInstanceOrNull = (v) => v === null || isInstanceRecord(v);
 async function recheckRegistry(registry2, v, now = Date.now()) {
+  await checkRegistryCode(registry2);
   const composeHex = toHex(v.composeHash);
   const osHex = toHex(v.osMeasurement);
   if (!await regCall(() => registry2.isComposeAllowed(composeHex), isBool2))
@@ -77460,7 +77581,7 @@ var fromLine = (l) => ({
 async function verifyVpnReport(client, registry2) {
   const root = client.rootKind;
   const intel = root === "INTEL";
-  const opts = { intel };
+  const opts = () => ({ intel, codeHash: registry2.codeHashState });
   const refused = (e, lines, recheck) => {
     const code = errCode(e);
     const checks2 = lines.map(fromLine);
@@ -77472,9 +77593,9 @@ async function verifyVpnReport(client, registry2) {
   try {
     session = await client.attestSession();
   } catch (e) {
-    return refused(e, checkLines(e, registry2.lastCall, opts), "skip");
+    return refused(e, checkLines(e, registry2.lastCall, opts()), "skip");
   }
-  const passed = checkLines(void 0, void 0, opts);
+  const passed = checkLines(void 0, void 0, opts());
   try {
     await recheckRegistry(registry2, session.verified);
   } catch (e) {
@@ -77813,7 +77934,9 @@ function resolveConfig(o) {
   if (rpcUrl === void 0)
     throw new Error("NEAR RPC not configured (PLR_NEAR_RPC)");
   checkRpcUrl(rpcUrl);
-  return { exitUrl, registry: registry2, trustedRoot, rpcUrl };
+  const explicit = o.registryCodeHash || env.PLR_VPN_REGISTRY_CODE_HASH || (registry2 === BAKED.registry ? BAKED.registryCodeHash : void 0);
+  const codeHash = resolveRegistryCodeHash(registry2, explicit, isIntelRoot(trustedRoot));
+  return { exitUrl, registry: registry2, trustedRoot, rpcUrl, codeHash };
 }
 async function getStatus(opts = {}) {
   const status = emptyStatus(Date.now());
@@ -77830,7 +77953,7 @@ async function getStatus(opts = {}) {
   }
   status.exit.url = cfg.exitUrl;
   status.registry.account = cfg.registry;
-  const near = new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.registry, timeoutMs: T.chain });
+  const near = new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.registry, timeoutMs: T.chain, ...cfg.codeHash !== void 0 ? { codeHash: cfg.codeHash } : {} });
   const tracing = new TracingRegistry(near);
   const nearBlocks = (opts.nearBlocksApi ?? DEFAULT_NEARBLOCKS).replace(/\/+$/, "");
   const archival = opts.archivalRpc ?? DEFAULT_ARCHIVAL;
@@ -77982,7 +78105,7 @@ async function getRegistryStatus(opts = {}) {
 function openExit(opts = {}) {
   const cfg = resolveConfig(opts);
   const T = { verify: 25e3, egress: 15e3, chain: 8e3, ...opts.timeouts ?? {} };
-  const registry2 = new TracingRegistry(new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.registry, timeoutMs: T.chain }));
+  const registry2 = new TracingRegistry(new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.registry, timeoutMs: T.chain, ...cfg.codeHash !== void 0 ? { codeHash: cfg.codeHash } : {} }));
   const client = new VpnClient({
     exitUrl: cfg.exitUrl,
     registry: registry2,

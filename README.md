@@ -268,8 +268,12 @@ Every limit and disclosure from the earlier README that applies to the code in t
   key can allow or revoke builds and operators. The client pins the Intel root and the registry contract, not the
   owner. Multisig / a DAO (e.g. Sputnik) is future work.
 - **The contract account's own key: closed.** The registry the client uses has no access keys, so nobody can deploy a
-  different wasm under its name, and its code rebuilds from this repo to the deployed hash. The client still pins
-  only the contract id (pinning `view_account.code_hash` as well is future work). The first registry
+  different wasm under its name, and its code rebuilds from this repo to the deployed hash. The client pins the
+  contract id and its code hash: before it uses any registry answer it reads `view_account.code_hash` and compares it
+  with the pin (`PLR_VPN_REGISTRY_CODE_HASH`; shipped for the live registry), and refuses with
+  `E_REGISTRY_CODE_HASH` on a difference. `vpn verify` shows it as its own check line. A passed check is reused for
+  30 seconds. Any other registry needs its own pin with the Intel root; only the local MOCK demo runs without one
+  (it prints a warning). The hash comes from the same RPC as the views, so the RPC stays trusted (see below). The first registry
   (`pe-vpnreg-erhan.testnet`) still has a full-access key and a non-reproducible build; it is retired.
 - **In a cloud deployment, Phala's dstack-gateway terminates TLS.** HTTPS to the exit ends at the gateway
   (`https://<app-id>-18200.<gateway-domain>`), which then speaks to the container; the tunnel inside is end-to-end

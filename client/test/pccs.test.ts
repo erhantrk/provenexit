@@ -214,7 +214,7 @@ describe("PLR_PCCS_URL config", () => {
   const base = {
     PLR_NEAR_RPC: "https://rpc.testnet.fastnear.com",
     PLR_TRUSTED_ROOT: toHex(INTEL_ROOT_P256),
-    PLR_VPN_REGISTRY: "pe-vpnreg-erhan.testnet",
+    PLR_VPN_REGISTRY: "vpnreg.pe-owner-erhan.testnet",
   };
 
   it("accepts an https PCCS and leaves it undefined when unset", () => {

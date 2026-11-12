@@ -23,11 +23,18 @@ export interface FakeRpc {
   calls: { method: string; args: Record<string, unknown>; finality: unknown }[];
   /** Override the raw JSON-RPC reply (status + body) for the next calls. */
   raw?: (method: string) => { status: number; body: unknown } | "hang" | undefined;
+  /** `code_hash` answered to `view_account` (default: a fixed test hash); "fail" answers an RPC error. */
+  codeHash: string;
+  /** Number of `view_account` requests seen. */
+  accountViews: number;
   close(): Promise<void>;
 }
 
+/** Default `code_hash` of the fake registry account. */
+export const FAKE_CODE_HASH = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin";
+
 export async function startFakeRpc(handler: ViewHandler): Promise<FakeRpc> {
-  const rpc: FakeRpc = { url: "", calls: [], close: async () => {} };
+  const rpc: FakeRpc = { url: "", calls: [], close: async () => {}, codeHash: FAKE_CODE_HASH, accountViews: 0 };
   const server: Server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (c: Buffer) => chunks.push(c));
@@ -38,6 +45,12 @@ export async function startFakeRpc(handler: ViewHandler): Promise<FakeRpc> {
           params: { request_type: string; account_id: string; method_name: string; args_base64: string; finality?: string };
         };
         const p = body.params;
+        if (p.request_type === "view_account") {
+          rpc.accountViews++;
+          res.writeHead(200, { "content-type": "application/json" });
+          if (rpc.codeHash === "fail") return void res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, error: { code: -32000, message: "Server error" } }));
+          return void res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { amount: "1", locked: "0", code_hash: rpc.codeHash, storage_usage: 1, storage_paid_at: 0, block_height: 1, block_hash: "11111111111111111111111111111111" } }));
+        }
         const args = JSON.parse(Buffer.from(p.args_base64, "base64").toString("utf8")) as Record<string, unknown>;
         rpc.calls.push({ method: p.method_name, args, finality: p.finality });
         const send = (status: number, j: unknown) => {
