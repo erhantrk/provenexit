@@ -76381,7 +76381,7 @@ init_define_STATUS_REPLAY();
 // client/dist/pccs.js
 init_define_STATUS_DEFAULTS();
 init_define_STATUS_REPLAY();
-import { createRequire as createRequire2 } from "node:module";
+var __dcapQvl2 = __toESM(require_src(), 1);
 var DEFAULT_PCCS_URL = "https://api.trustedservices.intel.com";
 var COLLATERAL_FROM_EXIT = "exit";
 var PCCS_TIMEOUT_MS = 8e3;
@@ -76404,7 +76404,7 @@ function isCollateralFetchError(e) {
 }
 var dcap2;
 function getDcap2() {
-  dcap2 ??= createRequire2(import.meta.url)("@phala/dcap-qvl");
+  dcap2 ??= __dcapQvl2;
   return dcap2;
 }
 async function fetchPccsCollateral(pccsUrl, quote, timeoutMs = PCCS_TIMEOUT_MS) {
