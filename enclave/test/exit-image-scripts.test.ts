@@ -2,6 +2,7 @@
 // the flags the digest depends on, the push guard, MATCH / MISMATCH. No real image is built here.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -19,7 +20,9 @@ const PINNED_BUILDER = shVar("EXIT_IMAGE_BUILDER");
 
 // Logs each call (one line of JSON) and talks on stdout. Builders are files in .fakebin/builders: `buildx inspect`
 // fails for a missing one, `buildx create` adds one, `inspect --bootstrap` reports a BuildKit version. `buildx build`
-// writes the metadata file the way buildx does; `imagetools inspect` prints the manifest descriptor of the tag.
+// writes the metadata file the way buildx does; `imagetools inspect --raw` prints the raw document the tag resolves to:
+// FAKE_TAG_RAW if set, else an OCI image index that lists one manifest (FAKE_TAG_DIGEST, default the built digest),
+// which is what `imagetools create` stored for the real push.
 const FAKE_DOCKER = `#!/usr/bin/env bash
 node -e 'require("fs").appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv: process.argv.slice(1), epoch: process.env.SOURCE_DATE_EPOCH ?? null }) + "\\n")' -- "$@"
 builders="$(dirname "$FAKE_LOG")/builders"; mkdir -p "$builders"
@@ -36,7 +39,11 @@ case "$1 $2" in
   "buildx imagetools")
     case "$3" in
       create) [ "\${FAKE_TAG_FAIL:-0}" = "1" ] && { echo "denied" >&2; exit 1; }; echo "tagged (stdout noise)"; exit 0 ;;
-      inspect) printf '{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"%s","size":1}\\n' "\${FAKE_TAG_DIGEST:-$FAKE_DIGEST}"; exit 0 ;;
+      inspect)
+        case " $* " in *" --raw "*) ;; *) echo "fake docker: imagetools inspect without --raw" >&2; exit 1 ;; esac
+        [ "\${FAKE_INSPECT_FAIL:-0}" = "1" ] && { echo "not found" >&2; exit 1; }
+        if [ -n "\${FAKE_TAG_RAW:-}" ]; then printf '%s' "$FAKE_TAG_RAW"; else printf '%s' "$(node -e 'process.stdout.write(process.env.FAKE_INDEX.replace("DIGEST", process.argv[1]))' "\${FAKE_TAG_DIGEST:-$FAKE_DIGEST}")"; fi
+        exit 0 ;;
     esac
     exit 1 ;;
   "buildx build") ;;
@@ -55,6 +62,11 @@ echo "#1 building (stdout noise that must never reach the digest line)"
 printf '{\\n  "buildx.build.ref": "x/y/z",\\n  "containerimage.descriptor": {\\n    "mediaType": "application/vnd.oci.image.manifest.v1+json",\\n    "digest": "%s",\\n    "size": 1\\n  },\\n  "containerimage.digest": "%s"\\n}' "$digest" "$digest" > "$meta"
 `;
 
+// The raw index a tag resolves to (DIGEST is replaced), and a raw image manifest, as a registry serves them.
+const INDEX = `{\n  "schemaVersion": 2,\n  "mediaType": "application/vnd.oci.image.index.v1+json",\n  "manifests": [\n    {\n      "mediaType": "application/vnd.oci.image.manifest.v1+json",\n      "digest": "DIGEST",\n      "size": 2065,\n      "platform": {\n        "architecture": "amd64",\n        "os": "linux"\n      }\n    }\n  ]\n}`;
+const MANIFEST = `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:${"c".repeat(64)}","size":1},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":"sha256:${"d".repeat(64)}","size":1}]}`;
+const digestOf = (raw: string) => "sha256:" + createHash("sha256").update(raw).digest("hex");
+
 let repo: string;
 let log: string;
 
@@ -69,7 +81,7 @@ function git(args: string[], time = T0): string {
 function run(script: string, args: string[] = [], env: Record<string, string> = {}) {
   const r = spawnSync("bash", [join(repo, "scripts", script), ...args], {
     cwd: tmpdir(), encoding: "utf8",
-    env: { ...process.env, PATH: `${join(repo, ".fakebin")}:${process.env.PATH}`, FAKE_LOG: log, FAKE_DIGEST: A, FAKE_BUILDKIT: BUILDKIT_VERSION, PUSH: "", NO_CACHE: "", BUILDER: "", IMAGE: "", TAG: "", ...env },
+    env: { ...process.env, PATH: `${join(repo, ".fakebin")}:${process.env.PATH}`, FAKE_LOG: log, FAKE_DIGEST: A, FAKE_BUILDKIT: BUILDKIT_VERSION, FAKE_INDEX: INDEX, FAKE_TAG_RAW: "", PUSH: "", NO_CACHE: "", BUILDER: "", IMAGE: "", TAG: "", ...env },
   });
   const calls = existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as { argv: string[]; epoch: string | null }) : [];
   // `builds` are the `docker buildx build` calls; `calls` is every docker call, in order
@@ -277,7 +289,29 @@ describe("exit image scripts (fake docker)", () => {
     const back = sub(r.calls, "buildx", "imagetools", "inspect");
     expect(back).toHaveLength(1);
     expect(back[0]!.argv.at(-1)).toBe("registry.invalid/exit:t1");
+    expect(back[0]!.argv).toContain("--raw");
     expect(r.calls.indexOf(back[0]!)).toBeGreaterThan(r.calls.indexOf(tag[0]!));
+  });
+
+  it("build PUSH=1 reports what the tag resolves to: an index digest that wraps the manifest, or the manifest itself", () => {
+    // the tag is an image index listing only the pushed manifest: both digests are reported, never "tag = manifest digest"
+    let r = run("build-exit-image.sh", [], { PUSH: "1", IMAGE: "registry.invalid/exit", TAG: "t1" });
+    const index = digestOf(INDEX.replace("DIGEST", A));
+    expect(index).not.toBe(A);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe(A + "\n");
+    expect(r.stderr).toContain(`pushed registry.invalid/exit@${A} (image manifest, linux/amd64)`);
+    expect(r.stderr).toContain(`tag registry.invalid/exit:t1 -> image index ${index}, which lists only that manifest`);
+    expect(r.stderr).not.toMatch(/exit:t1 = /);
+    expect(r.stderr).not.toContain(`exit:t1 -> ${A}`);
+
+    // the tag is the manifest itself (its raw bytes hash to the built digest)
+    const m = digestOf(MANIFEST);
+    r = run("build-exit-image.sh", [], { PUSH: "1", IMAGE: "registry.invalid/exit", TAG: "t1", FAKE_DIGEST: m, FAKE_TAG_RAW: MANIFEST });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe(m + "\n");
+    expect(r.stderr).toContain(`tag registry.invalid/exit:t1 -> ${m} (that manifest)`);
+    expect(r.stderr).not.toMatch(/image index/);
   });
 
   it("build PUSH=1 refuses a dirty tree before running docker (untracked or modified)", () => {
@@ -309,10 +343,22 @@ describe("exit image scripts (fake docker)", () => {
     expect(r.stderr).toMatch(/tagging it .* failed/);
     expect(r.stdout).toBe("");
 
+    // an index that lists another manifest
     r = run("build-exit-image.sh", [], { PUSH: "1", FAKE_TAG_DIGEST: B });
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/do not deploy by tag/);
     expect(r.stdout).toBe("");
+
+    // an index that lists the manifest and something else, another manifest, an unreadable tag
+    const two = INDEX.replace("DIGEST", A).replace(/\n  \]\n\}$/, `,\n    {\n      "mediaType": "application/vnd.oci.image.manifest.v1+json",\n      "digest": "${B}",\n      "size": 1\n    }\n  ]\n}`);
+    expect(two).toContain(A);
+    expect(two).toContain(B);
+    for (const env of [{ FAKE_TAG_RAW: two }, { FAKE_TAG_RAW: MANIFEST }, { FAKE_INSPECT_FAIL: "1" }]) {
+      r = run("build-exit-image.sh", [], { PUSH: "1", ...env });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(/do not deploy by tag/);
+      expect(r.stdout).toBe("");
+    }
   });
 
   it("a dirty image input is reported on stderr (the digest is then not a commit's)", () => {

@@ -3,7 +3,9 @@
 #
 #   scripts/build-exit-image.sh            build locally, print the digest, push nothing
 #   PUSH=1 scripts/build-exit-image.sh     the same, then upload to $IMAGE without a tag, and tag it $IMAGE:$TAG only
-#                                          if the registry digest equals the local one
+#                                          if the registry digest equals the local one. The tag may be stored as an
+#                                          image index wrapping the manifest: the script reports both digests; the
+#                                          one printed on stdout (and to pin) is always the manifest digest
 #
 # IMAGE (default ghcr.io/erhantrk/provenexit-exit), TAG (default: short HEAD), NO_CACHE=0 (allow the build cache),
 # BUILDER (a buildx builder to use instead of the pinned one; the digest can then differ). A push is refused from a
@@ -44,10 +46,23 @@ if [ "$PUSHED" != "$LOCAL" ]; then
 fi
 docker buildx imagetools create --builder "$EXIT_IMAGE_USE_BUILDER" -t "$IMAGE:$TAG" "$IMAGE@$LOCAL" >&2 \
   || { echo "build-exit-image: $IMAGE@$LOCAL is uploaded, but tagging it $IMAGE:$TAG failed" >&2; exit 1; }
-TAGGED="$(docker buildx imagetools inspect --builder "$EXIT_IMAGE_USE_BUILDER" --format '{{json .Manifest}}' "$IMAGE:$TAG" | exit_image_digest_in)" || TAGGED=""
-if [ "$TAGGED" != "$LOCAL" ]; then
-  echo "build-exit-image: $IMAGE:$TAG resolves to '${TAGGED:-nothing}', not to the local digest $LOCAL: do not deploy by tag." >&2
-  exit 1
-fi
-echo "pushed $IMAGE:$TAG = $IMAGE@$LOCAL" >&2
+# Read the tag back as the registry serves it (raw bytes; their sha256 is the digest the tag resolves to).
+# `imagetools create` may store the tag as an image index that wraps the manifest, so the tag's digest is then the
+# index digest, not the manifest digest. Accepted: the tag is the manifest itself, or an index listing only it.
+RAW="$(mktemp "${TMPDIR:-/tmp}/exit-image-tag.XXXXXX")"
+docker buildx imagetools inspect --builder "$EXIT_IMAGE_USE_BUILDER" --raw "$IMAGE:$TAG" >"$RAW" || : >"$RAW"
+TAG_DIGEST=""
+[ -s "$RAW" ] && TAG_DIGEST="sha256:$(exit_image_sha256 <"$RAW")"
+TAG_KIND="$(exit_image_tag_kind "$LOCAL" "$TAG_DIGEST" <"$RAW")"
+rm -f "$RAW"
+case "$TAG_KIND" in
+  manifest) TAG_LINE="tag $IMAGE:$TAG -> $TAG_DIGEST (that manifest)" ;;
+  index) TAG_LINE="tag $IMAGE:$TAG -> image index $TAG_DIGEST, which lists only that manifest" ;;
+  *)
+    echo "build-exit-image: $IMAGE:$TAG resolves to '${TAG_DIGEST:-nothing}', which is neither the local manifest $LOCAL nor an index listing only it: do not deploy by tag." >&2
+    exit 1 ;;
+esac
+echo "pushed $IMAGE@$LOCAL (image manifest, $EXIT_IMAGE_PLATFORM)" >&2
+echo "$TAG_LINE" >&2
+echo "pin and verify the manifest digest (printed below), not the tag" >&2
 echo "$LOCAL"

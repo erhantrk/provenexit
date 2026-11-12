@@ -107,6 +107,26 @@ exit_image_digest_in() {
   tr -d '\n' | sed -n 's/.*"\(containerimage\.\)\{0,1\}digest"[[:space:]]*:[[:space:]]*"\(sha256:[0-9a-f]\{64\}\)".*/\2/p'
 }
 
+# stdin: bytes; prints their sha256 as 64 hex.
+exit_image_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1; else shasum -a 256 | cut -d' ' -f1; fi
+}
+
+# exit_image_tag_kind <manifest digest> <digest of the raw document a tag resolves to>; stdin: that raw document.
+# Prints "manifest" if the tag is the manifest itself, "index" if it is an image index (OCI index or Docker manifest
+# list) in which the only digest is that manifest's, and nothing otherwise (another manifest, an index that lists
+# anything else, an empty or unreadable document).
+exit_image_tag_kind() {
+  local manifest="$1" tag="$2" raw listed
+  raw="$(cat)"
+  [ -n "$tag" ] && [ -n "$raw" ] || return 0
+  if [ "$tag" = "$manifest" ]; then echo manifest; return 0; fi
+  printf '%s' "$raw" | tr -d '\n' | grep -q '"mediaType"[[:space:]]*:[[:space:]]*"application/vnd\.\(oci\.image\.index\.v1\|docker\.distribution\.manifest\.list\.v2\)+json"' || return 0
+  listed="$(printf '%s' "$raw" | grep -o 'sha256:[0-9a-f]\{64\}' | sort -u)"
+  [ "$listed" = "$manifest" ] && echo index
+  return 0
+}
+
 # Builds without pushing (an OCI archive in a temp dir, deleted afterwards) and prints the digest.
 exit_image_build_local() {
   local dir digest
