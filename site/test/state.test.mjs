@@ -198,10 +198,10 @@ test("allowlist status comes from the newest matching event", () => {
   assert.equal(allowlistStatus(refused.registry.events, hash).allowed, false);
   assert.equal(allowlistStatus([], hash), null);
   assert.equal(allowlistStatus(online.registry.events, null), null);
-  // Retired registry: revoked at 14:02:51, allowed again at 14:03:00.
-  const b98 = "b9823a796f86b61b4fae123f912d98f25914326f5789ab2f964b66d5f086d05f";
-  assert.equal(allowlistStatus(retired.registry.events, b98).allowed, true);
-  assert.equal(allowlistStatus([...retired.registry.events].reverse(), b98).allowed, true);
+  // Real history: the first exit's compose was allowed at 12:43 and revoked at 20:06 after the redeploy.
+  const old = "9411d0f7125c31e0d392a96d956bcc29c04ee801f0494a12be75ac68f081c85c";
+  assert.equal(allowlistStatus(online.registry.events, old).allowed, false);
+  assert.equal(allowlistStatus([...online.registry.events].reverse(), old).allowed, false);
 });
 
 test("expiry is compared with the clock", () => {
