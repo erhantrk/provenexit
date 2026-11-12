@@ -36,15 +36,16 @@ redeployed from an image built as described below.
 ## Reproduce the exit image
 
 ```sh
-git clone <this repo> && cd provenexit        # a full clone, not --depth 1
+git clone <this repo> && cd provenexit        # --depth 1 is enough
 scripts/verify-exit-image.sh                  # rebuilds, compares with the digest in docker-compose.yml: MATCH / MISMATCH
 scripts/verify-exit-image.sh --print-digest   # rebuilds, prints only sha256:<64 hex>
 scripts/build-exit-image.sh                   # the same build; pushes only with PUSH=1, and never from a dirty tree
 ```
 
-Needs git and Docker with buildx, nothing else: no node or npm on the host. The builder must be able to write an OCI
-archive (Docker Desktop, the containerd image store, or a `docker-container` builder passed as `BUILDER=<name>`).
-Nothing is pushed or loaded. Exit codes of `verify-exit-image.sh`: 0 `MATCH`, 1 `MISMATCH`, 2 could not build.
+Needs git and Docker with buildx, nothing else: no node or npm on the host. On the first run the scripts create a
+buildx builder (`docker-container` driver) that runs the pinned BuildKit image, which Docker pulls from Docker Hub;
+your current builder is not changed. Nothing is pushed or loaded. Exit codes of `verify-exit-image.sh`: 0 `MATCH`,
+1 `MISMATCH`, 2 could not build. The scripts print the builder and the BuildKit version it reports next to the digest.
 
 What is pinned (all of it in [`Dockerfile`](Dockerfile), [`Dockerfile.dockerignore`](Dockerfile.dockerignore) and
 `scripts/exit-image-common.sh`):
@@ -54,31 +55,45 @@ What is pinned (all of it in [`Dockerfile`](Dockerfile), [`Dockerfile.dockerigno
   --node-exe-only`. The final image is the base plus `/app/vpn.bundle.mjs`, `/app/vpn-policy.json` and the `CMD`.
 - **Inputs.** The build context is the repo root filtered by `Dockerfile.dockerignore`: the root `package.json`,
   `package-lock.json`, `tsconfig.base.json`, `packages/shared`, `enclave` (both without their tests) and the
-  `package.json` of the other workspaces (`npm ci` needs them). Nothing else in the repo can change the image.
-- **Timestamps.** `SOURCE_DATE_EPOCH` with `rewrite-timestamp=true`. The epoch is the commit time of the last commit
-  that changed one of the inputs above (or the Dockerfile). At that commit it is the commit time of `HEAD`; later
-  commits that only touch docs or pin the new digest in `docker-compose.yml` keep it, so the pinned digest can be
-  checked from the commit that pins it. This needs the git history, hence the full clone.
+  `package.json` of the other workspaces (`npm ci` needs them). No other file of the repo enters the build context.
+  The image also depends on the build options and the builder, which `scripts/exit-image-common.sh` fixes (next
+  three points): a change there can change the digest too.
+- **Timestamps.** `SOURCE_DATE_EPOCH=1767225600` (2026-01-01T00:00:00Z, a constant in `exit-image-common.sh`) with
+  `rewrite-timestamp=true`. The epoch does not come from the clock or from git, so the digest depends on the content
+  of the checkout only: a rebase, a squash-merge, or a commit that touches only docs or pins the new digest in
+  `docker-compose.yml` keeps it, and a shallow clone can verify.
+- **Builder.** BuildKit writes the layers and the manifest, so its release is part of the result. The scripts build
+  with their own builder `provenexit-exit-buildkit-v0.34.2-c5f8862f5249`, which runs
+  `moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe` (the multi-arch
+  index digest on Docker Hub), and refuse to build if that builder reports another BuildKit version.
+  `BUILDER=<name>` uses a builder of your choice instead; the scripts then warn that the digest can differ for that
+  reason alone. No `# syntax=` line: the Dockerfile frontend is the one built into that BuildKit.
 - **Manifest.** `linux/amd64` only, `--provenance=false --sbom=false`, OCI media types and gzip layers for both the
-  local build and the push. `PUSH=1 scripts/build-exit-image.sh` builds locally first, pushes, and fails if the
-  registry digest differs from the local one.
+  local build and the push. `PUSH=1 scripts/build-exit-image.sh` builds locally first, then runs the same build with
+  a registry output that uploads by digest without a tag (`push-by-digest=true`). Only if the registry digest equals
+  the local one does it add the tag (`docker buildx imagetools create`) and read it back. On a difference it fails
+  and no tag exists; the untagged manifest stays in the registry.
 
-Not pinned: the BuildKit version of the builder, and the npm registry has to serve the tarballs the lockfile names
-(their integrity hashes are checked). In the policy file, `vpn.node_sha256` is the manifest digest of the node
-executable alone (`--node-exe-only`): the closure walk of the mock host reads Mach-O and does not run on Linux. Nothing
-checks that field in dstack mode; node is pinned by the base image digest.
+Not pinned: the Docker client and buildx version (they pass the options to the pinned BuildKit), the host CPU (on an
+arm64 host the `linux/amd64` build steps run under emulation), and the npm registry has to serve the tarballs the
+lockfile names (their integrity hashes are checked). In the policy file, `vpn.node_sha256` is the manifest digest of
+the node executable alone (`--node-exe-only`): the closure walk of the mock host reads Mach-O and does not run on
+Linux. Nothing checks that field in dstack mode; node is pinned by the base image digest.
 
 What a `MATCH` proves: the image the compose pins, which is the image dstack pulls by digest and whose compose hash
 the registry allows, is byte for byte what this checkout builds. What it does not prove: that the source is honest.
 It moves the question from "what is in that image" to "what does this source do", and the source still has to be
 read. It also says nothing about the base image beyond its digest, or about the npm packages beyond the lockfile.
 
-Status of this section (2026-11-12): measured before this Dockerfile existed, with the older single-stage one: two
+Status of this section (2026-11-12). Measured before this Dockerfile existed, with the older single-stage one: two
 `--no-cache` builds with `SOURCE_DATE_EPOCH` and `rewrite-timestamp=true` gave the same digest, and without them
-different ones. Run for the current tree, outside Docker: the build-stage commands in two fresh clones gave the same
-bundle (`c472440f…`) and policy bytes, and the scripts' logic is tested against a fake `docker`
-(`enclave/test/exit-image-scripts.test.ts`). **Not run yet:** the multi-stage build itself, the two-clone digest
-comparison through Docker, and a push (local digest = registry digest is checked by the script at push time).
+different ones. Run for the multi-stage Dockerfile, with Docker Desktop's built-in builder and the commit-time epoch
+the scripts used before the two changes below: `verify-exit-image.sh --print-digest` in two fresh clones printed the
+same digest (`sha256:db6bc56d…`). The scripts' logic is tested against a fake `docker`
+(`enclave/test/exit-image-scripts.test.ts`). **Not run yet:** any build with the constant epoch and the pinned
+BuildKit builder (so no digest of the current scripts is recorded here, and the pinned builder has not been created
+or used on any machine), a build on a second machine or on an amd64 host, and a push (by-digest upload, tag,
+read-back).
 
 ## Deploy
 
