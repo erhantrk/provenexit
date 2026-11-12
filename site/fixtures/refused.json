@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-11-12T20:14:40.857Z",
+  "checked_at": "2026-11-12T22:22:29.551Z",
   "error": null,
   "exit": {
     "url": "https://d2c65be0bde4f9b7628ef399310823e9e6339251-18200.dstack-pha1-prod9.phala.network",
@@ -13,6 +13,11 @@
     "code": "E_COMPOSE_NOT_ALLOWED",
     "root": "INTEL",
     "checks": [
+      {
+        "name": "registry contract code hash matches the pinned build (view_account.code_hash)",
+        "ok": true,
+        "detail": ""
+      },
       {
         "name": "response well-formed, fresh 32-byte nonce",
         "ok": true,
@@ -30,6 +35,11 @@
       },
       {
         "name": "pinned root == registry root == verifier root",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "fresh Intel collateral fetched by the client from the PCCS (not the exit's copy)",
         "ok": true,
         "detail": ""
       },
@@ -128,7 +138,7 @@
         "account": null,
         "org": null,
         "tx": "SampleRevokeNotOnChain11111111111111111111111",
-        "at": "2026-11-12T20:15:10.857Z"
+        "at": "2026-11-12T22:22:59.551Z"
       },
       {
         "kind": "revoke_compose",

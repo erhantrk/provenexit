@@ -10,13 +10,18 @@
   },
   "verify": {
     "verdict": "REFUSED",
-    "code": "E_BAD_RESPONSE",
+    "code": "E_REGISTRY_UNAVAILABLE",
     "root": "INTEL",
     "checks": [
       {
+        "name": "registry contract code hash matches the pinned build (view_account.code_hash)",
+        "ok": false,
+        "detail": "E_REGISTRY_UNAVAILABLE"
+      },
+      {
         "name": "response well-formed, fresh 32-byte nonce",
         "ok": false,
-        "detail": "E_BAD_RESPONSE"
+        "detail": "not checked"
       },
       {
         "name": "quote structure (TDX v4)",
@@ -30,6 +35,11 @@
       },
       {
         "name": "pinned root == registry root == verifier root",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "fresh Intel collateral fetched by the client from the PCCS (not the exit's copy)",
         "ok": false,
         "detail": "not checked"
       },

@@ -165,7 +165,7 @@ test("the stylesheet uses the green and red tokens only under a verified or refu
 
 test("refused: the failing check is the first failed row, not a row that was never reached", () => {
   const f = failingCheck(refused);
-  assert.equal(f.number, 14);
+  assert.equal(f.number, 16);
   assert.equal(f.check.name, "compose hash allowed by registry");
   assert.equal(f.check.detail, "E_COMPOSE_NOT_ALLOWED");
   assert.equal(failingCheck(online), null);
@@ -174,12 +174,14 @@ test("refused: the failing check is the first failed row, not a row that was nev
   assert.equal(rowStatus({ ok: true, detail: "" }), "pass");
 });
 
-test("stages: counts come from the data, the live list has 18 rows and the replay 16", () => {
+test("stages: counts come from the data, the live list has 20 rows and the replay 16", () => {
   const live = groupChecks(online.verify.checks);
   assert.deepEqual(live.map((s) => [s.id, s.passed, s.rows.length, s.status]), [
-    ["hardware", 7, 7, "pass"], ["keys", 2, 2, "pass"], ["image", 4, 4, "pass"], ["near", 3, 3, "pass"], ["connection", 2, 2, "pass"],
+    ["hardware", 8, 8, "pass"], ["keys", 2, 2, "pass"], ["image", 4, 4, "pass"], ["near", 4, 4, "pass"], ["connection", 2, 2, "pass"],
   ]);
-  assert.deepEqual(live.flatMap((s) => s.rows.map((r) => r.number)), Array.from({ length: 18 }, (_, i) => i + 1));
+  // the registry code-hash check runs first (row 1) but belongs to the NEAR stage
+  assert.deepEqual(live.flatMap((s) => s.rows.map((r) => r.number)).sort((a, b) => a - b), Array.from({ length: 20 }, (_, i) => i + 1));
+  assert.equal(live.find((s) => s.id === "near").rows[0].number, 1);
   const rec = groupChecks(online.replay.checks);
   assert.deepEqual(rec.map((s) => [s.id, s.rows.length]), [["hardware", 7], ["keys", 2], ["image", 4], ["near", 3]]);
   const r = groupChecks(refused.verify.checks);
@@ -188,7 +190,7 @@ test("stages: counts come from the data, the live list has 18 rows and the repla
   assert.deepEqual(off.map((s) => s.status), ["fail", "skip", "skip", "skip", "skip"]);
   const extra = groupChecks([...online.verify.checks, { name: "a new check", ok: true, detail: "" }]);
   assert.equal(extra.at(-1).id, "other");
-  assert.equal(extra.at(-1).rows[0].number, 19);
+  assert.equal(extra.at(-1).rows[0].number, 21);
   assert.deepEqual(groupChecks(undefined), []);
 });
 

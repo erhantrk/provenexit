@@ -66,6 +66,7 @@ export const STAGES = [
       "quote structure (TDX v4)",
       "TEE type is TDX",
       "pinned root == registry root == verifier root",
+      "fresh Intel collateral fetched by the client from the PCCS (not the exit's copy)",
       "quote signature chain to root",
       "Intel TCB status accepted",
       "TD debug attribute clear",
@@ -94,8 +95,9 @@ export const STAGES = [
   {
     id: "near",
     title: "Allowed on NEAR",
-    line: "The registry lists this build, this OS and this exit",
+    line: "The registry runs its pinned code and lists this build, OS and exit",
     names: [
+      "registry contract code hash matches the pinned build (view_account.code_hash)",
       "compose hash allowed by registry",
       "OS measurement allowed by registry",
       "instance registered with matching keys",
