@@ -262,8 +262,11 @@ Every limit and disclosure from the earlier README that applies to the code in t
   source.
 - **The image rebuild was shown on one machine.** `scripts/verify-exit-image.sh` rebuilds the exit image and compares
   it with the pinned digest. Run so far: two fresh clones on one machine with the pinned BuildKit gave the same
-  digest, the one pushed and deployed. Not run: a build on a second machine. A `MATCH` says the image is what this source builds, not that the source is honest; the base image
-  is trusted by its digest and the npm packages by the lockfile's hashes.
+  digest, the one pushed and deployed. A second machine: a CI job (`.github/workflows/verify-exit-image.yml`) re-runs
+  the script on a GitHub-hosted `linux/amd64` runner on every push. Whether it printed `MATCH` there is in that run's
+  Actions log and job summary (digest and BuildKit version); it is not recorded here as passed. A `MATCH` says the
+  image is what this source builds, not that the source is honest; the base image is trusted by its digest and the
+  npm packages by the lockfile's hashes.
 - **A single owner key decides the allowlist (R12).** `pe-owner-erhan.testnet` is one NEAR account: whoever holds that
   key can allow or revoke builds and operators. The client pins the Intel root and the registry contract, not the
   owner. Multisig / a DAO (e.g. Sputnik) is future work.
