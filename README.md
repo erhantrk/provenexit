@@ -99,6 +99,8 @@ In this order, before every new connection, as the client prints them. The first
 19. registry re-check before each connection (compose, OS, instance)
 20. destinations resolved by the exit (remote DNS); the client never resolves them
 
+The published `provenexit@0.1.1` prints check 10 as "report_data binds router keys".
+
 The NEAR contract runs its own 13 checks when the exit registers (DCAP signature and TCB, event log, compose,
 allowlists, key binding). The two lists are separate: see [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md), which also
 has the architecture, the two-hop mode and a map of the repository. Specs: [docs/spec](docs/spec).

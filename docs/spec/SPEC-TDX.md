@@ -17,7 +17,7 @@ Notation as in SPEC.md: `‖` = concatenation, hex = lowercase, no `0x`, even le
 | `INTEL_ROOT_P256` | `0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f567918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394` | public key (x‖y) of `CN=Intel SGX Root CA` (notAfter 2049-12-31), extracted with `openssl` from `dcap-qvl-0.7.1/src/TrustedRootCA.der` |
 | `INTEL_QE_VENDOR_ID` | `939a7233f79c4ca9940a0db3957f0607` | SPEC.md §2.1 (already in `packages/shared/src/tdx/quote.ts`) |
 | `DSTACK_EVENT_TYPE` | `0x08000001` (= 134217729) | dstack `cc-eventlog/src/runtime_events.rs` |
-| `ACCEPTED_TCB_STATUSES` | `["UpToDate", "SWHardeningNeeded"]` | project decision. Day-0 spike S1 may require adding `"OutOfDate"`, but only with the human's OK |
+| `ACCEPTED_TCB_STATUSES` | `["UpToDate", "SWHardeningNeeded"]` | project decision. The first Phala test VM (2026-11-09) might have required adding `"OutOfDate"`, but only with the owner's OK |
 | `MAX_TDX_QUOTE_BYTES` | `8192` (hex: 16384 chars) | project decision. Real quotes are about 5 006 bytes |
 | `MAX_COLLATERAL_JSON_BYTES` | `32768` | project decision. The sample collateral is 16 072 bytes |
 | `MAX_DSTACK_COMPOSE_BYTES` | `32768` | project decision. Phala's `app-compose.json` may embed a pre-launch script |
@@ -128,8 +128,8 @@ Digest rule **V1 only** (dstack `RuntimeEvent::preimage`, `EventLogVersion::V1`)
 - `digest("system-preparing", <empty>)` = `f9974020ef507068183313d0ca808e0d1ca9b2d1ad0c61f5784e7157c362c06536f5ddacdad4451693f48fcc72fff624`
 - RTMR3 after only that event = `6a9a63f48733aba50d6892c873d838f97351040ddb0b497dcbdb0571ad78d0c1f1b8b3e87a9719706604b6cc5faedee0`
 
-**Test vector TV-E2** (real dstack log): written by spike S1 to `fixtures/phala-spike/event_log.json`, together with
-`quote.hex` (rtmr3 inside). Until S1 has run, the unit test uses a synthetic log built with `makeEvent`:
+**Test vector TV-E2** (real dstack log): written by the 2026-11-09 Phala test VM to `fixtures/phala-spike/event_log.json`, together with
+`quote.hex` (rtmr3 inside). Until that test VM had run, the unit test uses a synthetic log built with `makeEvent`:
 `[key-provider("{}"), system-preparing, app-id(20×0x11), compose-hash(sha256(compose)), instance-id(20×0x22), boot-mr-done, system-ready]`.
 
 ### 1.4 dstack `app-compose.json` and the compose policy (INTEL mode only)
@@ -251,7 +251,7 @@ pub fn register_instance_tdx(
 **Access:** anyone may call it, but SPEC §5 rev 1.3 binding means only the operator account that the enclave
 bound into `report_data` succeeds (`predecessor_account_id`). **Deposit:** same rules as `register_instance`
 (storage deposit, excess → anchor credit ≤ 0.05 NEAR, rest refunded). Callers attach `0.1 NEAR`. **Gas:**
-attach `300 Tgas`. Expected burn is 120–250 Tgas (measured in spike S2).
+attach `300 Tgas`. Expected burn is 120–250 Tgas (measured on near-sandbox with `contracts/near/scripts/tdx-gas-smoke.mjs`).
 
 Checks, in this order (the first failure panics with the code as the message prefix, like the existing methods):
 
@@ -509,9 +509,9 @@ export class DstackAttester implements Attester {
   async appCompose(): Promise<string> { const i = await this.#c.info(); return i.tcb_info.app_compose; }
 }
 ```
-**UNVERIFIED until S1:** whether `r.quote` carries a `0x` prefix (handled either way), and whether `digest` and
+**Unverified until the 2026-11-09 Phala test VM ran:** whether `r.quote` carries a `0x` prefix (handled either way), and whether `digest` and
 `event_payload` in `event_log` are lowercase hex without `0x`. If not, normalise them in the map
-(`.replace(/^0x/,"").toLowerCase()`) and note it in SPEC-TDX as an S1 finding.
+(`.replace(/^0x/,"").toLowerCase()`) and note it in SPEC-TDX as a finding of that test VM.
 
 ### 4.3 `CollateralCache` (`enclave/src/attest/collateral-cache.ts`, new)
 
@@ -553,7 +553,7 @@ One platform has one FMSPC, so caching a single value per process is correct.
 Unchanged (SPEC-VPN §3): `GET /v1/attestation`, `GET /v1/tunnel` (Upgrade `plr-vpn/1`), `GET /v1/receipts/proof`,
 `GET /healthz`. Public URL on Phala: `https://<app-id>-18200.<gateway-domain>` (TLS terminated by the dstack
 gateway; the tunnel inside is end-to-end encrypted to the attested key, so the gateway sees only ciphertext).
-Fallback if the gateway breaks the Upgrade (spike S1 step 6): `https://<app-id>-18443s.<gateway-domain>` (TLS passthrough),
+Fallback if the gateway breaks the Upgrade (step 6 of the 2026-11-09 Phala test VM): `https://<app-id>-18443s.<gateway-domain>` (TLS passthrough),
 with the exit terminating TLS itself using a boot-time self-signed cert and the client env `PLR_VPN_TLS_VERIFY=0`.
 This is safe because nothing relies on TLS for authenticity.
 
@@ -576,4 +576,4 @@ must approve again (`allow_compose`).
 | same, after `revoke_compose` | `✘ E_COMPOSE_NOT_ALLOWED` |
 | `node client/dist/cli.js vpn verify --fixture fixtures/<name>` | `FIXTURE REPLAY`, `✔ VERIFIED` |
 | `node client/dist/cli.js vpn` | `✔ SOCKS5 proxy on socks5h://127.0.0.1:18180` |
-| `curl --proxy socks5h://127.0.0.1:18180 https://api.ipify.org` | an IP address that is **not** the laptop's |
+| `curl --proxy socks5h://127.0.0.1:18180 https://api.ipify.org` | an IP address that is **not** your machine's |

@@ -10,7 +10,7 @@ listed in [VERIFY.md](VERIFY.md#the-on-chain-record).
   LLM router and registries on other chains. They are prior work and are not claimed as hackathon work. Their README
   is [the baseline README at `9bd402e`](https://github.com/erhantrk/provenexit/blob/9bd402e70b0f909c07f88244d363913f29cc1096/README.md);
   it describes code that is no longer in the tree, and its commands do not run on the current tree.
-- **Hackathon work:** everything after `9bd402e` (from 2026-11-09): the real Intel TDX path (dstack event log, DCAP in
+- **Hackathon work:** everything after `9bd402e` (commits from 2026-11-11; the first real quote is from 2026-11-09): the real Intel TDX path (dstack event log, DCAP in
   the client and on chain in the contract, compose policy, the Phala spike, the local stack, the exit image and the
   live TDX exit), the reproducible image, the keyless registry, the npm package, the MCP server and the status site.
   Diff: [9bd402e...main](https://github.com/erhantrk/provenexit/compare/9bd402e...main); full history:
@@ -28,8 +28,8 @@ From `git log` (commit dates, converted to UTC).
 |---|---|---|
 | 2026-10-23 | `c2a35e4`..`977c648` | PLR-v1 spec and build (NEAR registry, TEE router, client SDK, e2e, demo); PLR-VPN-v1 (SOCKS5 proxy, no-logs exit); VPN milestone 2 (forward-secret tunnel v2, DoH-only exit DNS, two-hop with on-chain operator organizations) |
 | 2026-10-24 | `34900ba`..`9bd402e` | Combo milestone (LLM router and VPN exit in one TD); registries on other chains: a Zcash record log, EVM/Monad (Solidity), Stellar (Soroban), Solana |
-| 2026-11-11 | `fdecb3c`.. | the 2026-11-09 Phala spike fixture, then the Intel/dstack path task by task (DCAP in the contract, compose policy, testnet registry, client fixture replay), review fixes, README and AI_USE |
-| 2026-11-12 | after `00c910f` | VPN-only cleanup (below), the live exit, the keyless registry, the reproducible image, the status site, the npm package, the code-hash pin and fresh collateral |
+| 2026-11-11 | `fdecb3c`..`a1f69b9` | the 2026-11-09 Phala spike fixture, then the Intel/dstack path task by task (DCAP in the contract, compose policy, testnet registry, client fixture replay), review fixes, README and AI_USE |
+| 2026-11-12 | `1c60ead`.. | VPN-only cleanup (below), the live exit, the keyless registry, the reproducible image, the status site, the npm package, the code-hash pin and fresh collateral |
 
 ## 2026-11-09: the first real quote
 
@@ -92,7 +92,7 @@ and the previous compose `9411d0f7…` (image `7e53f383…`, registration `EZDve
   18 to 20 checks; `provenexit@0.1.1` ships both.
 - The spike compose `b9823a79…` was revoked on the retired registry (tx `3DmY4Rqr…`).
 
-## 2026-11-13: docs
+## 2026-11-12/13: docs
 
 The README was shortened; the judge path, limits, architecture and rebuild steps moved to `docs/`, and the three specs
 to `docs/spec/`. The verbatim copy of the October README that was kept in `docs/` was removed; it is the
