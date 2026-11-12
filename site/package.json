@@ -5,7 +5,7 @@
   "engines": { "node": "22.x" },
   "scripts": {
     "dev": "node dev-server.mjs",
-    "test": "node --test test/",
+    "test": "node --test test/*.test.mjs",
     "fixtures": "node fixtures/make.mjs"
   }
 }
