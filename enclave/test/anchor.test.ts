@@ -2,17 +2,15 @@ import { describe, expect, it } from "vitest";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { randomBytes } from "@noble/hashes/utils.js";
 import {
-  MockRoot, MockTdxAttester, anchorMessage, fromHex, keyHash, parseQuote, receiptLeaf, registrationNonce, registrationReportData,
-  reportData, toHex, verifyEventLog, verifyMerkleProof, type Receipt,
+  MockRoot, MockTdxAttester, anchorMessage, fromHex, keyHash, parseQuote, registrationNonce, registrationReportData,
+  reportData, toHex, verifyEventLog, verifyMerkleProof, type VpnReceipt,
 } from "@plr/shared";
 import { Anchorer } from "../src/anchor.js";
-import { RouterKeys } from "../src/keys.js";
 import { Logger } from "../src/log.js";
 import type { AnchorArgs, AnchorView, RegisterArgs, RegistryWriter } from "../src/near.js";
-import { ReceiptLog } from "../src/receipts.js";
-import { composeBytes, makeCompose } from "../src/compose.js";
-import { DEFAULT_ANCHOR_DEPOSIT, loadConfig } from "../src/config.js";
-import { ROUTER_ENV_ALLOWLIST } from "../src/mock-tdx/host.js";
+import { DEFAULT_ANCHOR_DEPOSIT } from "../src/config.js";
+import { EXIT_ENV_ALLOWLIST } from "../src/mock-tdx/host.js";
+import { loadExitConfig } from "../src/vpn/config.js";
 import { VpnKeys } from "../src/vpn/keys.js";
 import { VpnReceiptLog } from "../src/vpn/receipts.js";
 import { composeBytes as vpnComposeBytesOf, makeVpnCompose } from "../src/compose.js";
@@ -20,10 +18,10 @@ import { verifyVpnReceipt, vpnReceiptLeaf } from "@plr/shared";
 import { eventually } from "./wait.js";
 
 const CONTRACT = "registry.test.near";
-const COMPOSE = composeBytes(makeCompose({ kind: "mock", modelSha256: "11".repeat(32), runtime: "node", bundleSha256: "22".repeat(32), entry: "router.bundle.mjs", runtimeSha256: "33".repeat(32), nodeSha256: "33".repeat(32) }));
+const COMPOSE = vpnComposeBytesOf(makeVpnCompose({ bundleSha256: "22".repeat(32), nodeSha256: "33".repeat(32), allowLoopback: false }));
 
 /**
- * Enforces the §7 rules the router depends on (rev 1.3 operator-bound registration report_data, anchor sig, seq).
+ * Enforces the §7 rules the exit depends on (rev 1.3 operator-bound registration report_data, anchor sig, seq).
  * `operatorId` is the account that submits (the contract's `predecessor_account_id`).
  */
 class FakeChain implements RegistryWriter {
@@ -78,15 +76,15 @@ class FakeChain implements RegistryWriter {
 function setup() {
   const root = MockRoot.generate();
   const attester = new MockTdxAttester({ root, composeBytes: COMPOSE });
-  const keys = RouterKeys.generate();
-  const receipts = new ReceiptLog();
+  const keys = VpnKeys.generate();
+  const receipts = new VpnReceiptLog();
   const chain = new FakeChain();
   const lines: string[] = [];
-  const anchorer = new Anchorer({ chain, attester, keys, receipts, composeBytes: COMPOSE, log: new Logger("plr-router", (l) => lines.push(l)) });
+  const anchorer = new Anchorer({ chain, attester, keys, receipts, composeBytes: COMPOSE, log: new Logger("plr-vpn", (l) => lines.push(l)) });
   const issue = (n: number) => {
-    const out: Receipt[] = [];
+    const out: VpnReceipt[] = [];
     for (let i = 0; i < n; i++) {
-      out.push(receipts.issue({ th: randomBytes(32), reqHash: randomBytes(32), respHash: randomBytes(32), composeHash: randomBytes(32), keyHash: keys.keyHash, sign: (r) => keys.signReceipt(r), nowMs: Date.now() }).receipt);
+      out.push(receipts.issue({ th: randomBytes(32), composeHash: randomBytes(32), keyHash: keys.keyHash, tsOpenMs: Date.now(), tsCloseMs: Date.now(), sign: (r) => keys.signVpnReceipt(r) }).receipt);
     }
     return out;
   };
@@ -99,7 +97,7 @@ describe("registration (SPEC §5, §7)", () => {
     expect(await t.anchorer.register()).toBe(true);
     expect(t.anchorer.state).toBe("registered");
     expect(t.chain.instances.has(toHex(t.keys.keyHash))).toBe(true);
-    expect(t.lines.some((l) => l.startsWith("plr-router: registered key_hash="))).toBe(true);
+    expect(t.lines.some((l) => l.startsWith("plr-vpn: registered key_hash="))).toBe(true);
   });
 
   it("rev 1.3: the registration quote is bound to this registry AND this operator, and is never a session quote", async () => {
@@ -124,7 +122,7 @@ describe("registration (SPEC §5, §7)", () => {
   it("an operator id that cannot be bound (over 64 bytes) → registration fails closed, no quote submitted", async () => {
     const t = setup();
     const chain = new FakeChain("o".repeat(65));
-    const a = new Anchorer({ chain, attester: t.attester, keys: t.keys, receipts: t.receipts, composeBytes: COMPOSE, log: new Logger("plr-router", (l) => t.lines.push(l)) });
+    const a = new Anchorer({ chain, attester: t.attester, keys: t.keys, receipts: t.receipts, composeBytes: COMPOSE, log: new Logger("plr-vpn", (l) => t.lines.push(l)) });
     expect(await a.register()).toBe(false);
     expect(chain.calls).toBe(0);
     expect(a.lastError).toBe("E_BAD_INPUT");
@@ -136,7 +134,7 @@ describe("registration (SPEC §5, §7)", () => {
     expect(await t.anchorer.register()).toBe(false);
     expect(t.anchorer.state).toBe("failed");
     expect(t.anchorer.lastError).toBe("E_COMPOSE_NOT_ALLOWED");
-    expect(t.lines).toEqual(["plr-router: registration_failed code=E_COMPOSE_NOT_ALLOWED"]);
+    expect(t.lines).toEqual(["plr-vpn: registration_failed code=E_COMPOSE_NOT_ALLOWED"]);
   });
 
   it("non-coded failure → E_REGISTRY_UNAVAILABLE", async () => {
@@ -173,7 +171,7 @@ describe("anchoring (SPEC §8)", () => {
       const p = t.receipts.proof(r.seq)!;
       const anchor = t.chain.anchors[p.anchor_id]!;
       expect(p.root).toBe(anchor.root);
-      expect(verifyMerkleProof(receiptLeaf(r), p.index, p.count, p.proof.map((h) => fromHex(h, 32)), fromHex(anchor.root, 32))).toBe(true);
+      expect(verifyMerkleProof(vpnReceiptLeaf(r), p.index, p.count, p.proof.map((h) => fromHex(h, 32)), fromHex(anchor.root, 32))).toBe(true);
     }
     expect(t.receipts.proof(8)).toBeNull();
   });
@@ -196,7 +194,7 @@ describe("anchoring (SPEC §8)", () => {
     await t.anchorer.register();
     t.issue(4);
     t.chain.dropResult = true;
-    await t.anchorer.anchorOnce(); // anchored on chain, but the router saw an error
+    await t.anchorer.anchorOnce(); // anchored on chain, but the exit saw an error
     expect(t.receipts.anchoredCount).toBe(0);
     t.issue(1);
     await t.anchorer.anchorOnce(); // E_SEQ → resync adopts [0,4)
@@ -226,7 +224,7 @@ describe("anchoring (SPEC §8)", () => {
   }, 60_000);
 });
 
-describe("ReceiptLog", () => {
+describe("VpnReceiptLog", () => {
   it("rejects non-contiguous anchors", () => {
     const t = setup();
     t.issue(3);
@@ -236,29 +234,29 @@ describe("ReceiptLog", () => {
 });
 
 // Regression (review "anchor_receipts storage is paid by the contract"): every anchor carries a storage deposit
-// (refunded in excess by the contract); if the chain still reports E_DEPOSIT, the router re-registers, which
+// (refunded in excess by the contract); if the chain still reports E_DEPOSIT, the exit re-registers, which
 // tops up the instance's prepaid anchor credit, and the batch stays pending until it succeeds.
 describe("anchor storage deposit", () => {
   const nearEnv = {
     PLR_TDX_SOCKET: "/tmp/q.sock",
     PLR_APP_COMPOSE_PATH: "/tmp/app-compose.json",
     PLR_NEAR_RPC: "http://127.0.0.1:3030",
-    PLR_REGISTRY: "registry.test.near",
+    PLR_VPN_REGISTRY: "registry.test.near",
     PLR_OPERATOR_ID: "operator.test.near",
     PLR_OPERATOR_KEY: "ed25519:" + "1".repeat(64),
   };
 
   it("PLR_ANCHOR_DEPOSIT defaults to 0.01 NEAR and is strictly validated", () => {
-    expect(loadConfig(nearEnv).near?.anchorDeposit).toBe(BigInt(DEFAULT_ANCHOR_DEPOSIT));
+    expect(loadExitConfig(nearEnv).near?.anchorDeposit).toBe(BigInt(DEFAULT_ANCHOR_DEPOSIT));
     expect(BigInt(DEFAULT_ANCHOR_DEPOSIT)).toBeGreaterThan(0n);
-    expect(loadConfig({ ...nearEnv, PLR_ANCHOR_DEPOSIT: "5" }).near?.anchorDeposit).toBe(5n);
+    expect(loadExitConfig({ ...nearEnv, PLR_ANCHOR_DEPOSIT: "5" }).near?.anchorDeposit).toBe(5n);
     // Malformed ⇒ registration (and anchoring) disabled, fail closed.
     for (const bad of ["-1", "1e3", "0x10", "1".repeat(41)]) {
-      const c = loadConfig({ ...nearEnv, PLR_ANCHOR_DEPOSIT: bad });
+      const c = loadExitConfig({ ...nearEnv, PLR_ANCHOR_DEPOSIT: bad });
       expect(c.near, bad).toBeNull();
       expect(c.nearConfigError, bad).toBe(true);
     }
-    expect(ROUTER_ENV_ALLOWLIST).toContain("PLR_ANCHOR_DEPOSIT");
+    expect(EXIT_ENV_ALLOWLIST).toContain("PLR_ANCHOR_DEPOSIT");
   });
 
   it("E_DEPOSIT keeps the batch pending and triggers a top-up re-registration", async () => {
@@ -361,12 +359,12 @@ describe("operator read-back (defense in depth against registration hijack)", ()
     expect(t.mismatches()).toBe(0);
   });
 
-  it("without onOperatorMismatch (LLM router) the operator is not consulted", async () => {
+  it("without onOperatorMismatch the operator is not consulted", async () => {
     const chain = new FakeChain();
     chain.frontRunner = "attacker.test.near";
     chain.getInstanceOperator = async () => { throw new Error("must not be called"); };
     const t = setup();
-    const a = new Anchorer({ chain, attester: t.attester, keys: t.keys, receipts: t.receipts, composeBytes: COMPOSE, log: new Logger("plr-router", () => undefined) });
+    const a = new Anchorer({ chain, attester: t.attester, keys: t.keys, receipts: t.receipts, composeBytes: COMPOSE, log: new Logger("plr-vpn", () => undefined) });
     expect(await a.register()).toBe(true);
   });
 });

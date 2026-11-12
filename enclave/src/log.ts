@@ -5,17 +5,15 @@
  */
 import { isPlrError } from "@plr/shared";
 
-type Field = number | boolean | Code | Hex | Route | UrlField;
+type Field = number | boolean | Code | Hex | UrlField;
 declare const brand: unique symbol;
 type Branded<T, B extends string> = T & { readonly [brand]: B };
 export type Code = Branded<string, "code">;
 export type Hex = Branded<string, "hex">;
-export type Route = Branded<string, "route">;
 export type UrlField = Branded<string, "url">;
 
 const CODE_RE = /^E_[A-Z0-9_]{1,48}$/;
 const HEX_RE = /^[0-9a-f]{1,128}$/;
-const ROUTES = new Set(["/v1/attestation", "/v1/private/chat", "/v1/receipts/proof", "/healthz", "other"]);
 const URL_RE = /^http:\/\/(?:127\.0\.0\.1|\[::1\]|localhost|0\.0\.0\.0|[0-9.]{7,15}):[0-9]{1,5}$/;
 
 /** An error code; anything that is not shaped like one is replaced by `E_INTERNAL`. */
@@ -24,9 +22,6 @@ export function code(c: string): Code {
 }
 export function hex(h: string): Hex {
   return (HEX_RE.test(h) ? h : "invalid") as Hex;
-}
-export function route(r: string): Route {
-  return (ROUTES.has(r) ? r : "other") as Route;
 }
 export function url(u: string): UrlField {
   return (URL_RE.test(u) ? u : "invalid") as UrlField;
@@ -48,7 +43,7 @@ const stdoutSink: Sink = (line) => {
 export class Logger {
   readonly #tag: string;
   readonly #sink: Sink;
-  constructor(tag: "plr-router" | "plr-host" | "plr-vpn", sink: Sink = stdoutSink) {
+  constructor(tag: "plr-host" | "plr-vpn", sink: Sink = stdoutSink) {
     this.#tag = tag;
     this.#sink = sink;
   }

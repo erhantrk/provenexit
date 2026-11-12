@@ -1,6 +1,6 @@
 /**
  * VPN exit boot wiring (SPEC-VPN §2–§5): read the measured compose, generate keys in memory, self-check the
- * quote service against the compose, serve, then register + anchor on the VPN registry if one is configured (`PLR_CHAIN`, SPEC-CHAINS §4).
+ * quote service against the compose, serve, then register + anchor on the NEAR VPN registry if one is configured.
  *
  * Destination names are resolved only through the compose's `policy.dns.doh` resolvers (SPEC-VPN §6.1): the DoH
  * lookup is the one resolver handed to the exit, and nothing here accepts another (no system-resolver path).
@@ -16,7 +16,7 @@ import { selfCheckQuote } from "../boot.js";
 import { readCompose, vpnPolicyOf } from "../compose.js";
 import { Logger, code, hex, url } from "../log.js";
 import { SocketAttester } from "../mock-tdx/attester.js";
-import { createRegistryWriter } from "../chains.js";
+import { NearRegistryWriter } from "../near.js";
 import type { RegistryWriter } from "../registry-writer.js";
 import type { ExitConfig } from "./config.js";
 import type { Dialer } from "./egress.js";
@@ -56,8 +56,8 @@ export async function bootExit(
     composeBytes = readCompose(composePath);
     attester = new SocketAttester(tdxSocket);
   }
-  // Strict + canonical: a `plr-vpn` compose or the `vpn` part of a `plr-combo` (SPEC-COMBO §1). In dstack mode the
-  // measured document is the dstack app-compose, so the enforced policy is the SPEC-VPN §2 compose baked into the image.
+  // Strict + canonical `plr-vpn` compose (SPEC-VPN §2). In dstack mode the measured document is the dstack
+  // app-compose, so the enforced policy is the SPEC-VPN §2 compose baked into the image.
   const policyBytes = cfg.attester === "dstack" ? readCompose(cfg.policyPath!) : composeBytes;
   const vpnPolicy = vpnPolicyOf(policyBytes);
   const lookup = createDohLookup(vpnPolicy.dns.doh);
@@ -109,7 +109,7 @@ export async function bootExit(
     });
 
   if (cfg.registry) {
-    chain = createRegistryWriter(cfg.registry);
+    chain = new NearRegistryWriter(cfg.registry.near);
     // The on-chain operator decides this exit's org_id (SPEC-VPN §10). The operator-bound registration quote (SPEC §5
     // rev 1.3) means only our own account can register our key; reading the operator back stays as defense in depth:
     // if the record names anyone else, two-hop clients would attribute us to that account's organization, so stop

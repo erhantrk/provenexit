@@ -1,15 +1,13 @@
 /**
- * Registration (SPEC §5, §7) and receipt anchoring (SPEC §8), shared by the LLM router and the VPN exit
- * (SPEC-VPN §5: same `register_instance` / `anchor_receipts` on the VPN registry; only the receipt kind differs,
- * and the Anchorer only ever sees leaf hashes).
+ * Registration (SPEC §5, §7) and receipt anchoring (SPEC §8) of the VPN exit (SPEC-VPN §5: `register_instance` /
+ * `register_instance_tdx` and `anchor_receipts` on the VPN registry; the Anchorer only ever sees leaf hashes).
  *
  * - At boot the instance obtains a registration quote over `key_hash ‖ registration_nonce(contract_id, operator_id)`
  *   (SPEC §5 rev 1.3: bound to the registry and to this anchorer's own operator account, which the contract checks
  *   against `current_account_id` / `predecessor_account_id`) and calls `register_instance`. On failure it keeps
  *   serving (clients refuse an unregistered instance), logs only the error code and retries with exponential backoff.
  *   Successful registrations are refreshed periodically. The registration quote of the latest successful registration
- *   is kept ({@link Anchorer.registrationQuote}) and served in `/v1/attestation` (SPEC-CHAINS §4); writers that set
- *   `reuseRegistrationQuote` (tier C, which commits only its hash) refresh with that same quote.
+ *   is kept ({@link Anchorer.registrationQuote}) and served in `/v1/attestation` as `registration_quote` (SPEC §6.2).
  * - Every `intervalMs`, when receipts are pending, the next contiguous batch (≤ 10 000) is committed as an
  *   RFC 6962 root via `anchor_receipts`, signed with the instance Ed25519 key, with a storage deposit attached
  *   by the chain writer (PLR_ANCHOR_DEPOSIT; the contract refunds the excess and never pays storage from its own
@@ -33,7 +31,7 @@ import type { LeafLog } from "./receipts.js";
 export interface AnchorerOptions {
   chain: RegistryWriter;
   attester: Attester;
-  /** The instance keys (router or VPN exit). */
+  /** The instance keys. */
   keys: EnclaveKeys;
   /** The instance receipt log (any receipt kind: only leaf hashes are anchored). */
   receipts: LeafLog;
@@ -84,7 +82,7 @@ export class Anchorer {
       refreshMs: 6 * 3600_000,
       scanLimit: 1000,
       ...o,
-      log: o.log ?? new Logger("plr-router"),
+      log: o.log ?? new Logger("plr-vpn"),
       onOperatorMismatch: o.onOperatorMismatch ?? null,
       collateral: o.collateral ?? null,
     };
@@ -161,10 +159,8 @@ export class Anchorer {
     return this.#exclusive(async () => {
       if (this.#lastError === "E_OPERATOR_MISMATCH") return false; // permanent
       try {
-        await this.#o.chain.prepare?.();
         const rd = this.#o.keys.registrationReportData(this.#o.chain.contractId, this.#o.chain.operatorId);
-        const { quote, eventLog } =
-          this.#o.chain.reuseRegistrationQuote === true && this.#regQuote !== null ? this.#regQuote : await this.#o.attester.getQuote(rd);
+        const { quote, eventLog } = await this.#o.attester.getQuote(rd);
         const args: RegisterArgs = {
           quote: toHex(quote),
           event_log: eventLog,

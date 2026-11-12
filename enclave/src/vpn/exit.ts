@@ -32,7 +32,7 @@ export interface ExitOptions {
   /** Exact bytes of the measured VPN app-compose.json (its policy.egress is enforced). */
   composeBytes: Uint8Array;
   receipts: VpnReceiptLog;
-  /** The registration quote once registered, served in `/v1/attestation` (SPEC-CHAINS §4). */
+  /** The registration quote once registered, served in `/v1/attestation` (SPEC §6.2). */
   registrationQuote?: () => Uint8Array | null;
   /** The root published in the bundle (`root_kind`, SPEC-TDX §1.5); default MOCK. */
   rootKind?: RootKind;
@@ -92,7 +92,7 @@ function connectionHasUpgrade(v: string | string[] | undefined): boolean {
 
 export function createExit(o: ExitOptions): ExitServer {
   const composeBytes = o.composeBytes.slice();
-  // Strict + canonical (`plr-vpn`, or the `vpn` part of a `plr-combo`); the policy we enforce is the measured one.
+  // Strict + canonical `plr-vpn`; the policy we enforce is the measured one.
   const vpnPolicy = o.policy ?? vpnPolicyOf(composeBytes);
   const policy = { allow_loopback: vpnPolicy.egress.allow_loopback, deny_private: vpnPolicy.egress.deny_private };
   const composeHash = sha256(composeBytes);

@@ -1,5 +1,5 @@
 /**
- * The router's Attester: calls the mock TDX host's quote endpoint (SPEC §6.1) over the Unix socket given in
+ * The exit's Attester in MOCK mode: calls the mock TDX host's quote endpoint (SPEC §6.1) over the Unix socket given in
  * `PLR_TDX_SOCKET`. Mirrors dstack's `GetQuote` (report_data is passed through, not hashed). The response
  * is size-bounded and shape-checked; anything unexpected is an error.
  */

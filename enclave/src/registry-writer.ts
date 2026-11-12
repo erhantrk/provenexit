@@ -1,7 +1,6 @@
 /**
- * The chain-agnostic registry writer (SPEC §7, SPEC-CHAINS §4): the operations an instance (router or VPN exit)
- * performs on its registry — registration, anchoring and the reads needed to resynchronise anchoring state.
- * Implementations: NEAR (`near.ts`, tier A), EVM / Stellar / Solana (`chains/*.ts`, tier B) and Zcash (`zcash.ts`, tier C). `PLR_CHAIN` selects one (`chains.ts`).
+ * The registry writer (SPEC §7): the operations the VPN exit performs on its registry — registration, anchoring and
+ * the reads needed to resynchronise anchoring state. Implementation: NEAR (`near.ts`); faked in unit tests.
  */
 import { isHex, type TdxEvent } from "@plr/shared";
 
@@ -36,21 +35,10 @@ export interface AnchorView {
 
 /** What the instance needs from its registry chain. Faked in unit tests. */
 export interface RegistryWriter {
-  /** SPEC-CHAINS §3 `contractId`, bound into the registration quote and every anchor signature. */
+  /** The registry contract account id, bound into the registration quote and every anchor signature. */
   readonly contractId: string;
-  /** The account that signs this instance's transactions (its on-chain `operator`, SPEC §7 rev 1.2; SPEC-CHAINS §3). */
+  /** The account that signs this instance's transactions (its on-chain `operator`, SPEC §7 rev 1.2). */
   readonly operatorId: string;
-  /**
-   * True if a refresh should re-submit the registration quote already on record instead of a fresh one (tier C: the
-   * chain only commits `SHA256(quote)` and clients match the quote the instance serves against it, so keeping the
-   * same bytes avoids a window where the served quote and the commitment disagree). Default false.
-   */
-  readonly reuseRegistrationQuote?: boolean;
-  /**
-   * Optional async setup run before every registration attempt (e.g. learning the EVM chain id that `contractId`
-   * contains). Until it has succeeded, `contractId` may throw. A failure is retried like a failed registration.
-   */
-  prepare?(): Promise<void>;
   registerInstance(args: RegisterArgs): Promise<void>;
   /** Returns the chain's return value (the anchor id if the chain returns one). */
   anchorReceipts(args: AnchorArgs): Promise<unknown>;

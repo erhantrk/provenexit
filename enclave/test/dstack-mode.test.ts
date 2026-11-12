@@ -19,11 +19,9 @@ import { CollateralCache } from "../src/attest/collateral-cache.js";
 import { DstackAttester } from "../src/attest/dstack-attester.js";
 import { selfCheckQuote } from "../src/boot.js";
 import { composeBytes, makeVpnCompose, vpnPolicyOf } from "../src/compose.js";
-import { RouterKeys } from "../src/keys.js";
 import { Logger } from "../src/log.js";
 import { NearRegistryWriter } from "../src/near.js";
 import type { RegisterArgs, RegistryWriter, AnchorView, AnchorArgs } from "../src/registry-writer.js";
-import { ReceiptLog } from "../src/receipts.js";
 import { loadExitConfig } from "../src/vpn/config.js";
 import { createExit } from "../src/vpn/exit.js";
 import { VpnKeys } from "../src/vpn/keys.js";
@@ -346,12 +344,12 @@ describe("INTEL registration carries the collateral and selects register_instanc
 
   it("Anchorer.register adds collateral = JSON.stringify(await cache.get(quote)), and only in INTEL mode", async () => {
     const lines: string[] = [];
-    const log = new Logger("plr-router", (l) => lines.push(l));
-    const keys = RouterKeys.generate();
+    const log = new Logger("plr-vpn", (l) => lines.push(l));
+    const keys = VpnKeys.generate();
     const chain = new FakeRegistrationChain();
     const cache = new CollateralCache("https://pccs.example.net", 3_600_000, () => 1_000);
 
-    const intel = new Anchorer({ chain, attester: intelAttester(EVENT_LOG), keys, receipts: new ReceiptLog(), composeBytes: APP_COMPOSE_BYTES, log, collateral: cache });
+    const intel = new Anchorer({ chain, attester: intelAttester(EVENT_LOG), keys, receipts: new VpnReceiptLog(), composeBytes: APP_COMPOSE_BYTES, log, collateral: cache });
     expect(await intel.register()).toBe(true);
     expect(chain.submitted).toHaveLength(1);
     expect(chain.submitted[0]!.collateral).toBe(JSON.stringify(COLLATERAL));
@@ -362,7 +360,7 @@ describe("INTEL registration carries the collateral and selects register_instanc
 
     // MOCK mode (no CollateralCache): the args carry no collateral key at all.
     const mockChain = new FakeRegistrationChain();
-    const mock = new Anchorer({ chain: mockChain, attester: intelAttester(EVENT_LOG), keys, receipts: new ReceiptLog(), composeBytes: APP_COMPOSE_BYTES, log });
+    const mock = new Anchorer({ chain: mockChain, attester: intelAttester(EVENT_LOG), keys, receipts: new VpnReceiptLog(), composeBytes: APP_COMPOSE_BYTES, log });
     expect(await mock.register()).toBe(true);
     expect("collateral" in mockChain.submitted[0]!).toBe(false);
   });
@@ -373,8 +371,8 @@ describe("INTEL registration carries the collateral and selects register_instanc
     const chain = new FakeRegistrationChain();
     const cache = new CollateralCache("https://pccs.example.net");
     const anchorer = new Anchorer({
-      chain, attester: intelAttester(EVENT_LOG), keys: RouterKeys.generate(), receipts: new ReceiptLog(),
-      composeBytes: APP_COMPOSE_BYTES, log: new Logger("plr-router", (l) => lines.push(l)), collateral: cache,
+      chain, attester: intelAttester(EVENT_LOG), keys: VpnKeys.generate(), receipts: new VpnReceiptLog(),
+      composeBytes: APP_COMPOSE_BYTES, log: new Logger("plr-vpn", (l) => lines.push(l)), collateral: cache,
     });
     expect(await anchorer.register()).toBe(false);
     expect(chain.submitted).toHaveLength(0);
@@ -383,7 +381,7 @@ describe("INTEL registration carries the collateral and selects register_instanc
 });
 
 describe("selfCheckQuote in INTEL mode uses the dstack event log (T12 step 4)", () => {
-  const keys = RouterKeys.generate();
+  const keys = VpnKeys.generate();
   /** TV-E2's synthetic dstack log: `key-provider` before the boot sequence, which a MOCK-format log never has. */
   const dstackLog: TdxEvent[] = [
     makeEvent("key-provider", utf8("{}")),

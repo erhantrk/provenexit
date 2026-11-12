@@ -1,17 +1,16 @@
 /**
- * Runtime measurement for the mock TDX host: the executables that see plaintext (node for the router and the
- * mock LLM, llama-server for the real LLM) are pinned in the compose (`router.node_sha256`,
- * `llm.runtime_sha256`) and the host refuses to launch anything else.
+ * Runtime measurement for the mock TDX host: the executable that sees plaintext (node, which runs the VPN exit
+ * bundle) is pinned in the compose (`vpn.node_sha256`) and the host refuses to launch anything else.
  *
- * On macOS both executables are small stubs: the code lives in dylibs (`@rpath/libnode.*.dylib`,
- * `libllama-server-impl.dylib`, ggml, …), and ggml `dlopen`s its CPU/Metal backends from `<keg>/libexec`.
- * Hashing only the stub would pin nothing, so a runtime is measured as its **closure**:
+ * On macOS the node executable can be a small stub: the code lives in dylibs (`@rpath/libnode.*.dylib`, …), and
+ * some runtimes `dlopen` plugins from `<keg>/libexec`. Hashing only the stub would pin nothing, so a runtime is
+ * measured as its **closure**:
  *
  *   - the executable,
  *   - every non-system Mach-O image it links (LC_LOAD_DYLIB / weak / re-export / upward / lazy), transitively,
  *     resolving `@rpath`, `@loader_path` and `@executable_path` the way dyld does,
- *   - every `*.so` / `*.dylib` Mach-O file in `<image dir>/../libexec` of any closure image (dlopen'd plugins,
- *     e.g. ggml backends), and their dependencies.
+ *   - every `*.so` / `*.dylib` Mach-O file in `<image dir>/../libexec` of any closure image (dlopen'd plugins),
+ *     and their dependencies.
  *
  * System images (`/usr/lib/…`, `/System/…`) belong to the OS (the mock OS measurement), not the app.
  *
@@ -22,8 +21,8 @@
  * re-hashed THERE; the copy must reproduce the pinned digest, and the copy is what runs (executable from
  * `<dir>/bin`, libraries found via `DYLD_LIBRARY_PATH=<dir>/lib`, which dyld consults by leaf name before any
  * install path, also for `dlopen`). So no swap between measurement and exec can change the code that runs.
- * Residual (documented MOCK limitation): a NEW plugin file added to a libexec directory after measurement would
- * still be found by ggml's directory scan.
+ * Residual (MOCK limitation): a NEW plugin file added to a libexec directory after measurement would still be found
+ * by a runtime that scans that directory (node does not).
  */
 import { createHash } from "node:crypto";
 import { constants as FS, createReadStream, readdirSync, realpathSync, statSync, type Stats } from "node:fs";

@@ -4,15 +4,14 @@ import net from "node:net";
 import { join, resolve } from "node:path";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { FRAME, MockRoot, MockVerifier, isDebug, registrationNonce, registrationReportData, toHex, verifyEventLog } from "@plr/shared";
-import { EXIT_ENV_ALLOWLIST, HostError, composeServiceOf, exitNodeFlags, launchVpn, measureBoot, measureVpnBoot, routerNodeFlags } from "../src/mock-tdx/host.js";
-import { composeBytes, makeVpnCompose, parseCompose, parseVpnCompose } from "../src/compose.js";
+import { EXIT_ENV_ALLOWLIST, HostError, exitNodeFlags, launchVpn, measureVpnBoot } from "../src/mock-tdx/host.js";
+import { composeBytes, makeVpnCompose, parseVpnCompose } from "../src/compose.js";
 import { startFakeDoh } from "./doh-server.js";
 import { TestTunnel, attestExit, mentionsNumber, startEchoUpstream } from "./vpn-helpers.js";
 
 const DIST = resolve(import.meta.dirname, "..", "dist");
 const INFO = JSON.parse(readFileSync(join(DIST, "build-info.json"), "utf8"));
 const vpnCompose = (v: string) => join(DIST, INFO.vpn[v].compose.file);
-const ROUTER_COMPOSE = join(DIST, "app-compose.mock.json");
 mkdirSync(resolve(import.meta.dirname, "..", ".run"), { recursive: true });
 const tmp = mkdtempSync(join(resolve(import.meta.dirname, "..", ".run"), "v-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -23,9 +22,8 @@ const hostErr = async (p: Promise<unknown>) => {
 };
 
 describe("VPN builds (SPEC-VPN §2)", () => {
-  it("build-info records the three VPN variants under 'vpn'; the router keys are unchanged", () => {
+  it("build-info records the three VPN variants under 'vpn'", () => {
     expect(Object.keys(INFO.vpn).sort()).toEqual(["vpn-evil-logger", "vpn-honest", "vpn-honest-test"]);
-    expect(Object.keys(INFO.variants).sort()).toEqual(["evil-logger", "honest"]);
     for (const [name, v] of Object.entries<any>(INFO.vpn)) {
       const bytes = readFileSync(join(DIST, v.compose.file));
       expect(toHex(sha256(bytes)), name).toBe(v.compose.compose_hash);
@@ -40,14 +38,13 @@ describe("VPN builds (SPEC-VPN §2)", () => {
     expect(INFO.vpn["vpn-evil-logger"].bundle_sha256).not.toBe(INFO.vpn["vpn-honest"].bundle_sha256);
   });
 
-  it("the honest exit bundle contains no evil code and no LLM wiring", () => {
+  it("the honest exit bundle contains no evil code", () => {
     const honest = readFileSync(join(DIST, INFO.vpn["vpn-honest"].bundle), "utf8");
     const evil = readFileSync(join(DIST, INFO.vpn["vpn-evil-logger"].bundle), "utf8");
     expect(evil).toContain("EVIL-VPN-LOGGER");
     expect(honest).not.toMatch(/EVIL|stolen/i);
     expect(honest).not.toMatch(/sourceMappingURL/);
     expect(honest).not.toContain(resolve(import.meta.dirname, ".."));
-    expect(honest).not.toContain("/v1/private/chat");
   });
 });
 
@@ -63,20 +60,19 @@ describe("measurement of a plr-vpn compose", () => {
       expect(toHex(verifyEventLog(q.eventLog, parsed.report.rtmr[3]).composeHash)).toBe(b.composeHash);
       expect(isDebug(parsed.report)).toBe(false);
     }
-    expect(composeServiceOf(vpnCompose("vpn-honest"))).toBe("vpn");
-    expect(composeServiceOf(ROUTER_COMPOSE)).toBe("router");
   });
 
-  it("tampered / evil bundle under the honest compose → E_MEASUREMENT_MISMATCH; wrong service → E_COMPOSE", async () => {
+  it("tampered / evil bundle under the honest compose → E_MEASUREMENT_MISMATCH; foreign entry → E_BUNDLE_ENTRY; not a plr-vpn compose → E_COMPOSE", async () => {
     const d = mkdtempSync(join(tmp, "m-"));
     copyFileSync(vpnCompose("vpn-honest"), join(d, "app-compose.json"));
     copyFileSync(join(DIST, INFO.vpn["vpn-evil-logger"].bundle), join(d, "vpn.bundle.mjs"));
     expect(await hostErr(measureVpnBoot({ composePath: join(d, "app-compose.json"), root }))).toBe("E_MEASUREMENT_MISMATCH");
     writeFileSync(join(d, "vpn.bundle.mjs"), Buffer.concat([readFileSync(join(DIST, INFO.vpn["vpn-honest"].bundle)), Buffer.from("\n")]));
     expect(await hostErr(measureVpnBoot({ composePath: join(d, "app-compose.json"), root }))).toBe("E_MEASUREMENT_MISMATCH");
-    expect(await hostErr(measureVpnBoot({ composePath: join(d, "app-compose.json"), root, bundlePath: join(DIST, "router.bundle.mjs") }))).toBe("E_BUNDLE_ENTRY");
-    expect(await hostErr(measureVpnBoot({ composePath: ROUTER_COMPOSE, root }))).toBe("E_COMPOSE");
-    expect(await hostErr(measureBoot({ composePath: vpnCompose("vpn-honest"), root }))).toBe("E_COMPOSE");
+    copyFileSync(join(DIST, INFO.vpn["vpn-honest"].bundle), join(d, "other.bundle.mjs"));
+    expect(await hostErr(measureVpnBoot({ composePath: join(d, "app-compose.json"), root, bundlePath: join(d, "other.bundle.mjs") }))).toBe("E_BUNDLE_ENTRY");
+    writeFileSync(join(d, "other.json"), JSON.stringify({ manifest_version: 1, name: "plr-router" }, null, 2) + "\n");
+    expect(await hostErr(measureVpnBoot({ composePath: join(d, "other.json"), root }))).toBe("E_COMPOSE");
   });
 
   it("a compose pinning another node → E_MEASUREMENT_MISMATCH", async () => {
@@ -87,10 +83,8 @@ describe("measurement of a plr-vpn compose", () => {
     expect(await hostErr(measureVpnBoot({ composePath: join(d, "app-compose.json"), root }))).toBe("E_MEASUREMENT_MISMATCH");
   });
 
-  it("same isolation flags as the router; env allowlist has no code-injection keys", () => {
+  it("isolation flags (read-only fs, no child processes / addons / eval); env allowlist has no code-injection keys", () => {
     const vc = parseVpnCompose(new Uint8Array(readFileSync(vpnCompose("vpn-honest"))));
-    const rc = parseCompose(new Uint8Array(readFileSync(ROUTER_COMPOSE)));
-    expect(exitNodeFlags(vc, "/p")).toEqual(routerNodeFlags(rc, "/p"));
     expect(exitNodeFlags(vc, "/p")).toEqual(["--permission", "--allow-fs-read=/p", "--disallow-code-generation-from-strings", "--no-addons"]);
     for (const k of EXIT_ENV_ALLOWLIST) expect(k).toMatch(/^PLR_/);
     expect(EXIT_ENV_ALLOWLIST).toContain("PLR_VPN_PORT");

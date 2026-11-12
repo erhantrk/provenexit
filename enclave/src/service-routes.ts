@@ -1,5 +1,5 @@
 /**
- * HTTP routes common to every enclave service (LLM router SPEC §6.2/§6.4/§6.5, VPN exit SPEC-VPN §3):
+ * The exit's common HTTP routes (SPEC §6.2/§6.4/§6.5, SPEC-VPN §3):
  * `GET /v1/attestation`, `GET /v1/receipts/proof`, `GET /healthz`. Content-free errors only.
  */
 import type http from "node:http";
@@ -26,7 +26,7 @@ export interface CommonRoutesOptions {
    */
   collateral?: (quote: Uint8Array) => Promise<CollateralJson>;
   /**
-   * The instance's registration quote once registered (SPEC-CHAINS §4: served as `registration_quote`), else null.
+   * The instance's registration quote once registered (SPEC §6.2: served as `registration_quote`), else null.
    * Called per request; a missing/throwing provider means "not registered".
    */
   registrationQuote?: () => Uint8Array | null;

@@ -1,5 +1,5 @@
 /**
- * NEAR implementation of the registry operations the router performs (SPEC §7): `register_instance`,
+ * NEAR implementation of the registry operations the VPN exit performs (SPEC §7): `register_instance`,
  * `anchor_receipts` and the views needed to resynchronise anchoring state. Every view result is
  * shape-checked; nothing returned by the RPC is trusted blindly.
  */

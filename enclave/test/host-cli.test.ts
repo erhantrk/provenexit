@@ -9,7 +9,7 @@ import { generateRootSecret } from "../src/mock-tdx/host.js";
 
 const ENCLAVE = resolve(import.meta.dirname, "..");
 const CLI = join(ENCLAVE, "dist", "mock-tdx", "cli.js");
-const COMPOSE = join(ENCLAVE, "dist", "app-compose.mock.json");
+const COMPOSE = join(ENCLAVE, "dist", "vpn-exit", "vpn-honest-test", "app-compose.json");
 mkdirSync(join(ENCLAVE, ".run"), { recursive: true });
 const tmp = mkdtempSync(join(ENCLAVE, ".run", "cli-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -21,7 +21,7 @@ describe("plr-tdx-host launch: fail closed without orphans", () => {
     const secret = join(tmp, "root.secret");
     await generateRootSecret(secret);
     const runDir = mkdtempSync(join(tmp, "run-"));
-    const child = spawn(process.execPath, [CLI, "launch", "--compose", COMPOSE, "--run-dir", runDir, "--router-port", "0"], {
+    const child = spawn(process.execPath, [CLI, "launch", "--compose", COMPOSE, "--run-dir", runDir, "--exit-port", "0"], {
       env: { PATH: process.env.PATH ?? "/usr/bin:/bin", PLR_MOCK_ROOT_SECRET_FILE: secret },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -44,7 +44,7 @@ describe("plr-tdx-host launch: fail closed without orphans", () => {
       child.stdout!.destroy();
 
       // Where Unix sockets are not permitted (agent sandbox) the launch fails at the quote socket and must clean up;
-      // elsewhere it comes up — keep it writing for a while (router logs), then stop it like an operator would.
+      // elsewhere it comes up — keep it writing for a while (exit logs), then stop it like an operator would.
       const deadline = Date.now() + 60_000;
       let code: number | null | undefined;
       while (code === undefined && Date.now() < deadline) {

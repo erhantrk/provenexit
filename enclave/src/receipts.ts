@@ -2,10 +2,10 @@
  * Per-instance receipt logs (SPEC §8, SPEC-VPN §5). Only receipt leaf hashes are retained, in memory; sequence
  * numbers are contiguous from 0. Anchored batches are recorded so inclusion proofs can be served (SPEC §6.4).
  *
- * `LeafLog` is receipt-kind agnostic (it is what the `Anchorer` drives); `ReceiptLog` issues LLM router receipts,
- * `VpnReceiptLog` (`vpn/receipts.ts`) issues VPN session receipts.
+ * `LeafLog` is receipt-kind agnostic (it is what the `Anchorer` drives); `VpnReceiptLog` (`vpn/receipts.ts`) issues
+ * the VPN session receipts.
  */
-import { merkleProof, merkleRoot, receiptLeaf, toHex, type Receipt } from "@plr/shared";
+import { merkleProof, merkleRoot, toHex } from "@plr/shared";
 
 export interface AnchoredBatch {
   anchorId: number;
@@ -100,26 +100,5 @@ export class LeafLog {
       }
     }
     return null;
-  }
-}
-
-/** LLM router receipts (SPEC §8). */
-export class ReceiptLog extends LeafLog {
-  /** Allocates the next seq, signs the receipt and retains only its leaf hash. */
-  issue(p: { th: Uint8Array; reqHash: Uint8Array; respHash: Uint8Array; composeHash: Uint8Array; keyHash: Uint8Array; sign: (r: Receipt) => string; nowMs: number }): { receipt: Receipt; sig: string } {
-    return this.append<Receipt>(
-      (seq) => ({
-        v: 1,
-        th: toHex(p.th),
-        req_hash: toHex(p.reqHash),
-        resp_hash: toHex(p.respHash),
-        compose_hash: toHex(p.composeHash),
-        key_hash: toHex(p.keyHash),
-        seq,
-        ts_ms: Math.floor(p.nowMs),
-      }),
-      p.sign,
-      receiptLeaf,
-    );
   }
 }

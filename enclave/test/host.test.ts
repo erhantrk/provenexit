@@ -1,17 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { join, resolve } from "node:path";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { randomBytes } from "@noble/hashes/utils.js";
 import { MockRoot, MockVerifier, isDebug, toHex, verifyEventLog } from "@plr/shared";
-import { HostError, generateRootSecret, launch, loadRootSecret, measureBoot, type HostHandle } from "../src/mock-tdx/host.js";
+import { HostError, generateRootSecret, launchVpn, loadRootSecret, measureVpnBoot, type VpnHostHandle } from "../src/mock-tdx/host.js";
 import { SocketAttester, parseQuoteResponse } from "../src/mock-tdx/attester.js";
-import { attest, chat } from "./helpers.js";
+import { attest } from "./helpers.js";
 
 const DIST = resolve(import.meta.dirname, "..", "dist");
-const COMPOSE = join(DIST, "app-compose.mock.json");
-const EVIL_COMPOSE = join(DIST, "app-compose.evil-logger.mock.json");
+const COMPOSE = join(DIST, "vpn-exit", "vpn-honest-test", "app-compose.json");
+const EVIL_BUNDLE = join(DIST, "vpn-exit", "vpn-evil-logger", "vpn.bundle.mjs");
 // Short base path: Unix socket paths are limited to 104 bytes on macOS (os.tmpdir() can be long).
 mkdirSync(resolve(import.meta.dirname, "..", ".run"), { recursive: true });
 const tmp = mkdtempSync(join(resolve(import.meta.dirname, "..", ".run"), "t-"));
@@ -44,20 +43,20 @@ describe("measurement (SPEC §4): refuses to launch on any mismatch", () => {
   const root = MockRoot.generate();
 
   it("measures the built honest compose; boot event log binds the compose hash", async () => {
-    const b = await measureBoot({ composePath: COMPOSE, root });
+    const b = await measureVpnBoot({ composePath: COMPOSE, root });
     const bytes = readFileSync(COMPOSE);
     expect(b.composeHash).toBe(toHex(sha256(bytes)));
     const q = await b.attester.getQuote(new Uint8Array(64));
     const parsed = new MockVerifier(root.publicKey).verify(q.quote);
     expect(toHex(verifyEventLog(q.eventLog, parsed.report.rtmr[3]).composeHash)).toBe(b.composeHash);
     expect(isDebug(parsed.report)).toBe(false);
-    const b2 = await measureBoot({ composePath: COMPOSE, root });
+    const b2 = await measureVpnBoot({ composePath: COMPOSE, root });
     expect(b2.eventLog[3]!.event).toBe("instance-id");
     expect(b2.eventLog[3]!.event_payload).not.toBe(b.eventLog[3]!.event_payload); // fresh instance-id per boot
   });
 
   it("--debug sets the TD DEBUG attribute", async () => {
-    const b = await measureBoot({ composePath: COMPOSE, root, debug: true });
+    const b = await measureVpnBoot({ composePath: COMPOSE, root, debug: true });
     const q = await b.attester.getQuote(new Uint8Array(64));
     expect(isDebug(new MockVerifier(root.publicKey).verify(q.quote).report)).toBe(true);
   });
@@ -65,31 +64,26 @@ describe("measurement (SPEC §4): refuses to launch on any mismatch", () => {
   it("tampered bundle → E_MEASUREMENT_MISMATCH", async () => {
     const d = mkdtempSync(join(tmp, "m-"));
     copyFileSync(COMPOSE, join(d, "app-compose.json"));
-    writeFileSync(join(d, "router.bundle.mjs"), Buffer.concat([readFileSync(join(DIST, "router.bundle.mjs")), Buffer.from("\n")]));
-    expect(await hostErr(measureBoot({ composePath: join(d, "app-compose.json"), root }))).toBe("E_MEASUREMENT_MISMATCH");
+    writeFileSync(join(d, "vpn.bundle.mjs"), Buffer.concat([readFileSync(join(DIST, "vpn-exit", "vpn-honest-test", "vpn.bundle.mjs")), Buffer.from("\n")]));
+    expect(await hostErr(measureVpnBoot({ composePath: join(d, "app-compose.json"), root }))).toBe("E_MEASUREMENT_MISMATCH");
   });
 
   it("evil bundle under the honest compose → E_MEASUREMENT_MISMATCH", async () => {
     const d = mkdtempSync(join(tmp, "m-"));
     copyFileSync(COMPOSE, join(d, "app-compose.json"));
-    copyFileSync(join(DIST, "evil-logger.bundle.mjs"), join(d, "router.bundle.mjs"));
-    expect(await hostErr(measureBoot({ composePath: join(d, "app-compose.json"), root }))).toBe("E_MEASUREMENT_MISMATCH");
-  });
-
-  it("tampered mock LLM → E_MEASUREMENT_MISMATCH", async () => {
-    const f = join(tmp, "llm.mjs");
-    writeFileSync(f, readFileSync(resolve(import.meta.dirname, "..", "mock-llm", "server.mjs"), "utf8") + "//x\n");
-    expect(await hostErr(measureBoot({ composePath: COMPOSE, root, llmFile: f }))).toBe("E_MEASUREMENT_MISMATCH");
+    copyFileSync(EVIL_BUNDLE, join(d, "vpn.bundle.mjs"));
+    expect(await hostErr(measureVpnBoot({ composePath: join(d, "app-compose.json"), root }))).toBe("E_MEASUREMENT_MISMATCH");
   });
 
   it("non-canonical or malformed compose → E_COMPOSE; foreign entry → E_BUNDLE_ENTRY", async () => {
     const d = mkdtempSync(join(tmp, "m-"));
     const c = JSON.parse(readFileSync(COMPOSE, "utf8"));
     writeFileSync(join(d, "a.json"), JSON.stringify(c));
-    expect(await hostErr(measureBoot({ composePath: join(d, "a.json"), root }))).toBe("E_COMPOSE");
+    expect(await hostErr(measureVpnBoot({ composePath: join(d, "a.json"), root }))).toBe("E_COMPOSE");
     writeFileSync(join(d, "b.json"), readFileSync(COMPOSE, "utf8").replace('"none"', '"all"'));
-    expect(await hostErr(measureBoot({ composePath: join(d, "b.json"), root }))).toBe("E_COMPOSE");
-    expect(await hostErr(measureBoot({ composePath: COMPOSE, root, bundlePath: join(DIST, "evil-logger.bundle.mjs") }))).toBe("E_BUNDLE_ENTRY");
+    expect(await hostErr(measureVpnBoot({ composePath: join(d, "b.json"), root }))).toBe("E_COMPOSE");
+    copyFileSync(EVIL_BUNDLE, join(d, "evil.bundle.mjs"));
+    expect(await hostErr(measureVpnBoot({ composePath: COMPOSE, root, bundlePath: join(d, "evil.bundle.mjs") }))).toBe("E_BUNDLE_ENTRY");
   });
 });
 
@@ -117,10 +111,9 @@ const canSock = await unixSocketsAllowed();
 if (!canSock) console.warn("host.test: Unix sockets are not permitted in this sandbox; live launch tests skipped");
 
 describe.skipIf(!canSock)("launch via the mock TDX host (SPEC §6.1)", () => {
-  const SECRET = "host-secret-" + toHex(randomBytes(8));
   let root: MockRoot;
   let out = "";
-  let h: HostHandle;
+  let h: VpnHostHandle;
   let url = "";
   const runDir = join(tmp, "run");
 
@@ -137,8 +130,8 @@ describe.skipIf(!canSock)("launch via the mock TDX host (SPEC §6.1)", () => {
   beforeAll(async () => {
     root = MockRoot.generate();
     mkdirSync(runDir, { recursive: true });
-    h = await launch({ composePath: COMPOSE, root, runDir, routerPort: 0, output: (s) => { out += s; } });
-    url = (await waitFor(/plr-router: listening url=(\S+)/, () => out))[1]!;
+    h = await launchVpn({ composePath: COMPOSE, root, runDir, exitPort: 0, output: (s) => { out += s; } });
+    url = (await waitFor(/plr-vpn: listening url=(\S+)/, () => out))[1]!;
   });
   afterAll(async () => { await h?.stop(); });
 
@@ -150,47 +143,24 @@ describe.skipIf(!canSock)("launch via the mock TDX host (SPEC §6.1)", () => {
     expect(toHex(parsed.report.reportData)).toBe("07".repeat(64));
   });
 
-  it("the launched router attests and answers; output has no content", async () => {
+  it("the launched exit attests with the measured compose", async () => {
     const v = await attest(url, root.publicKey);
     expect(toHex(v.composeHash)).toBe(h.boot.composeHash);
-    const o = await chat(url, v, { messages: [{ role: "user", content: SECRET }] });
-    expect(o.status).toBe(200);
-    expect(o.content).toMatch(/^mock-answer-/);
-    await new Promise((r) => setTimeout(r, 100));
-    expect(out).not.toContain(SECRET);
-    expect(out).not.toContain(o.content);
   });
 
-  it("stop() terminates the children and removes the private directory", async () => {
+  it("stop() terminates the exit and removes the private directory", async () => {
     const dir = resolve(h.socketPath, "..");
     expect(await h.stop()).toBe(0);
     expect(existsSync(dir)).toBe(false);
-    expect(h.router.exitCode !== null || h.router.signalCode !== null).toBe(true);
-    expect(h.llm.exitCode !== null || h.llm.signalCode !== null).toBe(true);
+    expect(h.exit.exitCode !== null || h.exit.signalCode !== null).toBe(true);
   });
 
-  it("the evil build leaks to stdout but the host's disk policy blocks stolen.log", async () => {
-    let eout = "";
-    const e = await launch({ composePath: EVIL_COMPOSE, root, runDir, routerPort: 0, output: (s) => { eout += s; } });
-    try {
-      const eurl = (await waitFor(/plr-router: listening url=(\S+)/, () => eout))[1]!;
-      const v = await attest(eurl, root.publicKey);
-      expect(toHex(v.composeHash)).not.toBe(h.boot.composeHash);
-      await chat(eurl, v, { messages: [{ role: "user", content: SECRET }] });
-      await waitFor(/EVIL-LOGGER/, () => eout);
-      expect(eout).toContain(SECRET); // this is exactly why clients must refuse unapproved composes
-      expect(readdirSync(runDir)).not.toContain("stolen.log");
-    } finally {
-      await e.stop();
-    }
-  });
-
-  it("refuses to launch a mismatching build (no children started)", async () => {
+  it("refuses to launch a mismatching build (nothing started)", async () => {
     const d = mkdtempSync(join(tmp, "bad-"));
     copyFileSync(COMPOSE, join(d, "app-compose.json"));
-    copyFileSync(join(DIST, "evil-logger.bundle.mjs"), join(d, "router.bundle.mjs"));
+    copyFileSync(EVIL_BUNDLE, join(d, "vpn.bundle.mjs"));
     let o = "";
-    expect(await hostErr(launch({ composePath: join(d, "app-compose.json"), root, runDir, output: (s) => { o += s; } }))).toBe("E_MEASUREMENT_MISMATCH");
+    expect(await hostErr(launchVpn({ composePath: join(d, "app-compose.json"), root, runDir, output: (s) => { o += s; } }))).toBe("E_MEASUREMENT_MISMATCH");
     expect(o).toContain("plr-host: launch_refused code=E_MEASUREMENT_MISMATCH");
   });
 });

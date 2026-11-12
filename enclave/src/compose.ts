@@ -1,7 +1,6 @@
 /**
- * `app-compose.json` (SPEC §4, SPEC-VPN §2, SPEC-COMBO §1): canonical serialisation (used by the build) and strict
- * parsing (used by the mock TDX host, the router and the VPN exit). Three documents share the canonical form and are
- * told apart by `name`: `plr-router` (LLM router), `plr-vpn` (VPN exit) and `plr-combo` (both services in one TD).
+ * `app-compose.json` of the VPN exit (SPEC §4 canonical form, SPEC-VPN §2 schema): canonical serialisation (used by
+ * the build) and strict parsing (used by the mock TDX host and the exit). The document's `name` is `plr-vpn`.
  * Verifiers hash the bytes received; this module never re-serialises something it was given.
  */
 import { readFileSync } from "node:fs";
@@ -9,23 +8,6 @@ import { PlrError, egressAllowed, isHex, isIpLiteral, parseIpv4 } from "@plr/sha
 
 /** Upper bound for a compose document (SPEC §7: app_compose ≤ 8 KiB). */
 export const MAX_COMPOSE_BYTES = 8 * 1024;
-
-export type LlmKind = "llama.cpp" | "mock";
-
-/**
- * SPEC §4 schema plus two runtime pins (spec revision requested, see README "Runtime measurement"):
- * - `llm.runtime_sha256`: runtime closure digest of the program that serves the LLM (llama-server for
- *   `llama.cpp`; node for `mock`, which runs the mock-LLM script) — see `mock-tdx/runtime.ts`;
- * - `router.node_sha256`: runtime closure digest of the node that runs the router bundle.
- * The mock TDX host refuses to launch unless the runtimes it is about to execute match these digests.
- */
-export interface AppCompose {
-  llm: { kind: LlmKind; model_sha256: string; runtime: string; runtime_sha256: string };
-  manifest_version: 1;
-  name: "plr-router";
-  policy: { disk: "none"; egress: []; logs: "none" };
-  router: { bundle_sha256: string; entry: string; node_sha256: string };
-}
 
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 
@@ -44,10 +26,6 @@ export function canonicalJson(obj: Json): string {
   return JSON.stringify(sortKeys(obj), null, 2) + "\n";
 }
 
-/** Entry file names are plain basenames: no directories, no traversal. */
-const ENTRY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.mjs$/;
-const RUNTIME_RE = /^[\x20-\x7e]{1,64}$/;
-
 function exactKeys(o: unknown, keys: readonly string[]): o is Record<string, unknown> {
   if (typeof o !== "object" || o === null || Array.isArray(o)) return false;
   const proto: unknown = Object.getPrototypeOf(o);
@@ -61,56 +39,10 @@ function bad(detail: string): never {
   throw new PlrError("E_BAD_INPUT", `app-compose: ${detail}`);
 }
 
-/** Builds a compose object from its variable parts (validated). */
-export function makeCompose(p: {
-  kind: LlmKind;
-  modelSha256: string;
-  runtime: string;
-  runtimeSha256: string;
-  bundleSha256: string;
-  entry: string;
-  nodeSha256: string;
-}): AppCompose {
-  const c: AppCompose = {
-    llm: { kind: p.kind, model_sha256: p.modelSha256, runtime: p.runtime, runtime_sha256: p.runtimeSha256 },
-    manifest_version: 1,
-    name: "plr-router",
-    policy: { disk: "none", egress: [], logs: "none" },
-    router: { bundle_sha256: p.bundleSha256, entry: p.entry, node_sha256: p.nodeSha256 },
-  };
-  validateCompose(c);
-  return c;
-}
-
-/** Canonical bytes of a compose object (any service; validated against its exact schema). */
-export function composeBytes(c: AppCompose | VpnCompose | ComboCompose): Uint8Array {
-  if (c.name === "plr-vpn") validateVpnCompose(c);
-  else if (c.name === "plr-combo") validateComboCompose(c);
-  else validateCompose(c);
+/** Canonical bytes of a VPN compose object (validated against its exact schema). */
+export function composeBytes(c: VpnCompose): Uint8Array {
+  validateVpnCompose(c);
   return new TextEncoder().encode(canonicalJson(c as unknown as Json));
-}
-
-function validateCompose(c: unknown): asserts c is AppCompose {
-  if (!exactKeys(c, ["llm", "manifest_version", "name", "policy", "router"])) bad("top-level keys");
-  if (c.manifest_version !== 1) bad("manifest_version");
-  if (c.name !== "plr-router") bad("name");
-  const llm = c.llm;
-  if (!exactKeys(llm, ["kind", "model_sha256", "runtime", "runtime_sha256"])) bad("llm keys");
-  if (llm.kind !== "llama.cpp" && llm.kind !== "mock") bad("llm.kind");
-  if (!isHex(llm.model_sha256, 32)) bad("llm.model_sha256");
-  if (typeof llm.runtime !== "string" || !RUNTIME_RE.test(llm.runtime)) bad("llm.runtime");
-  if (!isHex(llm.runtime_sha256, 32)) bad("llm.runtime_sha256");
-  const pol = c.policy;
-  if (!exactKeys(pol, ["disk", "egress", "logs"])) bad("policy keys");
-  if (pol.disk !== "none" || pol.logs !== "none") bad("policy");
-  if (!Array.isArray(pol.egress) || pol.egress.length !== 0) bad("policy.egress");
-  const r = c.router;
-  if (!exactKeys(r, ["bundle_sha256", "entry", "node_sha256"])) bad("router keys");
-  if (!isHex(r.bundle_sha256, 32)) bad("router.bundle_sha256");
-  if (!isHex(r.node_sha256, 32)) bad("router.node_sha256");
-  // A mock LLM is a node script: its runtime is the very node the host runs, so both pins must agree.
-  if (llm.kind === "mock" && llm.runtime_sha256 !== r.node_sha256) bad("llm.runtime_sha256 (mock runs on node)");
-  if (typeof r.entry !== "string" || !ENTRY_RE.test(r.entry)) bad("router.entry");
 }
 
 /** Size-bounded, fatal UTF-8 JSON decode of compose bytes. */
@@ -135,18 +67,6 @@ function requireCanonical(obj: unknown, text: string): void {
   if (canonicalJson(obj as Json) !== text) bad("not canonical");
 }
 
-/**
- * Strictly parses router compose bytes: size-bounded, fatal UTF-8, exact schema, and the bytes MUST already be
- * in canonical form (a non-canonical document is refused rather than silently normalised).
- * @throws PlrError E_BAD_INPUT
- */
-export function parseCompose(bytes: Uint8Array): AppCompose {
-  const { text, obj } = decodeCompose(bytes);
-  validateCompose(obj);
-  requireCanonical(obj, text);
-  return obj;
-}
-
 // ------------------------------------------------------------------------------------------- VPN (SPEC-VPN §2)
 
 /** The only entry file name of a VPN exit bundle (SPEC-VPN §2). */
@@ -164,8 +84,6 @@ export interface VpnCompose {
   };
   vpn: { bundle_sha256: string; entry: typeof VPN_ENTRY; node_sha256: string };
 }
-
-export type ComposeService = "router" | "vpn" | "combo";
 
 /** SPEC-VPN §2: production RFC 8484 resolvers (IP literals: no bootstrap DNS), tried in this order. */
 export const VPN_DOH_PRODUCTION: readonly string[] = Object.freeze(["https://1.1.1.1/dns-query", "https://9.9.9.9/dns-query"]);
@@ -259,8 +177,8 @@ export function makeVpnCompose(p: { bundleSha256: string; nodeSha256: string; al
 }
 
 /**
- * Strictly parses VPN compose bytes (same rules as {@link parseCompose}: bounded, fatal UTF-8, exact schema,
- * canonical). @throws PlrError E_BAD_INPUT
+ * Strictly parses VPN compose bytes: size-bounded, fatal UTF-8, exact schema, and the bytes MUST already be in
+ * canonical form (a non-canonical document is refused rather than silently normalised). @throws PlrError E_BAD_INPUT
  */
 export function parseVpnCompose(bytes: Uint8Array): VpnCompose {
   const { text, obj } = decodeCompose(bytes);
@@ -269,120 +187,9 @@ export function parseVpnCompose(bytes: Uint8Array): VpnCompose {
   return obj;
 }
 
-/**
- * Which service a compose document describes, from its `name` (the discriminator). Only a dispatch hint: the
- * document must still be parsed strictly with {@link parseCompose} / {@link parseVpnCompose} / {@link parseComboCompose}.
- * @throws PlrError E_BAD_INPUT
- */
-export function composeService(bytes: Uint8Array): ComposeService {
-  const { obj } = decodeCompose(bytes);
-  if (typeof obj !== "object" || obj === null || Array.isArray(obj)) bad("not an object");
-  const name = (obj as Record<string, unknown>).name;
-  if (name === "plr-router") return "router";
-  if (name === "plr-vpn") return "vpn";
-  if (name === "plr-combo") return "combo";
-  bad("name");
-}
-
-// ------------------------------------------------------------------------------------------- combo (SPEC-COMBO §1)
-
-/**
- * SPEC-COMBO §1: the LLM router and the VPN exit in one TD, one measurement. Each part carries exactly the fields of
- * its own compose (router: SPEC §4 rev 1.1, vpn: SPEC-VPN §2 rev 2) and is validated by the same rules; both run on
- * one node runtime (`router.node_sha256 == vpn.node_sha256`).
- */
-export interface ComboCompose {
-  manifest_version: 1;
-  name: "plr-combo";
-  router: AppCompose["router"] & { llm: AppCompose["llm"]; policy: AppCompose["policy"] };
-  vpn: VpnCompose["vpn"] & { policy: VpnCompose["policy"] };
-}
-
-/** The `plr-router` document a combo's router part stands for (validation reuses the router rules). */
-function routerPartAsCompose(r: Record<string, unknown>): unknown {
-  return {
-    llm: r.llm,
-    manifest_version: 1,
-    name: "plr-router",
-    policy: r.policy,
-    router: { bundle_sha256: r.bundle_sha256, entry: r.entry, node_sha256: r.node_sha256 },
-  };
-}
-
-/** The `plr-vpn` document a combo's vpn part stands for (validation reuses the VPN rules). */
-function vpnPartAsCompose(v: Record<string, unknown>): unknown {
-  return {
-    manifest_version: 1,
-    name: "plr-vpn",
-    policy: v.policy,
-    vpn: { bundle_sha256: v.bundle_sha256, entry: v.entry, node_sha256: v.node_sha256 },
-  };
-}
-
-function validateComboCompose(c: unknown): asserts c is ComboCompose {
-  if (!exactKeys(c, ["manifest_version", "name", "router", "vpn"])) bad("top-level keys");
-  if (c.manifest_version !== 1) bad("manifest_version");
-  if (c.name !== "plr-combo") bad("name");
-  const r = c.router;
-  if (!exactKeys(r, ["bundle_sha256", "entry", "llm", "node_sha256", "policy"])) bad("router keys");
-  validateCompose(routerPartAsCompose(r));
-  const v = c.vpn;
-  if (!exactKeys(v, ["bundle_sha256", "entry", "node_sha256", "policy"])) bad("vpn keys");
-  validateVpnCompose(vpnPartAsCompose(v));
-  // One runtime for both services (and so for the mock LLM: validateCompose ties it to router.node_sha256).
-  if (r.node_sha256 !== v.node_sha256) bad("router.node_sha256 != vpn.node_sha256");
-  // The two bundles are launched side by side: their entry names must differ.
-  if (r.entry === v.entry) bad("router.entry");
-}
-
-/** Builds a combo compose object from the variable parts of its router and VPN halves (validated). */
-export function makeComboCompose(p: {
-  router: Parameters<typeof makeCompose>[0];
-  vpn: { bundleSha256: string; nodeSha256: string; allowLoopback: boolean; doh?: readonly string[] };
-}): ComboCompose {
-  const rc = makeCompose(p.router);
-  const vc = makeVpnCompose(p.vpn);
-  const c: ComboCompose = {
-    manifest_version: 1,
-    name: "plr-combo",
-    router: { ...rc.router, llm: rc.llm, policy: rc.policy },
-    vpn: { ...vc.vpn, policy: vc.policy },
-  };
-  validateComboCompose(c);
-  return c;
-}
-
-/**
- * Strictly parses combo compose bytes (same rules as {@link parseCompose}: bounded, fatal UTF-8, exact schema,
- * canonical). @throws PlrError E_BAD_INPUT
- */
-export function parseComboCompose(bytes: Uint8Array): ComboCompose {
-  const { text, obj } = decodeCompose(bytes);
-  validateComboCompose(obj);
-  requireCanonical(obj, text);
-  return obj;
-}
-
-/**
- * The LLM kind of the router described by measured compose bytes: a `plr-router` compose or the router part of a
- * `plr-combo` (strict parse either way). @throws PlrError E_BAD_INPUT for anything else (e.g. a `plr-vpn` compose)
- */
-export function routerLlmKindOf(bytes: Uint8Array): LlmKind {
-  const service = composeService(bytes);
-  if (service === "router") return parseCompose(bytes).llm.kind;
-  if (service === "combo") return parseComboCompose(bytes).router.llm.kind;
-  bad("not a router compose");
-}
-
-/**
- * The VPN policy described by measured compose bytes: a `plr-vpn` compose or the vpn part of a `plr-combo` (strict
- * parse either way). @throws PlrError E_BAD_INPUT for anything else (e.g. a `plr-router` compose)
- */
+/** The VPN policy described by measured compose bytes (strict parse). @throws PlrError E_BAD_INPUT */
 export function vpnPolicyOf(bytes: Uint8Array): VpnCompose["policy"] {
-  const service = composeService(bytes);
-  if (service === "vpn") return parseVpnCompose(bytes).policy;
-  if (service === "combo") return parseComboCompose(bytes).vpn.policy;
-  bad("not a VPN compose");
+  return parseVpnCompose(bytes).policy;
 }
 
 /** Reads a compose file once (bounded). */

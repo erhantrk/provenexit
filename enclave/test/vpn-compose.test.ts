@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  MAX_DOH_RESOLVERS, VPN_DOH_PRODUCTION, VPN_DOH_TEST, VPN_ENTRY, canonicalJson, composeBytes, composeService, dohUrlProblem, makeCompose,
-  makeVpnCompose, parseCompose, parseVpnCompose,
+  MAX_DOH_RESOLVERS, VPN_DOH_PRODUCTION, VPN_DOH_TEST, VPN_ENTRY, canonicalJson, composeBytes, dohUrlProblem, makeVpnCompose, parseVpnCompose,
+  vpnPolicyOf,
 } from "../src/compose.js";
 import { loadExitConfig } from "../src/vpn/config.js";
 
@@ -20,7 +20,6 @@ describe("VPN compose (SPEC-VPN §2)", () => {
         `  "vpn": {\n    "bundle_sha256": "${"aa".repeat(32)}",\n    "entry": "vpn.bundle.mjs",\n    "node_sha256": "${"bb".repeat(32)}"\n  }\n}\n`,
     );
     expect(parseVpnCompose(b)).toEqual(base());
-    expect(composeService(b)).toBe("vpn");
     expect(VPN_ENTRY).toBe("vpn.bundle.mjs");
   });
 
@@ -122,15 +121,12 @@ describe("VPN compose (SPEC-VPN §2)", () => {
     expect(() => makeVpnCompose({ bundleSha256: "zz", nodeSha256: "bb".repeat(32), allowLoopback: false })).toThrow();
   });
 
-  it("the services are disjoint: each parser refuses the other's compose; the router compose is unchanged", () => {
-    const router = composeBytes(makeCompose({ kind: "mock", modelSha256: "11".repeat(32), runtime: "node", runtimeSha256: "33".repeat(32), bundleSha256: "22".repeat(32), entry: "router.bundle.mjs", nodeSha256: "33".repeat(32) }));
-    const vpn = composeBytes(base());
-    expect(composeService(router)).toBe("router");
-    expect(code(() => parseCompose(vpn))).toBe("E_BAD_INPUT");
+  it("a compose of another service (or no service) is refused", () => {
+    const router = enc(canonicalJson({ manifest_version: 1, name: "plr-router", policy: { disk: "none", egress: [], logs: "none" } } as never));
     expect(code(() => parseVpnCompose(router))).toBe("E_BAD_INPUT");
-    expect(parseCompose(router).name).toBe("plr-router");
-    expect(code(() => composeService(enc('{"name":"other"}')))).toBe("E_BAD_INPUT");
-    expect(code(() => composeService(enc("[]")))).toBe("E_BAD_INPUT");
+    expect(code(() => vpnPolicyOf(router))).toBe("E_BAD_INPUT");
+    expect(code(() => parseVpnCompose(enc('{"name":"other"}')))).toBe("E_BAD_INPUT");
+    expect(code(() => parseVpnCompose(enc("[]")))).toBe("E_BAD_INPUT");
   });
 });
 
@@ -160,6 +156,14 @@ describe("exit config (env from the host)", () => {
     expect(loadExitConfig({ ...env, ...near, PLR_REGISTRY: "registry.test.near", PLR_VPN_REGISTRY: "vpnregistry.test.near" }).near?.contractId).toBe("vpnregistry.test.near");
     const partial = loadExitConfig({ ...env, PLR_NEAR_RPC: "http://127.0.0.1:3030", PLR_VPN_REGISTRY: "vpnregistry.test.near" });
     expect([partial.near, partial.nearConfigError]).toEqual([null, true]);
+  });
+  it("PLR_CHAIN: only near (the default) registers; any other value disables registration (fail closed)", () => {
+    const near = { PLR_NEAR_RPC: "http://127.0.0.1:3030", PLR_OPERATOR_ID: "op.test.near", PLR_OPERATOR_KEY: "ed25519:" + "1".repeat(64), PLR_VPN_REGISTRY: "vpnregistry.test.near" };
+    expect(loadExitConfig({ ...env, ...near, PLR_CHAIN: "near" }).registry?.chain).toBe("near");
+    for (const chain of ["evm", "zcash", "NEAR"]) {
+      const c = loadExitConfig({ ...env, ...near, PLR_CHAIN: chain });
+      expect([c.registry, c.near, c.nearConfigError], chain).toEqual([null, null, true]);
+    }
   });
   it("rev 1.3: no reserved-nonce configuration is left (session quotes are domain-separated instead)", () => {
     const c = loadExitConfig({ ...env, PLR_REGISTRY: "registry.test.near", PLR_VPN_REGISTRY: "vpnregistry.test.near" });

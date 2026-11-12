@@ -1,4 +1,4 @@
-/** Boot helpers shared by the LLM router (`main.ts`) and the VPN exit (`vpn/main.ts`). */
+/** Boot helpers of the VPN exit (`vpn/main.ts`): the quote self-check and the process guards. */
 import { randomBytes } from "@noble/hashes/utils.js";
 import { equalBytes, parseQuote, verifyEventLog, verifyEventLogDstack, type Attester, type RootKind } from "@plr/shared";
 import type { EnclaveKeys } from "./keys.js";

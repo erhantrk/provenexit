@@ -1,11 +1,11 @@
 /**
  * Per-boot key pairs of an enclave service (SPEC §5): X25519 `(xs, xp)` + Ed25519 `(es, ep)`, generated in memory
  * at boot. The secret halves never leave these objects (private fields, no getters); they are only used through
- * the operations below. `RouterKeys` (LLM router) and `VpnKeys` (VPN exit, `vpn/keys.ts`) add their protocol's
- * operations on top of the common base.
+ * the operations below. `VpnKeys` (VPN exit, `vpn/keys.ts`) adds the tunnel and receipt operations on top of this
+ * base.
  */
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
-import { keyHash, registrationReportData, reportData, serverOpen, signReceipt, type Receipt } from "@plr/shared";
+import { keyHash, registrationReportData, reportData } from "@plr/shared";
 
 export class EnclaveKeys {
   readonly #xs: Uint8Array;
@@ -58,20 +58,5 @@ export class EnclaveKeys {
   /** Runs `fn` with the Ed25519 secret (subclasses' protocol operations only). */
   protected withEd25519Secret<T>(fn: (es: Uint8Array) => T): T {
     return fn(this.#es);
-  }
-}
-
-export class RouterKeys extends EnclaveKeys {
-  static generate(): RouterKeys {
-    return new RouterKeys(...EnclaveKeys.freshSecrets());
-  }
-
-  /** Decrypts a request envelope (SPEC §6.3). @throws PlrError E_DECRYPT */
-  open(p: { attNonce: Uint8Array; epk: Uint8Array; ct: Uint8Array }): { plaintext: Uint8Array; th: Uint8Array; kS2c: Uint8Array } {
-    return this.withX25519Secret((xs) => serverOpen({ xs, xp: this.x25519, ep: this.ed25519, attNonce: p.attNonce, epk: p.epk, ct: p.ct }));
-  }
-
-  signReceipt(r: Receipt): string {
-    return this.withEd25519Secret((es) => signReceipt(r, es));
   }
 }

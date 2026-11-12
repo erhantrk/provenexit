@@ -4,7 +4,7 @@ import { randomBytes as nodeRandomBytes } from "node:crypto";
 import { FRAME, QUOTE, TUNNEL, fromHex, parseConnectErr, parseReceiptPayload, registrationNonce, registrationReportData, reportData, toHex, u32be, verifyVpnReceipt, vpnReceiptLeaf, merkleRoot, type EgressPolicy } from "@plr/shared";
 import { ManualTimers, TestTunnel, attestExit, deadPort, eventually, mentionsNumber, handshake, startEchoUpstream, startTestExit, upgrade, type TestExit } from "./vpn-helpers.js";
 import type { LookupAll } from "../src/vpn/egress.js";
-import { composeBytes as composeBytesOf, makeComboCompose } from "../src/compose.js";
+import { composeBytes as composeBytesOf, makeVpnCompose } from "../src/compose.js";
 
 type Up = Awaited<ReturnType<typeof startEchoUpstream>>;
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -67,16 +67,13 @@ describe("exit HTTP API (SPEC-VPN §3)", () => {
     expect((await fetch(`${e.url}/v1/attestation?nonce=${toHex(randomBytes(32)).toUpperCase()}`)).status).toBe(400);
   });
 
-  it("serves a plr-combo compose (SPEC-COMBO): attests the combo bytes, enforces the combo's VPN policy", async () => {
-    const combo = composeBytesOf(makeComboCompose({
-      router: { kind: "mock", modelSha256: "11".repeat(32), runtime: "node-mock-llm", runtimeSha256: "33".repeat(32), bundleSha256: "22".repeat(32), entry: "router.bundle.mjs", nodeSha256: "33".repeat(32) },
-      vpn: { bundleSha256: "44".repeat(32), nodeSha256: "33".repeat(32), allowLoopback: false },
-    }));
-    const e = await exitWith({ composeBytes: combo });
+  it("serves the measured compose bytes it was given and enforces their policy (production: no loopback)", async () => {
+    const prod = composeBytesOf(makeVpnCompose({ bundleSha256: "44".repeat(32), nodeSha256: "33".repeat(32), allowLoopback: false }));
+    const e = await exitWith({ composeBytes: prod });
     const v = await attestExit(e.url, e.root.publicKey);
-    expect(v.bundle.app_compose).toBe(new TextDecoder().decode(combo));
-    expect(JSON.parse(v.bundle.app_compose).name).toBe("plr-combo");
-    // Production policy of the combo: the router / LLM on loopback are unreachable from the exit.
+    expect(v.bundle.app_compose).toBe(new TextDecoder().decode(prod));
+    expect(JSON.parse(v.bundle.app_compose).name).toBe("plr-vpn");
+    // Production policy: services on the exit's loopback are unreachable from the exit.
     expect(await connectOutcome(e, "127.0.0.1", up.port)).toBe("E_EGRESS_DENIED");
   });
 
