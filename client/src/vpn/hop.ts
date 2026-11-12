@@ -6,6 +6,7 @@
  * Fail closed: every failure that says something about the exit (anything except a CONNECT_ERR answer or a
  * bad destination) drops the cached attestation, so the next connection re-attests.
  */
+import type { CollateralSource } from "../pccs.js";
 import {
   DcapQvlVerifier,
   MockVerifier,
@@ -101,7 +102,7 @@ export interface ExitHopOptions {
   createConnection?: Dialer;
   timeouts: VpnClientTimeouts;
   clock: () => number;
-  /** `PLR_PCCS_URL`: fetch fresh Intel collateral from this PCCS instead of using the exit's copy (INTEL mode). */
+  /** `PLR_PCCS_URL` (INTEL mode): the PCCS the client fetches fresh collateral from; unset = `DEFAULT_PCCS_URL`, `"exit"` = use the exit's copy. */
   pccsUrl?: string;
 }
 
@@ -141,6 +142,11 @@ export class ExitHop {
       clock: o.clock,
       ...(o.pccsUrl !== undefined ? { pccsUrl: o.pccsUrl } : {}),
     });
+  }
+
+  /** Where an INTEL verification takes its collateral from (undefined in MOCK mode). */
+  get collateral(): CollateralSource | undefined {
+    return this.#attestation.collateral;
   }
 
   /** Fresh attestation (new nonce, SPEC §9 checks 1–10). @throws PlrError */

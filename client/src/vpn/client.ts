@@ -9,6 +9,7 @@
  * frame. Its only own lookups (the exit URL host) go through `o.lookup` when given. Errors are `PlrError`s with
  * a code only — never a destination, address, port or payload.
  */
+import type { CollateralSource } from "../pccs.js";
 import {
   encodeConnect,
   isVpnReceipt,
@@ -44,7 +45,7 @@ export interface VpnClientOptions {
   timeouts?: Partial<VpnClientTimeouts>;
   /** Monotonic clock in ms for the attestation cache (default `performance.now`). Tests only. */
   clock?: () => number;
-  /** `PLR_PCCS_URL`: fetch fresh Intel collateral from this PCCS instead of using the exit's copy (INTEL mode). */
+  /** `PLR_PCCS_URL` (INTEL mode): the PCCS the client fetches fresh collateral from; unset = `DEFAULT_PCCS_URL`, `"exit"` = use the exit's copy. */
   pccsUrl?: string;
 }
 
@@ -88,6 +89,11 @@ export class VpnClient {
   /** Root kind of the configured verifier ("MOCK" | "INTEL"). */
   get rootKind(): QuoteVerifier["rootKind"] {
     return this.#hop.verifier.rootKind;
+  }
+
+  /** Where an INTEL verification takes its collateral from: the client's PCCS (default) or the exit; undefined in MOCK mode. */
+  get collateral(): CollateralSource | undefined {
+    return this.#hop.collateral;
   }
 
   /** Fetches and verifies a fresh attestation (new random nonce, SPEC §9 against the VPN registry). @throws PlrError */

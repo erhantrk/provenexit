@@ -4,7 +4,7 @@
  */
 import { toHex, type VerifiedRouter } from "@plr/shared";
 import { recheckRegistry, type AttestationSession } from "./attestation.js";
-import { TracingRegistry, checkLines, type CheckLine, type CodeHashState } from "./verify-report.js";
+import { TracingRegistry, checkLines, type CheckLine, type CodeHashState, type CollateralMode } from "./verify-report.js";
 import type { VpnClient } from "./vpn/client.js";
 import { isPlrError } from "@plr/shared";
 
@@ -16,6 +16,8 @@ export interface VerifyCheck {
   ok: boolean;
   /** "" when ok; the error code of the failing check; "not checked" for checks after the failing one. */
   detail: string;
+  /** Why a check was not run when the reason is not an earlier failure (collateral taken from the exit or a recording). */
+  note?: string;
 }
 
 export interface VerifyReport {
@@ -32,20 +34,25 @@ export interface VerifyReport {
 
 const errCode = (e: unknown): string => (isPlrError(e) ? e.code : e instanceof Error ? e.message : "error");
 
-const fromLine = (l: CheckLine): VerifyCheck => ({
+export const fromLine = (l: CheckLine): VerifyCheck => ({
   name: l.name,
   ok: l.status === "pass",
   detail: l.status === "pass" ? "" : l.status === "fail" ? (l.code ?? "error") : "not checked",
+  ...(l.note !== undefined ? { note: l.note } : {}),
 });
 
 /**
  * Runs exactly what `plr vpn verify` runs (attest, registry re-check) and returns the ordered check list
- * (INTEL: 16 lines, 17 with the registry code-hash line of a pinned registry, + re-check + remote DNS). Never throws.
+ * (INTEL: 17 lines, 18 with the registry code-hash line of a pinned registry, + re-check + remote DNS). Never throws.
  */
 export async function verifyVpnReport(client: VpnClient, registry: TracingRegistry): Promise<VerifyReport> {
   const root = client.rootKind;
   const intel = root === "INTEL";
-  const opts = (): { intel: boolean; codeHash: CodeHashState } => ({ intel, codeHash: registry.codeHashState });
+  const opts = (): { intel: boolean; collateral: CollateralMode; codeHash: CodeHashState } => ({
+    intel,
+    collateral: client.collateral?.source ?? "pccs",
+    codeHash: registry.codeHashState,
+  });
   const refused = (e: unknown, lines: CheckLine[], recheck: "skip" | "fail"): VerifyReport => {
     const code = errCode(e);
     const checks = lines.map(fromLine);
