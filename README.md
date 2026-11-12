@@ -191,9 +191,10 @@ A keyless NEAR contract on testnet ([`vpnreg.pe-owner-erhan.testnet`](https://te
   [`G24JXkyL…`](https://testnet.nearblocks.io/txns/G24JXkyLJZQjV8FFHeG9x5ZGy9mNVgwKtSi8p8xEZHL1), the live exit's first 13/13 registration
   [`HSQqnRMu…`](https://testnet.nearblocks.io/txns/HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8) (188.08 Tgas). The client no longer uses it.
   - Allowlists for the **spike** (not an exit) compose `b9823a79…d05f` and OS measurement `821d442f…d323d`. They are
-  allowed on the INTEL registry **only to demonstrate checks 1–12**; the client refuses that compose with
-  `E_COMPOSE_POLICY` (no `exit` service, unpinned image), but the registry itself would list a registration under it,
-  so the owner should `revoke_compose b9823a79…` once the demo video is recorded (not done here): txs
+  allowed on that registry **only to demonstrate checks 1–12** (the client refuses that compose with `E_COMPOSE_POLICY`:
+  no `exit` service, unpinned image). The compose was revoked there on 2026-11-12
+  ([`3DmY4Rqr…`](https://testnet.nearblocks.io/txns/3DmY4RqrDAVknLov5pDYMgAQvjmMpM354eeGZdWifh7n)); it was never allowed
+  on the live registry. Allow txs
   [`EmWz2Uawni6PicfCqrG8YwkZeZwgkyQMTCbGACQwq6sM`](https://testnet.nearblocks.io/txns/EmWz2Uawni6PicfCqrG8YwkZeZwgkyQMTCbGACQwq6sM)
   and [`E3to6jCjasF37vLqRtsFKLsehLpXL2J1xK7PNFbHnwbX`](https://testnet.nearblocks.io/txns/E3to6jCjasF37vLqRtsFKLsehLpXL2J1xK7PNFbHnwbX).
   - Revocation works on testnet: `revoke_compose b9823a79…` tx

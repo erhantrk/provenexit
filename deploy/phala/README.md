@@ -177,9 +177,9 @@ compose on chain.
 
 **Known exception (disclosed):** that compose hash (`b9823a79…d05f`) *is* allowlisted on the INTEL testnet registry,
 only so checks 1–12 could be shown on the real quote (README "NEAR's role"). The client still refuses it with
-`E_COMPOSE_POLICY`, but the registry would accept a registration under it. Revoke it
-(`scripts/owner.sh revoke_compose '{"hash":"b9823a79…d05f"}'`, full hash from `fixtures/phala-spike`) after the demo
-video is recorded; this has not been done.
+`E_COMPOSE_POLICY`. It was revoked on that retired registry on 2026-11-12 (tx
+`3DmY4RqrDAVknLov5pDYMgAQvjmMpM354eeGZdWifh7n`) and was never allowed on the live registry
+`vpnreg.pe-owner-erhan.testnet`.
 
 ## `scripts/owner.sh`
 
