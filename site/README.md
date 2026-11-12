@@ -28,7 +28,7 @@ Sample states, on localhost only:
 | `assets/state.js` | `deriveState()`, stage grouping, allowlist status, formatters; pure |
 | `assets/app.js` | fetch, 15 s poll, render, copy buttons, the lighting sequence |
 | `assets/styles.css` | tokens and layout; one violet brand accent (`--accent`, #5034E6) for labels, links, lines, icons and grounds; green and red only in the last block, under the page state |
-| `assets/motion.js`, `assets/motion-flag.js` | reveals, count-ups, the hero flow, the route steps, the history line; transform and opacity only; off under `prefers-reduced-motion` |
+| `assets/motion.js`, `assets/motion-flag.js` | scroll-linked (scrubbed by scroll position, nothing on a timer): reveals, the hero flow, the route steps, the history line; transform and opacity only; off under `prefers-reduced-motion` |
 | `assets/config.js` | `demoVideoUrl`; the video link shows only when it is set |
 | `api/status.mjs` | `getStatus()` from `api/_lib/provenexit-status.mjs`, cached 30 s; answers within 55 s (`api/_lib/deadline.mjs`) |
 | `api/ip.mjs` | the caller's address from the request headers, never cached |

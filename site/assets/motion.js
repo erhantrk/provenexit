@@ -1,113 +1,69 @@
-// Motion for the page: section reveals, count-ups, the hero flow, the route steps and the history line.
-// Every movement is transform or opacity, driven by requestAnimationFrame, so nothing shifts the layout.
-// With prefers-reduced-motion none of it runs: motion-flag.js leaves the
-// "motion" class off and every element keeps its final, static state.
+// Motion for the page, scrubbed by scroll position: section reveals, the hero flow, the route steps and
+// the history line. Nothing plays on a clock. One requestAnimationFrame-throttled scroll/resize handler
+// measures each element (getBoundingClientRect), turns its scroll position into a progress 0..1 and
+// writes it as a CSS custom property (--p, --draw) or a class; CSS turns that into transform and
+// opacity, so nothing shifts the layout. Scrolling back reverses every effect.
+// With prefers-reduced-motion none of it runs: motion-flag.js leaves the "motion" class off and every
+// element keeps its final, static state.
 
 const root = document.documentElement;
 const reduced = matchMedia("(prefers-reduced-motion: reduce)");
 const on = () => root.classList.contains("motion") && !reduced.matches;
-const outCubic = (t) => 1 - (1 - t) ** 3;
-const inOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+const clamp = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 
-/** The next frame, or 34 ms, whichever comes first (frames can stall in background or headless tabs). */
-function frame(cb) {
-  let fired = false;
-  const go = () => { if (!fired) { fired = true; cb(performance.now()); } };
-  requestAnimationFrame(go);
-  setTimeout(go, 34);
+/**
+ * Scroll progress 0..1 between two moments: when the point at fraction `fromAt` of `from` meets the
+ * viewport line `fromVp` (0 top, 1 bottom), and when the point `toAt` of `to` meets the line `toVp`.
+ * Both moments are clamped to the scroll range, so an effect at the end of the page still completes.
+ * With startAtTop the first moment is never before the top of the page: at load it reads 0.
+ */
+function progress(from, fromAt, fromVp, to, toAt, toVp, startAtTop = false) {
+  const a = from.getBoundingClientRect();
+  const b = to === from ? a : to.getBoundingClientRect();
+  if (a.height === 0 && a.width === 0) return 1;
+  const y = scrollY;
+  const vh = innerHeight;
+  const max = Math.max(0, root.scrollHeight - vh);
+  let s0 = a.top + y + a.height * fromAt - vh * fromVp;
+  let s1 = b.top + y + b.height * toAt - vh * toVp;
+  s1 = Math.min(s1, max);
+  if (startAtTop) s0 = Math.max(0, s0);
+  s0 = Math.min(s0, s1);
+  if (s1 - s0 < 24) return y >= s1 ? 1 : 0; // no scroll room: the end state
+  return clamp((y - s0) / (s1 - s0));
 }
 
-/** Calls fn(progress 0..1) on each frame for ms milliseconds, then done(). */
-function tween(ms, fn, done, ease = outCubic) {
-  const t0 = performance.now();
-  const step = (t) => {
-    const p = Math.min(1, Math.max(0, (t - t0) / ms));
-    fn(ease(p));
-    if (p < 1) frame(step);
-    else done?.();
-  };
-  frame(step);
-}
-
-// In-view checks run on scroll and resize (at most every 50 ms), not through IntersectionObserver, so they
-// behave the same in every browser and in headless captures.
-const waiting = new Set(); // { el, fn, ratio }
-const inView = (el, ratio = 0.15) => {
-  const r = el.getBoundingClientRect();
-  if (r.width === 0 && r.height === 0) return false;
-  const h = innerHeight;
-  const seen = Math.min(r.bottom, h * 0.94) - Math.max(r.top, 0);
-  return seen > 0 && seen >= Math.min(r.height, h) * ratio;
-};
+const parts = []; // functions that read positions and write progress
 let queued = false;
-function check() {
+function update() {
   queued = false;
-  for (const w of [...waiting]) {
-    if (inView(w.el, w.ratio)) { waiting.delete(w); w.fn(); }
-  }
-  for (const f of watchers) f();
+  for (const f of parts) f();
 }
 function queue() {
-  if (!queued) { queued = true; setTimeout(check, 50); }
-}
-const watchers = new Set();
-addEventListener("scroll", queue, { passive: true });
-addEventListener("resize", queue);
-
-/** Calls fn once, the first time el is in view. */
-function once(el, fn, ratio = 0.15) {
-  waiting.add({ el, fn, ratio });
-  queue();
+  if (!queued) { queued = true; requestAnimationFrame(update); }
 }
 
 // ---- reveals ----------------------------------------------------------------------------------
-function rise(el, delay = 0) {
-  el.style.opacity = "0";
-  el.style.transform = "translateY(18px)";
-  el.classList.add("in");
-  setTimeout(() => tween(650, (p) => {
-    el.style.opacity = String(p);
-    el.style.transform = `translateY(${(1 - p) * 18}px)`;
-  }, () => { el.style.removeProperty("opacity"); el.style.removeProperty("transform"); }), delay);
+// Each revealed element fades and rises as its top moves from the bottom edge to 85% of the viewport.
+function revealTargets() {
+  const out = [];
+  for (const el of document.querySelectorAll(".reveal")) out.push(el);
+  for (const el of document.querySelectorAll(".stagger")) {
+    out.push(...el.querySelectorAll(":scope > :not(.cards):not(.rows), :scope > .cards > *, :scope > .rows > *"));
+  }
+  return out;
 }
-
-function reveal(el) {
-  if (el.classList.contains("stagger")) {
-    el.classList.add("in");
-    [...el.querySelectorAll(":scope > :not(.cards):not(.rows), :scope > .cards > *, :scope > .rows > *")]
-      .filter((k) => k.offsetParent !== null)
-      .slice(0, 12)
-      .forEach((k, i) => rise(k, i * 70));
-  } else {
-    rise(el);
+function reveals() {
+  for (const el of revealTargets()) {
+    if (el.offsetParent === null) continue;
+    el.style.setProperty("--p", progress(el, 0, 1, el, 0, 0.85).toFixed(3));
   }
 }
 
-// ---- count-ups --------------------------------------------------------------------------------
-const counted = new Set();
-const watched = new WeakSet();
-function countUp(el) {
-  const key = el.dataset.countKey ?? el.textContent;
-  if (counted.has(key)) return;
-  counted.add(key);
-  const final = el.textContent;
-  const target = Number(el.dataset.count);
-  if (!Number.isFinite(target)) return;
-  const decimals = (el.dataset.count.split(".")[1] ?? "").length;
-  const suffix = el.dataset.countSuffix ?? "";
-  // Hold the final width so the digits can change without moving anything around them.
-  el.style.minWidth = `${el.getBoundingClientRect().width}px`;
-  el.classList.add("counting");
-  tween(1100, (p) => { el.textContent = (target * p).toFixed(decimals) + suffix; }, () => {
-    el.textContent = final;
-    el.classList.remove("counting");
-    el.style.removeProperty("min-width");
-  });
-}
-
 // ---- hero flow: a packet passes three checks, then the tunnel opens ---------------------------
-// An illustration of the order of the checks. When the current response is a refusal, app.js calls
-// setFlowStop(gate) and the packet stops at that gate instead, so the picture never contradicts the plate.
+// An illustration of the order of the checks, drawn by how far the flow card has scrolled. When the
+// current response is a refusal, app.js calls setFlowStop(gate) and the packet stops at that gate,
+// so the picture never contradicts the plate.
 const FLOW_SAY = [
   "Your client asks the exit for a fresh Intel quote.",
   "Check 1: Intel's signature on the quote, debug off.",
@@ -125,7 +81,7 @@ export function setFlowStop(gate) {
   const g = gate === 1 || gate === 2 || gate === 3 ? gate : null;
   if (g === flow.stop) return;
   flow.stop = g;
-  flow.apply?.(true);
+  flow.apply?.();
 }
 
 function heroFlow(animated) {
@@ -138,18 +94,15 @@ function heroFlow(animated) {
   const gates = [...fig.querySelectorAll(".flow-gate")];
   const end = fig.querySelector(".flow-end-b");
   fig.dataset.js = "1";
-  let at = 0;
-  let timer = 0;
-  let visible = false;
-  let running = false;
-  let gen = 0;
 
-  const last = () => flow.stop ?? 4;
-  const place = (x) => {
+  /** x: the packet's place along the track, 0.1 (your machine) to 0.9 (the exit). */
+  const draw = (x, scrubbed) => {
+    const last = STOPS[flow.stop ?? 4];
+    x = Math.min(x, last);
+    const step = STOPS.filter((s) => x >= s - 0.001).length - 1; // gates passed, 4 = tunnel open
+    fig.style.setProperty("--p", ((x - 0.1) / 0.8).toFixed(3));
     packet.style.transform = `translateX(${x * track.clientWidth}px)`;
     fill.style.transform = `scaleX(${(x - 0.1) / 0.8})`;
-  };
-  const show = (step) => {
     gates.forEach((g, i) => {
       const n = i + 1;
       g.classList.toggle("pass", n <= step && n !== flow.stop);
@@ -157,158 +110,70 @@ function heroFlow(animated) {
     });
     end.classList.toggle("open", step === 4);
     fig.classList.toggle("tunnel", step === 4);
-    say.textContent = flow.stop !== null && step === flow.stop ? FLOW_STOPPED : animated ? FLOW_SAY[step] : FLOW_STATIC;
+    const text = flow.stop !== null && step === flow.stop ? FLOW_STOPPED : scrubbed ? FLOW_SAY[step] : FLOW_STATIC;
+    if (say.textContent !== text) say.textContent = text;
   };
-  const still = () => {
-    // Reduced motion: the end state, drawn once.
-    at = last();
-    place(STOPS[at]);
-    show(at);
-    if (flow.stop === null) say.textContent = FLOW_STATIC;
-  };
+
   if (!animated) {
-    flow.apply = still;
-    still();
+    // Reduced motion: the end state, drawn once (and again when the verdict changes).
+    flow.apply = () => draw(0.9, false);
+    flow.apply();
     return;
   }
-
-  // Two plays, then it rests in the end state (WCAG 2.2.2). The button pauses it at any time and
-  // plays it again from the start.
-  const PLAYS = 2;
-  const HOLD = 1400;
-  const btn = document.getElementById("flow-toggle");
-  let plays = 0;
-  let resting = false;
-  const label = () => { if (btn) btn.textContent = resting ? "Play again" : "Pause"; };
-  const rest = () => {
-    clearTimeout(timer);
-    gen += 1;
-    resting = true;
-    running = false;
-    delete fig.dataset.reset;
-    fig.classList.add("rest");
-    still();
-    label();
-  };
-  const next = (g) => {
-    if (g !== gen) return;
-    if (!visible || document.visibilityState !== "visible") { running = false; return; }
-    running = true;
-    if (at >= last()) {
-      plays += 1;
-      if (plays >= PLAYS) { timer = setTimeout(() => { if (g === gen) rest(); }, 1800); return; }
-      timer = setTimeout(() => {
-        fig.dataset.reset = "1";
-        at = 0;
-        place(STOPS[0]);
-        show(0);
-        timer = setTimeout(() => { delete fig.dataset.reset; next(g); }, 900);
-      }, flow.stop === null ? 3200 : 3600);
-      return;
-    }
-    const from = STOPS[at];
-    at += 1;
-    const ms = at === 4 ? 900 : 650;
-    tween(ms, (p) => place(from + (STOPS[at] - from) * p), null, inOut);
-    timer = setTimeout(() => { show(at); timer = setTimeout(() => next(g), at === 4 ? 0 : HOLD); }, ms);
-  };
-  const restart = () => {
-    clearTimeout(timer);
-    gen += 1;
-    plays = 0;
-    resting = false;
-    fig.classList.remove("rest");
-    label();
-    delete fig.dataset.reset;
-    at = 0;
-    place(STOPS[0]);
-    show(0);
-    running = visible;
-    if (visible) { const g = gen; timer = setTimeout(() => next(g), 500); }
-  };
-  // A new verdict while resting redraws the end state; while playing it starts over.
-  flow.apply = () => (resting ? rest() : restart());
+  // From the moment the card's middle is near the bottom of the viewport until it is a little above
+  // the middle. At load that reads 0; with no scroll room it reads 1 (the end state).
+  const scrub = () => draw(0.1 + 0.8 * progress(fig, 0.5, 0.95, fig, 0.5, 0.4, true), true);
+  flow.apply = scrub;
   fig.dataset.anim = "1";
-  label();
-  btn?.addEventListener("click", () => (resting ? restart() : rest()));
-  place(STOPS[0]);
-  show(0);
-  watchers.add(() => {
-    visible = inView(fig, 0.3);
-    if (visible && !running && !resting) { running = true; const g = gen; clearTimeout(timer); timer = setTimeout(() => next(g), 500); }
-  });
-  queue();
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && visible && !running && !resting) { running = true; next(gen); }
-  });
-  addEventListener("resize", () => place(STOPS[at]));
+  parts.push(scrub);
 }
 
 // ---- the route: four steps, one after another --------------------------------------------------
 function routeSteps() {
   const fig = document.getElementById("route-fig");
   const list = document.getElementById("route-steps");
-  const again = document.getElementById("route-replay");
   if (!fig || !list) return;
   const line = fig.querySelector(".route-line i");
   const drop = fig.querySelector(".route-drop");
   const items = [...list.children];
-  let lineAt = 0;
-  let playing = false;
-
-  const lineTo = (to, ms) => {
-    const from = lineAt;
-    lineAt = to;
-    tween(ms, (p) => { line.style.transform = `scaleX(${from + (to - from) * p})`; });
-  };
-  const show = (n) => {
-    fig.dataset.step = String(n);
-    items.forEach((li, i) => {
-      li.classList.toggle("on", i < n);
-      li.classList.toggle("now", i === n - 1);
-    });
-  };
-  const play = () => {
-    if (playing) return;
-    playing = true;
-    again.hidden = true;
-    lineAt = 0;
-    line.style.transform = "scaleX(0)";
-    drop.style.transform = "scaleY(0)";
-    show(0);
-    const at = [300, 1500, 2700, 3900];
-    setTimeout(() => { show(1); lineTo(0.5, 900); }, at[0]);
-    setTimeout(() => show(2), at[1]);
-    setTimeout(() => { show(3); tween(700, (p) => { drop.style.transform = `scaleY(${p})`; }); }, at[2]);
-    setTimeout(() => { show(4); lineTo(1, 900); }, at[3]);
-    setTimeout(() => {
-      playing = false;
-      items.forEach((li) => li.classList.remove("now"));
-      again.hidden = false;
-    }, at[3] + 1300);
-  };
+  // Where each step lights, as a fraction of the section's scroll progress.
+  const AT = [0.08, 0.32, 0.56, 0.8];
+  const seg = (p, a, b) => clamp((p - a) / (b - a));
 
   fig.dataset.anim = "1";
   list.dataset.anim = "1";
-  line.style.transform = "scaleX(0)";
-  drop.style.transform = "scaleY(0)";
-  show(0);
-  once(fig, play, 0.6);
-  again.addEventListener("click", play);
+  parts.push(() => {
+    // From the diagram's top at 85% of the viewport until the step cards' bottom is at 85%.
+    const p = progress(fig, 0, 0.85, list, 1, 0.85);
+    const n = AT.filter((a) => p >= a).length;
+    fig.dataset.step = String(n);
+    // Step 1 draws the line to the exit, step 3 drops the registry read, step 4 draws on to the website.
+    line.style.transform = `scaleX(${(seg(p, AT[0], AT[1]) * 0.5 + seg(p, AT[3], 1) * 0.5).toFixed(3)})`;
+    drop.style.transform = `scaleY(${seg(p, AT[2], AT[3]).toFixed(3)})`;
+    items.forEach((li, i) => {
+      li.style.setProperty("--p", seg(p, AT[i] - 0.1, AT[i]).toFixed(3));
+      li.classList.toggle("on", i < n);
+      li.classList.toggle("now", i === n - 1 && p < 1);
+    });
+  });
 }
 
-// ---- history: the timeline draws down, the rows follow ----------------------------------------
+// ---- history: the timeline draws down, rows appear as the line reaches them --------------------
 function historyDraw() {
   const sec = document.getElementById("history-body");
   if (!sec) return;
   sec.dataset.anim = "1";
-  once(sec, () => {
-    sec.dataset.drawn = "1";
+  parts.push(() => {
     const list = sec.querySelector(".events");
     if (!list) return;
-    tween(1200, (p) => list.style.setProperty("--draw", String(p)), () => list.style.removeProperty("--draw"));
-    [...list.children].forEach((li, i) => rise(li, 120 + i * 90));
-  }, 0.15);
+    // The tip of the line follows a line at 90% of the viewport.
+    const draw = progress(list, 0, 0.9, list, 1, 0.9);
+    list.style.setProperty("--draw", draw.toFixed(3));
+    const tip = draw * list.clientHeight;
+    for (const li of list.children) {
+      li.style.setProperty("--p", clamp((tip - li.offsetTop) / Math.max(1, li.offsetHeight * 0.6)).toFixed(3));
+    }
+  });
 }
 
 // ---- public -----------------------------------------------------------------------------------
@@ -320,28 +185,34 @@ export function startMotion() {
     heroFlow(false);
     return;
   }
-  // The headline rises line by line from behind its mask, then the lead and the buttons follow.
-  document.querySelectorAll(".h1-line > span").forEach((el, i) => {
-    el.style.transform = "translateY(105%)";
-    el.classList.add("in");
-    setTimeout(() => tween(700, (p) => { el.style.transform = `translateY(${(1 - p) * 105}%)`; }, () => el.style.removeProperty("transform")), i * 80);
-  });
-  document.querySelectorAll(".rise").forEach((el, i) => rise(el, 320 + i * 80));
-  for (const el of document.querySelectorAll(".reveal, .stagger")) once(el, () => reveal(el));
+  parts.push(reveals);
   heroFlow(true);
   routeSteps();
   historyDraw();
-  reduced.addEventListener?.("change", () => { if (reduced.matches) root.classList.remove("motion"); });
+  addEventListener("scroll", queue, { passive: true });
+  addEventListener("resize", queue);
+  update();
+  reduced.addEventListener?.("change", () => {
+    if (!reduced.matches) return;
+    // Switched to reduced motion: drop the scroll effects and show every final state.
+    root.classList.remove("motion");
+    removeEventListener("scroll", queue);
+    removeEventListener("resize", queue);
+    parts.length = 0;
+    for (const el of document.querySelectorAll("[style*='--p'], [style*='--draw'], .flow-packet, .flow-fill, .route-line i, .route-drop")) {
+      el.style.removeProperty("--p");
+      el.style.removeProperty("--draw");
+      el.style.removeProperty("transform");
+    }
+    document.getElementById("flow")?.removeAttribute("data-anim");
+    document.getElementById("route-fig")?.removeAttribute("data-anim");
+    document.getElementById("route-steps")?.removeAttribute("data-anim");
+    document.getElementById("history-body")?.removeAttribute("data-anim");
+    heroFlow(false);
+  });
 }
 
-/** Called after every render: picks up numbers that were just drawn. */
+/** Called after every render: measures what was just drawn, before it paints. */
 export function scanMotion() {
-  if (!on()) return;
-  for (const el of document.querySelectorAll("[data-count]")) {
-    if (watched.has(el)) continue;
-    watched.add(el);
-    const key = el.dataset.countKey ?? el.textContent;
-    if (counted.has(key)) continue;
-    once(el, () => countUp(el), 0.9);
-  }
+  if (on()) update();
 }

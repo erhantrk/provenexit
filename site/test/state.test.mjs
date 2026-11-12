@@ -284,3 +284,49 @@ test("the status function answers before the platform's limit", async () => {
   assert.equal(deriveState(late, Date.parse(late.checked_at) + 1000), "error");
   await assert.rejects(withDeadline(Promise.reject(new Error("boom")), 50), /boom/);
 });
+
+test("motion is scrubbed by scroll, never played on a clock", () => {
+  const motion = text("../assets/motion.js");
+  // No timers at all in the motion module: every effect is a function of scroll position.
+  assert.doesNotMatch(motion, /setTimeout|setInterval|performance\.now|Date\.now/);
+  assert.match(motion, /addEventListener\("scroll", queue, \{ passive: true \}\)/);
+  assert.match(motion, /requestAnimationFrame\(update\)/);
+  assert.match(motion, /getBoundingClientRect/);
+  // The one timer is motion-flag.js's safety fallback: it switches motion off if app.js never starts.
+  const flag = text("../assets/motion-flag.js");
+  assert.equal(flag.match(/setTimeout/g).length, 1);
+  assert.match(flag, /setTimeout\(function \(\) \{ if \(!root\.hasAttribute\("data-motion-ready"\)\) root\.classList\.remove\("motion"\); \}, 3000\)/);
+  assert.doesNotMatch(flag, /setInterval/);
+  // No playback controls and no looping keyframes left over from the timed version.
+  const html = text("../index.html");
+  assert.doesNotMatch(html, /flow-toggle|route-replay|Play the steps again|>Pause</);
+  assert.doesNotMatch(text("../assets/styles.css"), /animation:[^;]*infinite|@keyframes (stream|ring|pop|blink)/);
+});
+
+test("the limits heading and the compact history", () => {
+  const html = text("../index.html");
+  assert.match(html, /<h3 class="also-h">More limits<\/h3>/);
+  assert.doesNotMatch(html, /Also true/);
+  const app = text("../assets/app.js");
+  assert.match(app, /const HISTORY_SHOWN = 3;/);
+  assert.match(app, /aria-expanded="\$\{historyOpen\}"/);
+  assert.match(app, /Show all \$\{events\.length\} changes/);
+  assert.match(app, /historyOpen = !historyOpen/);
+});
+
+test("long explanations are folded behind disclosures, proof data is not", () => {
+  const html = text("../index.html");
+  const limits = html.slice(html.indexOf('id="limits"'), html.indexOf("</section>", html.indexOf('id="limits"')));
+  // Twelve limits, each title-first with its explanation in a panel; the seven smaller ones fold as a group.
+  assert.equal(limits.match(/data-more-title/g).length, 12);
+  assert.equal(limits.match(/data-more="limit-\d+"/g).length, 12);
+  assert.match(limits, /data-more="more-limits"[^>]*data-more-label="Show 7 more limits"/);
+  const more = text("../assets/more.js");
+  assert.match(more, /aria-expanded/);
+  assert.match(more, /aria-controls/);
+  assert.match(more, /btn\.type = "button"/);
+  // Panels never hold a copy button, a hash or a verdict mark.
+  const app = text("../assets/app.js");
+  for (const m of app.matchAll(/<p data-more="[^"]+"[^>]*>(.*?)<\/p>/g)) assert.doesNotMatch(m[1], /copy|rawRow|mark\(|data-count/);
+  assert.match(app, /enhanceMore\(\);\n  scanMotion\(\);/);
+});

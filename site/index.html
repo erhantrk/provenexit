@@ -116,7 +116,6 @@
         </div>
       </div>
       <p class="flow-say" id="flow-say">The client checks the exit's Intel quote, the image it runs and the NEAR registry. Only then does it open the tunnel.</p>
-      <p class="flow-again"><button class="ghost-btn flow-btn" type="button" id="flow-toggle">Pause</button></p>
     </figure>
   </div>
 </section>
@@ -169,7 +168,6 @@
       <li>It reads the NEAR registry: is this build allowed, is this OS allowed, is this exit registered.</li>
       <li>Only then it opens an encrypted tunnel to the key in the quote. If the owner revokes the build, the next connection is refused.</li>
     </ol>
-    <p class="replay-line"><button class="ghost-btn" type="button" id="route-replay" hidden>Play the steps again</button></p>
   </div>
 </section>
 
@@ -295,35 +293,56 @@
     </header>
     <ol class="limits stagger">
       <li>
-        <h3>Testnet only.</h3>
-        <p>The registry is on NEAR testnet.</p>
+        <h3 data-more-title>Testnet only.</h3>
+        <p data-more="limit-1">The registry is on NEAR testnet.</p>
       </li>
       <li>
-        <h3>The exit sees your destinations.</h3>
-        <p>Any VPN exit must know the host and port it connects to. ProvenExit proves the approved code does not keep them, not that it never sees them. TLS hides the content, not the host.</p>
+        <h3 data-more-title>The exit sees your destinations.</h3>
+        <p data-more="limit-2">Any VPN exit must know the host and port it connects to. ProvenExit proves the approved code does not keep them, not that it never sees them. TLS hides the content, not the host.</p>
       </li>
       <li>
-        <h3>Timing and metadata are visible to the operator's network.</h3>
-        <p>“No logs” covers the attested code, not the operator's host, which can observe destination IP and port, timing, the TLS SNI and every byte of plain HTTP. Traffic is not padded. With one hop, your IP is visible to the exit operator's network.</p>
+        <h3 data-more-title>Timing and metadata are visible to the operator's network.</h3>
+        <p data-more="limit-3">“No logs” covers the attested code, not the operator's host, which can observe destination IP and port, timing, the TLS SNI and every byte of plain HTTP. Traffic is not padded. With one hop, your IP is visible to the exit operator's network.</p>
       </li>
       <li>
-        <h3>Intel and the dstack OS are trusted.</h3>
-        <p>Intel, the dstack OS image and the TDX module are trusted roots. Side channels are not defended.</p>
+        <h3 data-more-title>Intel and the dstack OS are trusted.</h3>
+        <p data-more="limit-4">Intel, the dstack OS image and the TDX module are trusted roots. Side channels are not defended.</p>
       </li>
       <li>
-        <h3>One owner key decides the allowlist.</h3>
-        <p><span class="mono" data-bind="registry.owner">The owner</span> is one NEAR account. Whoever holds that key can allow or revoke builds and operators. Multisig is future work.</p>
+        <h3 data-more-title>One owner key decides the allowlist.</h3>
+        <p data-more="limit-5"><span class="mono" data-bind="registry.owner">The owner</span> is one NEAR account. Whoever holds that key can allow or revoke builds and operators. Multisig is future work.</p>
       </li>
     </ol>
-    <h3 class="also-h">Also true</h3>
-    <ol class="limits limits-small" start="6">
-      <li><p>Proxy only: TCP through a SOCKS5 proxy. No UDP, no QUIC, no system-wide tunnel.</p></li>
-      <li><p>The NEAR RPC endpoint is trusted: view results carry no state proofs.</p></li>
-      <li><p>Phala's gateway terminates TLS in front of the exit. It sees only tunnel ciphertext, can observe timing and volume, and can refuse to serve.</p></li>
-      <li><p>The OS measurement was observed in the quote, not rebuilt from source.</p></li>
-      <li><p>The exit image is not reproducible yet: a rebuild is not shown to give the same digest.</p></li>
-      <li><p>An exit can serve Intel revocation data that is stale but not expired; the window is the list's update interval.</p></li>
-      <li><p>The exit is paid by the hour. It runs through judging and may be stopped afterwards.</p></li>
+    <h3 class="also-h">More limits</h3>
+    <ol class="limits limits-small" start="6" data-more="more-limits" data-more-button="big" data-more-label="Show 7 more limits" data-more-less="Hide the 7 more limits">
+      <li>
+        <h4 data-more-title>Proxy only.</h4>
+        <p data-more="limit-6">TCP through a SOCKS5 proxy. No UDP, no QUIC, no system-wide tunnel.</p>
+      </li>
+      <li>
+        <h4 data-more-title>The NEAR RPC endpoint is trusted.</h4>
+        <p data-more="limit-7">View results carry no state proofs.</p>
+      </li>
+      <li>
+        <h4 data-more-title>Phala's gateway sits in front of the exit.</h4>
+        <p data-more="limit-8">It terminates TLS. It sees only tunnel ciphertext, can observe timing and volume, and can refuse to serve.</p>
+      </li>
+      <li>
+        <h4 data-more-title>The OS measurement is observed, not rebuilt.</h4>
+        <p data-more="limit-9">The OS measurement was observed in the quote, not rebuilt from source.</p>
+      </li>
+      <li>
+        <h4 data-more-title>The exit image is not reproducible yet.</h4>
+        <p data-more="limit-10">A rebuild is not shown to give the same digest.</p>
+      </li>
+      <li>
+        <h4 data-more-title>Intel revocation data can be stale.</h4>
+        <p data-more="limit-11">An exit can serve Intel revocation data that is stale but not expired; the window is the list's update interval.</p>
+      </li>
+      <li>
+        <h4 data-more-title>The exit may be stopped after judging.</h4>
+        <p data-more="limit-12">The exit is paid by the hour. It runs through judging and may be stopped afterwards.</p>
+      </li>
     </ol>
     <p class="limits-more" hidden><a class="link" data-href="links.repo" data-href-suffix="#limits-and-trust">Read every limit in the README</a></p>
   </div>

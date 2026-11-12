@@ -273,17 +273,9 @@ h1 { font-size: clamp(36px, 3.9vw, 58px); font-weight: 800; line-height: 1.04; l
 .flow:not([data-js]) .flow-gate .g-tick, .flow-gate.pass .g-tick { opacity: 1; }
 .flow-gate.blocked .g-cross { opacity: 1; }
 .flow-gate.blocked .flow-icon { background: var(--ink); border-color: var(--ink); color: #fff; }
-.motion .flow-gate.pass .flow-icon, .motion .flow-end-b.open .flow-icon, .motion .flow-gate.blocked .flow-icon { animation: pop 450ms var(--ease); }
 .flow:not([data-js]) .flow-fill, .flow.tunnel .flow-fill { background: repeating-linear-gradient(90deg, var(--accent) 0 18px, #7C66FF 18px 30px); background-size: 30px 100%; }
-.motion .flow.tunnel:not(.rest) .flow-fill { animation: stream 700ms linear infinite; }
-.flow-again { margin-top: 10px; text-align: center; min-height: 36px; }
-.flow:not([data-anim]) .flow-again { display: none; }
-.flow-btn { height: 36px; font-size: 14px; padding: 0 14px; }
 .flow.tunnel .flow-rail { box-shadow: 0 0 14px rgb(80 52 230 / .35); }
 .flow.tunnel .flow-packet { box-shadow: 0 0 0 10px rgb(80 52 230 / .12), 0 0 26px 6px rgb(80 52 230 / .5); }
-.flow[data-reset] .flow-packet { opacity: 0; }
-@keyframes pop { from { transform: scale(1.18); box-shadow: 0 0 0 0 rgb(80 52 230 / .35); } to { transform: none; box-shadow: 0 0 0 14px rgb(80 52 230 / 0); } }
-@keyframes stream { to { background-position: 30px 0; } }
 
 @media (max-width: 620px) {
   .flow { margin-top: 40px; padding: 20px 10px 16px; border-radius: 16px; }
@@ -461,7 +453,6 @@ h3 { font-size: 22px; font-weight: 800; line-height: 1.2; }
   content: counter(step); display: grid; place-items: center; width: 34px; height: 34px; margin-bottom: 12px; border-radius: 50%;
   background: var(--accent); color: #fff; font-weight: 800; font-size: 17px;
 }
-.replay-line { margin-top: 20px; min-height: 42px; }
 @media (min-width: 860px) { .steps { grid-template-columns: repeat(4, 1fr); } }
 @media (max-width: 620px) {
   .route { padding: 24px 0 28px; }
@@ -477,17 +468,13 @@ h3 { font-size: 22px; font-weight: 800; line-height: 1.2; }
 .route[data-step="2"] .station:nth-child(2), .route[data-step="3"] .station:nth-child(2), .route[data-step="4"] .station:nth-child(2),
 .route[data-step="3"] .route-registry, .route[data-step="4"] .route-registry,
 .route[data-step="4"] .station:nth-child(3) { opacity: 1; }
-.route[data-step="1"] .station:nth-child(1) .station-dot,
-.route[data-step="2"] .station:nth-child(2) .station-dot,
-.route[data-step="4"] .station:nth-child(3) .station-dot { animation: ring 900ms ease-out; }
-.route[data-step="3"] .route-registry { animation: ring 900ms ease-out; }
 .route[data-step="2"] .station:nth-child(2) .station-dot { background: var(--accent); }
-@keyframes ring { from { box-shadow: 0 0 0 0 rgb(80 52 230 / .45); } to { box-shadow: 0 0 0 18px rgb(80 52 230 / 0); } }
 .steps[data-anim] li { color: var(--ink-2); }
 .steps[data-anim] li::before { background: var(--tint-2); color: var(--accent); }
 .steps[data-anim] li.on { color: var(--ink); border-color: var(--accent-soft); }
 .steps[data-anim] li.on::before { background: var(--accent); color: #fff; }
-.steps[data-anim] li.now { border-color: var(--accent); box-shadow: 0 16px 30px -22px rgb(80 52 230 / .6); animation: ring 900ms ease-out; }
+.steps[data-anim] li { opacity: calc(.4 + .6 * var(--p, 1)); translate: 0 calc((1 - var(--p, 1)) * 12px); }
+.steps[data-anim] li.now { border-color: var(--accent); box-shadow: 0 16px 30px -22px rgb(80 52 230 / .6); }
 
 /* ---- NEAR ---- */
 .gas { font-size: clamp(20px, 2.1vw, 27px); line-height: 1.35; font-weight: 600; max-width: 30em; margin-bottom: 32px; }
@@ -504,8 +491,8 @@ h3 { font-size: 22px; font-weight: 800; line-height: 1.2; }
   background: var(--card); border: 3px solid var(--accent);
 }
 .events .row:first-child::before { background: var(--accent); box-shadow: 0 0 0 5px rgb(80 52 230 / .18); }
-.motion #history-body[data-anim]:not([data-drawn]) .events { --draw: 0; }
-.motion #history-body[data-anim]:not([data-drawn]) .events > li { opacity: 0; }
+.motion #history-body[data-anim] .events > li { opacity: var(--p, 1); translate: calc((1 - var(--p, 1)) * -10px) 0; }
+.history-more { display: flex; gap: 12px; align-items: center; }
 @media (min-width: 860px) {
   .events .row { grid-template-columns: 3fr 4fr 3fr 2fr; }
   .anchors .row { grid-template-columns: 3fr 4fr 3fr 2fr; }
@@ -594,6 +581,27 @@ h3 { font-size: 22px; font-weight: 800; line-height: 1.2; }
 .limits-small > li::before { left: 0; top: 13px; width: 30px; height: 26px; font-size: 14px; border-radius: 8px; }
 .limits-small p { font-size: 16px; color: var(--ink-2); max-width: 46em; }
 .limits-more { margin-top: 32px; font-weight: 600; }
+.limits-small h4 { font-size: 17px; line-height: 1.35; }
+.limits-small p { margin-top: 6px; }
+.more-btn + .limits-small { margin-top: 16px; }
+
+/* ---- "show more": folded explanations (more.js) ---- */
+.more-title {
+  all: unset; box-sizing: border-box; display: inline; cursor: pointer; font: inherit; color: inherit;
+  border-radius: 6px; text-decoration: underline; text-decoration-color: var(--accent-soft); text-decoration-thickness: 2px; text-underline-offset: .2em;
+}
+.more-title::after {
+  content: ""; display: inline-block; width: .45em; height: .45em; margin-left: .45em; vertical-align: .15em;
+  border-right: 2px solid var(--accent); border-bottom: 2px solid var(--accent); transform: rotate(45deg); transition: transform 150ms ease-out;
+}
+.more-title[aria-expanded="true"]::after { transform: translateY(.15em) rotate(-135deg); }
+.more-title:hover { text-decoration-color: var(--accent); }
+.more-title:focus-visible, .more-link:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.more-link:not(.more-btn) {
+  display: inline-flex; align-items: center; min-height: 32px; margin-top: 6px; padding: 0; background: none; border: 0; cursor: pointer;
+  color: var(--accent); font: inherit; font-size: 15px; font-weight: 700; text-decoration: underline; text-underline-offset: .2em;
+}
+.more-link + [data-more] { margin-top: 4px; }
 
 /* ---- close, footer ---- */
 .close { background: var(--accent); color: #fff; overflow: hidden; }
@@ -618,18 +626,13 @@ h3 { font-size: 22px; font-weight: 800; line-height: 1.2; }
 .sample-tag :focus-visible { outline-color: #fff; }
 
 /* ---- motion ---- */
-/* Before an element scrolls into view it waits invisible; motion.js fades it in. Without the "motion"
-   class (reduced motion, no JS) nothing is hidden. */
-.motion .reveal:not(.in),
-.motion .stagger:not(.in) > :not(.cards):not(.rows),
-.motion .stagger:not(.in) > .cards > *,
-.motion .stagger:not(.in) > .rows > * { opacity: 0; }
-.motion .h1-line > span:not(.in) { transform: translateY(105%); }
-.motion .rise:not(.in) { opacity: 0; }
-@media (prefers-reduced-motion: no-preference) {
-  .notice-dot { animation: blink 2.4s ease-in-out 2; }
-}
-@keyframes blink { 50% { opacity: .35; } }
+/* Scrubbed by scroll: motion.js writes --p (0..1) from each element's scroll position; it fades and
+   rises in as it enters the viewport and reverses on the way back. Without the "motion" class (reduced
+   motion, no JS) or before motion.js measures, --p is unset and everything shows its final state. */
+.motion .reveal,
+.motion .stagger > :not(.cards):not(.rows),
+.motion .stagger > .cards > *,
+.motion .stagger > .rows > * { opacity: var(--p, 1); translate: 0 calc((1 - var(--p, 1)) * 18px); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0s !important; animation: none !important; scroll-behavior: auto !important; }
 }

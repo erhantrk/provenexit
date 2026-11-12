@@ -4,10 +4,11 @@ import {
 } from "./state.js";
 import { CONFIG } from "./config.js";
 import { startMotion, scanMotion, setFlowStop } from "./motion.js";
+import { startMore, enhanceMore } from "./more.js";
 
 const POLL_MS = 15_000;
 const FETCH_TIMEOUT_MS = 70_000;
-const HISTORY_SHOWN = 8;
+const HISTORY_SHOWN = 3;
 const CMD_LIVE = "npm ci && npx tsc -b && scripts/try-live.sh";
 const CMD_REPLAY = "npm ci && npx tsc -b && node client/dist/cli.js vpn verify --fixture fixtures/live-exit";
 const KEY_CHECKS = ["report_data binds router keys", "instance registered with matching keys"];
@@ -444,7 +445,7 @@ function renderKeys(state) {
     if (!kh) {
       exitEv = `<p>No registration found for this exit at ${esc(atTime())}, so there is no key hash to show.</p>`;
     } else {
-      exitEv = `<p>The hash of its keys is inside the Intel-signed quote and in its NEAR registration. Nobody else can answer as this exit.</p>`;
+      exitEv = `<p data-more="keys-exit">The hash of its keys is inside the Intel-signed quote and in its NEAR registration. Nobody else can answer as this exit.</p>`;
       if (state === "offline") {
         const rec = checksOf(json.replay).filter((c) => KEY_CHECKS.includes(c.name) && c.ok === true).length;
         if (rec === KEY_CHECKS.length) exitEv += `<p>Both checks that bind the keys are in the <a href="#recorded">recorded check</a>.</p>`;
@@ -491,8 +492,9 @@ function renderHistory(state) {
       return `<li class="row"><span>${time(e.at, fmtDateTime)}</span><span class="row-what">${m}<span>${esc(eventWords(e.kind))}</span></span><span>${subject}</span><span>${txLink(e.tx)}</span></li>`;
     })
     .join("");
-  const more = events.length > HISTORY_SHOWN && !historyOpen
-    ? `<button class="more-btn" type="button" data-action="history-all" data-key="history-all">Show all ${events.length} entries</button>`
+  // Compact by default: the newest few, then one button that shows or hides the rest.
+  const more = events.length > HISTORY_SHOWN
+    ? `<button class="more-btn" type="button" data-action="history-all" data-key="history-all" aria-controls="history-events" aria-expanded="${historyOpen}">${historyOpen ? "Show the newest " + HISTORY_SHOWN : `Show all ${events.length} changes`}</button>`
     : "";
 
   const anchors = Array.isArray(json.receipts?.anchors) ? json.receipts.anchors.filter((a) => a && typeof a === "object") : [];
@@ -500,9 +502,9 @@ function renderHistory(state) {
     .map((a) => `<li class="row"><span>${time(a.at, fmtDateTime)}</span><span class="row-what"><span>${esc(a.count)} ${a.count === 1 ? "receipt" : "receipts"} anchored</span></span><span>${Number.isInteger(a.first_seq) ? `From sequence ${a.first_seq}` : ""}</span><span>${txLink(a.tx)}</span></li>`)
     .join("");
   const receipts = `<div class="receipts"><h3>Session receipts</h3>
-<p>The exit anchors Merkle roots of its session receipts on the same contract. A receipt holds hashes, sequence numbers and times, never a destination.</p>
+<p data-more="receipts">The exit anchors Merkle roots of its session receipts on the same contract. A receipt holds hashes, sequence numbers and times, never a destination.</p>
 ${anchors.length ? `<ol class="rows anchors">${anchorRows}</ol>` : `<p>No anchors were read at ${esc(atTime())}.</p>`}</div>`;
-  return put("history-body", `<ol class="rows events live">${rows}</ol>${more}${receipts}`);
+  return put("history-body", `<ol class="rows events live" id="history-events">${rows}</ol>${more}${receipts}`);
 }
 
 // ---- traffic ----------------------------------------------------------------------------------
@@ -541,7 +543,7 @@ function renderRun(state) {
         ? `<p class="cmd-note">The client refuses the exit right now, so this command prints the same refusal.</p>`
         : "";
   const liveCmd = `<div class="cmd-block"><h3>Verify the live exit and send one request through it</h3>${command("cmd-live", CMD_LIVE)}${note}
-<p>Prints every check, starts a local SOCKS5 proxy on 127.0.0.1:18180, and shows your IP next to the IP a website sees through the exit. It changes no system settings and needs no sudo.</p></div>`;
+<p data-more="run-live" data-more-label="What it does">Prints every check, starts a local SOCKS5 proxy on 127.0.0.1:18180, and shows your IP next to the IP a website sees through the exit. It changes no system settings and needs no sudo.</p></div>`;
   const captured = json?.replay?.captured_at && fmtDate(json.replay.captured_at) ? `, captured ${time(json.replay.captured_at, fmtDate)}` : "";
   const lines = checksOf(json?.replay).length;
   const see = lines > 0 ? `${lines} ✔ lines` : "one ✔ line for each check";
@@ -638,6 +640,7 @@ function render() {
   renderTraffic(state);
   renderRun(state);
   renderAgents(state);
+  enhanceMore();
   scanMotion();
 }
 
@@ -701,9 +704,12 @@ document.addEventListener("click", (ev) => {
   }
 
   if (t.closest('[data-action="history-all"]')) {
-    historyOpen = true;
+    historyOpen = !historyOpen;
     renderHistory(shownState);
-    document.querySelector(`.events .row:nth-child(${HISTORY_SHOWN + 1}) a`)?.focus({ preventScroll: true });
+    // The button is redrawn with its new state; keep the focus on it.
+    document.querySelector('[data-action="history-all"]')?.focus({ preventScroll: true });
+    enhanceMore();
+    scanMotion();
     return;
   }
 
@@ -782,6 +788,7 @@ function sampleTag() {
 // ---- start ------------------------------------------------------------------------------------
 sampleTag();
 startMotion();
+startMore(scanMotion);
 render();
 load();
 loadIp();
