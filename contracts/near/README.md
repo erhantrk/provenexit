@@ -191,3 +191,12 @@ npx tsc -b packages/shared && node contracts/near/fixtures/gen.mjs
 
 The generator computes each case's expected code with a TS transcription of SPEC §7 built on `@plr/shared`. It
 refuses to write if that code differs from the code the case was designed to hit.
+
+## Rebuild the deployed registry
+
+`vpnreg.pe-owner-erhan.testnet` runs a reproducible build of commit `dcd37e6` (recorded in the contract's own
+metadata, which NEAR source verifiers read). To check it by hand: `git checkout dcd37e6 && cd contracts/near &&
+cargo near build reproducible-wasm` (Docker) gives SHA-256 `a39ed48c2c7cdad5d5b732031db1f115cb6569400bcb7521c81061368d8a0d9e`,
+code hash `C1hvenbrzHKN1n1f2z63Duburr8YXLAKBescrEvarCGM`, the same as `view_account` returns. A build of a later
+commit differs only because the commit is part of that metadata.
+
