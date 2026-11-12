@@ -15,7 +15,8 @@
     "typecheck": "tsc -b",
     "test": "npm test -w packages/shared -w client -w enclave --if-present",
     "test:contract": "cd contracts/near && cargo test",
-    "e2e": "npm test -w e2e"
+    "e2e": "npm test -w e2e",
+    "build:status": "tsc -b && node scripts/build-status.mjs"
   },
   "devDependencies": {
     "typescript": "5.9.3",

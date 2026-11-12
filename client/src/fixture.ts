@@ -104,21 +104,34 @@ function registryOptions(v: unknown, meta: FixtureMeta): MemoryRegistryOptions {
  * @throws PlrError E_BAD_INPUT on a missing or malformed file
  */
 export function readFixture(dir: string): Fixture {
-  const meta = parseMeta(readJson(dir, "meta.json"));
+  const meta = readJson(dir, "meta.json");
   let nonceHex: string;
   try {
     nonceHex = readFileSync(join(dir, "nonce.hex"), "utf8").trim();
   } catch {
     return bad("cannot read nonce.hex");
   }
-  if (!isHex(nonceHex, 32)) return bad("nonce.hex is not 64 lowercase hex chars");
-  const bundle = readJson(dir, "bundle.json");
-  if (!isPlainObject(bundle)) return bad("bundle.json is not an object");
+  return parseFixture({ meta, nonce_hex: nonceHex, bundle: readJson(dir, "bundle.json"), registry: readJson(dir, "registry.json") });
+}
+
+/** The four files of a fixture as already-parsed values (what `readFixture` reads; also how the status bundle embeds one). */
+export interface RawFixture {
+  meta: unknown;
+  nonce_hex: string;
+  bundle: unknown;
+  registry: unknown;
+}
+
+/** Validates the four parsed files and builds the {@link Fixture}. @throws PlrError E_BAD_INPUT */
+export function parseFixture(raw: RawFixture): Fixture {
+  const meta = parseMeta(raw.meta);
+  if (!isHex(raw.nonce_hex, 32)) return bad("nonce.hex is not 64 lowercase hex chars");
+  if (!isPlainObject(raw.bundle)) return bad("bundle.json is not an object");
   return {
     meta,
-    nonce: fromHex(nonceHex, 32),
-    bundle: bundle as unknown as AttestationBundle,
-    registry: registryOptions(readJson(dir, "registry.json"), meta),
+    nonce: fromHex(raw.nonce_hex, 32),
+    bundle: raw.bundle as unknown as AttestationBundle,
+    registry: registryOptions(raw.registry, meta),
   };
 }
 
@@ -138,7 +151,11 @@ export function fixtureVerifier(meta: FixtureMeta): DcapQvlVerifier {
  * @throws PlrError — the failing check's code (E_BAD_RESPONSE, E_QUOTE_*, E_COMPOSE_*, …)
  */
 export async function verifyFixture(dir: string, verifier?: QuoteVerifier): Promise<VerifiedRouter> {
-  const f = readFixture(dir);
+  return verifyFixtureData(readFixture(dir), verifier);
+}
+
+/** {@link verifyFixture} over an already-parsed fixture. */
+export async function verifyFixtureData(f: Fixture, verifier?: QuoteVerifier): Promise<VerifiedRouter> {
   return verifyAttestation({
     bundle: f.bundle,
     nonce: f.nonce,

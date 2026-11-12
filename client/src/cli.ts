@@ -65,6 +65,7 @@ import { VpnClient, VPN_ATTEST_TTL_MS } from "./vpn/client.js";
 import { TwoHopClient } from "./vpn/twohop.js";
 import { startVpn, type VpnConnector } from "./vpn/socks5-server.js";
 import { fetchAttestationDirect, normalizeExitUrl } from "./vpn/hop.js";
+import { RECHECK_LINE, REMOTE_DNS_LINE } from "./vpn-report.js";
 import { fixtureReplayLine, readFixture, verifyFixture } from "./fixture.js";
 
 export interface CliIo {
@@ -602,8 +603,6 @@ async function printInstance(io: CliIo, registry: TracingRegistry, s: Attestatio
   }
 }
 
-const RECHECK_LINE = "registry re-check before each connection (compose, OS, instance)";
-
 async function cmdVpnVerify(cfg: VpnCliConfig, registry: TracingRegistry, client: VpnClient, io: CliIo): Promise<number> {
   const intel = client.rootKind === "INTEL";
   io.out(`PLR VPN verify`);
@@ -641,8 +640,6 @@ async function cmdVpnVerify(cfg: VpnCliConfig, registry: TracingRegistry, client
   await printInstance(io, registry, session);
   return 0;
 }
-
-const REMOTE_DNS_LINE = "destinations resolved by the exit (remote DNS); the client never resolves them";
 
 /** One hop of `plr vpn verify` in two-hop mode: SPEC §9 checks, registry re-check, org lines. Returns the org or the error. */
 async function verifyHop(

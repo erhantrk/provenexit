@@ -1,0 +1,328 @@
+{
+  "checked_at": "2026-11-12T12:42:04.806Z",
+  "error": null,
+  "exit": {
+    "url": "https://d2c65be0bde4f9b7628ef399310823e9e6339251-18200.dstack-pha1-prod9.phala.network",
+    "online": false,
+    "egress_ip": null,
+    "platform": "Intel TDX · Phala Cloud · dstack-0.6.1",
+    "compose": null
+  },
+  "verify": {
+    "verdict": "REFUSED",
+    "code": "E_BAD_RESPONSE",
+    "root": "INTEL",
+    "checks": [
+      {
+        "name": "response well-formed, fresh 32-byte nonce",
+        "ok": false,
+        "detail": "E_BAD_RESPONSE"
+      },
+      {
+        "name": "quote structure (TDX v4)",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "TEE type is TDX",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "pinned root == registry root == verifier root",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "quote signature chain to root",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "Intel TCB status accepted",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "TD debug attribute clear",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "report_data binds router keys",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "report_data binds client nonce as a session quote (SHA256(\"PLR-v1/session-nonce\" ‖ nonce))",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "event log digests and boot sequence",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "event log replays to RTMR3",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "app-compose matches measured compose-hash",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "dstack compose: images pinned by digest, exit logging disabled",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "compose hash allowed by registry",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "OS measurement allowed by registry",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "instance registered with matching keys",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "registry re-check before each connection (compose, OS, instance)",
+        "ok": false,
+        "detail": "not checked"
+      },
+      {
+        "name": "destinations resolved by the exit (remote DNS); the client never resolves them",
+        "ok": false,
+        "detail": "not checked"
+      }
+    ]
+  },
+  "instance": {
+    "operator": "pe-op-erhan.testnet",
+    "organization": "erhan-demo",
+    "registered_at": "2026-11-12T07:58:41.069Z",
+    "expires_at": "2026-11-13T07:58:41.069Z",
+    "key_hash": "33486f55f3e2aac4158aabb841153b0d768263b00b4118c3c8fa94ddda17473c",
+    "registration_tx": "HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8",
+    "registration_gas_tgas": 188.08
+  },
+  "registry": {
+    "account": "pe-vpnreg-erhan.testnet",
+    "owner": "pe-owner-erhan.testnet",
+    "root": "INTEL",
+    "code_hash": "GFFuecd7AapUH9hp9yyBUteiTCDsFpckdqTAQeBD17B1",
+    "full_access_keys": 1,
+    "reproducible_build": null,
+    "events": [
+      {
+        "kind": "register_instance_tdx",
+        "hash": null,
+        "account": "pe-op-erhan.testnet",
+        "org": null,
+        "tx": "HSQqnRMupfLQeSi47h4dHv2K47WmDMBkT4CpuZuDpZR8",
+        "at": "2026-11-12T07:58:40.474Z"
+      },
+      {
+        "kind": "allow_compose",
+        "hash": "6b56436b06a60c2739c0718f198812b5727f98b72467c0335f72b5e01277e2c0",
+        "account": null,
+        "org": null,
+        "tx": "8fU3ScGVptLev9qdGbBsW72kJDcye9CzKTLpQzaKh8dm",
+        "at": "2026-11-12T07:58:22.947Z"
+      },
+      {
+        "kind": "allow_compose",
+        "hash": "b9823a796f86b61b4fae123f912d98f25914326f5789ab2f964b66d5f086d05f",
+        "account": null,
+        "org": null,
+        "tx": "642fevAQzKKwBFX3xYMZY9edQ3FsxC81HeBjncNzpUpV",
+        "at": "2026-11-11T14:03:00.093Z"
+      },
+      {
+        "kind": "revoke_compose",
+        "hash": "b9823a796f86b61b4fae123f912d98f25914326f5789ab2f964b66d5f086d05f",
+        "account": null,
+        "org": null,
+        "tx": "3FnZ8bG8k9biUcH5SjtzqpBDmHVU1hmREJGT1vfXh2yz",
+        "at": "2026-11-11T14:02:51.184Z"
+      },
+      {
+        "kind": "allow_os",
+        "hash": "821d442f07d638c696f4c5e1e4962bf4e28515ba5d790f5cf502b1c0d4dd323d",
+        "account": null,
+        "org": null,
+        "tx": "E3to6jCjasF37vLqRtsFKLsehLpXL2J1xK7PNFbHnwbX",
+        "at": "2026-11-11T13:44:15.671Z"
+      },
+      {
+        "kind": "allow_compose",
+        "hash": "b9823a796f86b61b4fae123f912d98f25914326f5789ab2f964b66d5f086d05f",
+        "account": null,
+        "org": null,
+        "tx": "EmWz2Uawni6PicfCqrG8YwkZeZwgkyQMTCbGACQwq6sM",
+        "at": "2026-11-11T13:44:11.821Z"
+      },
+      {
+        "kind": "approve_operator",
+        "hash": null,
+        "account": "pe-op-erhan.testnet",
+        "org": "erhan-demo",
+        "tx": "G24JXkyLJZQjV8FFHeG9x5ZGy9mNVgwKtSi8p8xEZHL1",
+        "at": "2026-11-11T12:34:32.142Z"
+      }
+    ]
+  },
+  "receipts": {
+    "anchors": [
+      {
+        "id": 7,
+        "root": "4e7dc42aeb15f60d3a74f5efbaa8600729cc2061de01d7c6f75bd013772404a2",
+        "count": 19,
+        "first_seq": 91,
+        "tx": "81JFVsEkJRp4c3N3ib8ssVtKHXVBR4rcGGWrGPj51f1k",
+        "at": "2026-11-12T08:53:12.611Z"
+      },
+      {
+        "id": 6,
+        "root": "1af900177d3e6d85b7b4a4194ab09c31f974bd0ea6ef98ebed8e4cce9733cd88",
+        "count": 6,
+        "first_seq": 85,
+        "tx": "BedzVM65jTovr3bzdtSDf9E8KxXnR1Bot753Pb34TLVb",
+        "at": "2026-11-12T08:51:09.858Z"
+      },
+      {
+        "id": 5,
+        "root": "63379bc6c7c59ea42f8b277d02a596e5cb71d2d8a177d7e6cfc4fc7e0b6afaef",
+        "count": 43,
+        "first_seq": 42,
+        "tx": "8LXXvXiGS8dCa4PB1oYAvkZKXUgvdmVTCVbpqvi9Krcn",
+        "at": "2026-11-12T08:50:07.279Z"
+      },
+      {
+        "id": 4,
+        "root": "76c501cdca66458a056a2e870f7c030aedac7a64aa18204dea93bb50c8328b49",
+        "count": 38,
+        "first_seq": 4,
+        "tx": "4ftJWR32hQhoMLpbZPisqmETdjDogmgPmsc2bJXcHgad",
+        "at": "2026-11-12T08:49:03.980Z"
+      },
+      {
+        "id": 3,
+        "root": "a39518ed2885d4e6a3119e4ecb36331b29f0580f8f5bb478762af02babc7c5d2",
+        "count": 1,
+        "first_seq": 3,
+        "tx": "AzHDTAkvKHRrQuJ9nxvE72Liku7CKv7vRdu1Z8Ez3wm9",
+        "at": "2026-11-12T08:23:00.610Z"
+      }
+    ]
+  },
+  "replay": {
+    "captured_at": "2026-11-12T08:02:54.378Z",
+    "verdict": "VERIFIED",
+    "code": null,
+    "checks": [
+      {
+        "name": "response well-formed, fresh 32-byte nonce",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "quote structure (TDX v4)",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "TEE type is TDX",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "pinned root == registry root == verifier root",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "quote signature chain to root",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "Intel TCB status accepted",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "TD debug attribute clear",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "report_data binds router keys",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "report_data binds client nonce as a session quote (SHA256(\"PLR-v1/session-nonce\" ‖ nonce))",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "event log digests and boot sequence",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "event log replays to RTMR3",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "app-compose matches measured compose-hash",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "dstack compose: images pinned by digest, exit logging disabled",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "compose hash allowed by registry",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "OS measurement allowed by registry",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "name": "instance registered with matching keys",
+        "ok": true,
+        "detail": ""
+      }
+    ],
+    "compose": {
+      "hash": "6b56436b06a60c2739c0718f198812b5727f98b72467c0335f72b5e01277e2c0",
+      "image": "ghcr.io/erhantrk/provenexit-exit@sha256:7e53f383a6ea8ea8e537ad35c1d11665ca07540f537fe3d0c656879a92e61ad5",
+      "logging": "none",
+      "allowed_ports": [
+        80,
+        443
+      ],
+      "max_tunnels": 32
+    }
+  },
+  "links": {
+    "repo": "https://github.com/erhantrk/provenexit",
+    "explorer_tx": "https://testnet.nearblocks.io/txns/{tx}"
+  }
+}
