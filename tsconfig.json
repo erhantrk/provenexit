@@ -4,6 +4,7 @@
     { "path": "packages/shared" },
     { "path": "enclave" },
     { "path": "client" },
+    { "path": "mcp" },
     { "path": "e2e" }
   ]
 }

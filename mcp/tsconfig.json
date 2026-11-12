@@ -1,0 +1,6 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": { "rootDir": "src", "outDir": "tsc-out" },
+  "include": ["src"],
+  "references": [{ "path": "../packages/shared" }, { "path": "../client" }]
+}

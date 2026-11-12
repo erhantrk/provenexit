@@ -6,6 +6,7 @@
     "packages/shared",
     "enclave",
     "client",
+    "mcp",
     "e2e"
   ],
   "engines": {
@@ -13,10 +14,11 @@
   },
   "scripts": {
     "typecheck": "tsc -b",
-    "test": "npm test -w packages/shared -w client -w enclave --if-present",
+    "test": "npm test -w packages/shared -w client -w enclave -w mcp --if-present",
     "test:contract": "cd contracts/near && cargo test",
     "e2e": "npm test -w e2e",
-    "build:status": "tsc -b && node scripts/build-status.mjs"
+    "build:status": "tsc -b && node scripts/build-status.mjs",
+    "build:mcp": "tsc -b && node mcp/build.mjs"
   },
   "devDependencies": {
     "typescript": "5.9.3",

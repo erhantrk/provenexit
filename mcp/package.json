@@ -1,0 +1,17 @@
+{
+  "name": "@plr/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "provenexit-mcp": "./dist/provenexit-mcp.mjs" },
+  "scripts": {
+    "build": "tsc -b && node build.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "@plr/client": "*",
+    "@plr/shared": "*",
+    "zod": "^3.25.0"
+  }
+}

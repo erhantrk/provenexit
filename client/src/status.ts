@@ -566,3 +566,31 @@ export async function getRegistryStatus(opts: StatusOptions = {}): Promise<{ err
   const s = await getStatus({ ...opts, egress: null });
   return { error: s.error, registry: s.registry, instance: s.instance };
 }
+
+/** A configured client for the live exit: what `plr vpn` builds from the same env variables and defaults. */
+export interface OpenedExit {
+  exitUrl: string;
+  registryId: string;
+  rpcUrl: string;
+  client: VpnClient;
+  registry: TracingRegistry;
+}
+
+/**
+ * Builds the {@link VpnClient} for the configured exit (defaults baked at build time, overridable by `opts` and
+ * `PLR_VPN_URL` / `PLR_VPN_REGISTRY` / `PLR_TRUSTED_ROOT` / `PLR_NEAR_RPC`).
+ * @throws Error with a readable message when the configuration is invalid
+ */
+export function openExit(opts: StatusOptions = {}): OpenedExit {
+  const cfg = resolveConfig(opts);
+  const T = { verify: 25_000, egress: 15_000, chain: 8_000, ...(opts.timeouts ?? {}) };
+  const registry = new TracingRegistry(new NearRegistry({ rpcUrl: cfg.rpcUrl, contractId: cfg.registry, timeoutMs: T.chain }));
+  const client = new VpnClient({
+    exitUrl: cfg.exitUrl,
+    registry,
+    trustedRoot: cfg.trustedRoot,
+    ...(opts.verifier !== undefined ? { verifier: opts.verifier } : {}),
+    timeouts: { attestMs: Math.min(15_000, T.verify), connectMs: T.egress },
+  });
+  return { exitUrl: cfg.exitUrl, registryId: cfg.registry, rpcUrl: cfg.rpcUrl, client, registry };
+}
