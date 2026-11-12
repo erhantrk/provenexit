@@ -1,0 +1,35 @@
+name: tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  suites:
+    name: unit suites + live-exit replay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npx tsc -b
+      - run: npm run build -w @plr/enclave
+      - run: npm test
+      - name: replay the live exit's attestation offline
+        run: node client/dist/cli.js vpn verify --fixture fixtures/live-exit | tee /dev/stderr | grep -q "VERIFIED (FIXTURE REPLAY"
+  contract:
+    name: NEAR registry contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts/near
+      - run: cd contracts/near && cargo test --release
