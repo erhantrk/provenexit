@@ -136,7 +136,7 @@ Digest rule **V1 only** (dstack `RuntimeEvent::preimage`, `EventLogVersion::V1`)
 
 The measured document in INTEL mode is **the dstack app-compose** (the string `DstackClient.info().tcb_info.app_compose`),
 not the SPEC-VPN §2 compose. `compose_hash = SHA256(utf8(app_compose))` and it must equal the `compose-hash`
-event (unchanged rule SPEC §9 step 7). Example (abbreviated, values illustrative; the real one comes from S1/T14):
+event (unchanged rule SPEC §9 step 7). Example (abbreviated, values illustrative; the real one comes from the live exit's quote):
 
 ```json
 {

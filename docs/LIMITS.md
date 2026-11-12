@@ -155,7 +155,7 @@ Intel, the TDX module and the dstack OS image are trusted roots. Micro-architect
   (see [Collateral freshness](#collateral-freshness) for what remains).
 - **The image rebuild was shown on one machine only.** Closed: besides two fresh clones on the owner's machine, the
   "verify exit image" GitHub Actions workflow rebuilds the image on a GitHub-hosted `ubuntu` `linux/amd64` runner on
-  every push and prints `MATCH` (for example run
+  every push to `main` and prints `MATCH` (for example run
   [43319605400](https://github.com/erhantrk/provenexit/actions/runs/43319605400) on commit `47d9794`, 2026-11-12:
   built `sha256:74c6d1c5…2785` with BuildKit v0.34.2).
 - **A test compose was allowlisted.** Closed: the 2026-11-09 spike compose `b9823a79…d05f` (a quote dump, never an

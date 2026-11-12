@@ -22,7 +22,7 @@ listed in [VERIFY.md](VERIFY.md#the-on-chain-record).
 
 ## Commit timeline
 
-From `git log` (commit dates).
+From `git log` (commit dates, converted to UTC).
 
 | date | commits | what |
 |---|---|---|
@@ -84,7 +84,7 @@ and the previous compose `9411d0f7…` (image `7e53f383…`, registration `EZDve
 ## 2026-11-12, evening: second-machine rebuild, code-hash pin, fresh collateral
 
 - The "verify exit image" workflow (commit `d675a32`) rebuilds the image on a GitHub-hosted `linux/amd64` runner on
-  every push; it prints `MATCH`.
+  every push to `main`; it prints `MATCH`.
 - The npm package `provenexit` (CLI and MCP server, defaults from `deploy/testnet/env.live`) was added, and the
   status site <https://provenexit.vercel.app> went live.
 - The client pins the registry contract's code hash (`E_REGISTRY_CODE_HASH`) and fetches fresh Intel collateral

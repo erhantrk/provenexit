@@ -32,8 +32,6 @@ connection is refused.
 the hardware signs what is running, a public registry says whether that build is still approved, and your client
 checks both before every new connection.
 
-Demo video: (link added at submission)
-
 ## Live
 
 | what | where |
@@ -73,30 +71,30 @@ Rebuild the exit image from this checkout and compare it with the digest the exi
 scripts/verify-exit-image.sh
 ```
 
-It prints `MATCH`. The same script runs on a GitHub-hosted `linux/amd64` runner on every push (the "verify exit
-image" badge). More, including the full local demo with revocation: [docs/VERIFY.md](docs/VERIFY.md).
+It prints `MATCH`. The same script runs on a GitHub-hosted `linux/amd64` runner on every push to
+`main` (the "verify exit image" badge). More, including the full local demo with revocation: [docs/VERIFY.md](docs/VERIFY.md).
 
 ## The 20 client checks
 
-In this order, before every new connection. The first failure refuses the exit with its error code.
+In this order, before every new connection, as the client prints them. The first failure refuses the exit.
 
-1. registry contract code hash matches the pinned build (`E_REGISTRY_CODE_HASH`)
+1. registry contract code hash matches the pinned build (view_account.code_hash) (`E_REGISTRY_CODE_HASH`)
 2. response well-formed, fresh 32-byte nonce
 3. quote structure (TDX v4)
 4. TEE type is TDX
 5. pinned root == registry root == verifier root
-6. fresh Intel collateral fetched by the client, not the exit's copy (`E_COLLATERAL_FETCH`)
-7. quote signature chain to the Intel root
+6. fresh Intel collateral fetched by the client from the PCCS (not the exit's copy) (`E_COLLATERAL_FETCH`)
+7. quote signature chain to root
 8. Intel TCB status accepted
 9. TD debug attribute clear
 10. report_data binds the exit's keys
-11. report_data binds the client's nonce as a session quote
+11. report_data binds client nonce as a session quote (SHA256("PLR-v1/session-nonce" ‖ nonce))
 12. event log digests and boot sequence
 13. event log replays to RTMR3
-14. app-compose matches the measured compose hash
+14. app-compose matches measured compose-hash
 15. dstack compose: images pinned by digest, exit logging disabled
-16. compose hash allowed by the registry
-17. OS measurement allowed by the registry
+16. compose hash allowed by registry
+17. OS measurement allowed by registry
 18. instance registered with matching keys
 19. registry re-check before each connection (compose, OS, instance)
 20. destinations resolved by the exit (remote DNS); the client never resolves them
@@ -112,23 +110,20 @@ Each one in full in [docs/LIMITS.md](docs/LIMITS.md).
 - [NEAR testnet only](docs/LIMITS.md#testnet-only); one live exit.
 - [The exit sees your destinations](docs/LIMITS.md#the-exit-sees-your-destinations); it proves the code does not keep them.
 - ["No logs" covers the attested code, not the operator's network](docs/LIMITS.md#no-logs-covers-the-attested-code-not-the-operators-network).
-- [TLS is still needed for content](docs/LIMITS.md#tls-is-still-needed-for-content).
-- [Timing and sizes are visible](docs/LIMITS.md#metadata-timing-and-sizes); no padding, no cover traffic.
-- [Proxy mode only](docs/LIMITS.md#proxy-mode-only): TCP through SOCKS5, no UDP, no system-wide tunnel.
-- [Direct connection only](docs/LIMITS.md#direct-connection-only): no `HTTP_PROXY` support.
+- [TLS is still needed for content](docs/LIMITS.md#tls-is-still-needed-for-content); [timing and sizes are visible](docs/LIMITS.md#metadata-timing-and-sizes) (no padding, no cover traffic).
+- [Proxy mode only](docs/LIMITS.md#proxy-mode-only): TCP through SOCKS5, no UDP, no system-wide tunnel; [direct connection only](docs/LIMITS.md#direct-connection-only), no `HTTP_PROXY` support.
 - [The local demo stack uses a MOCK root, not Intel](docs/LIMITS.md#the-local-demo-stack-uses-a-mock-root).
 - [Collateral freshness is bounded by Intel's CRL interval](docs/LIMITS.md#collateral-freshness).
 - [The OS measurement was observed, not reproduced](docs/LIMITS.md#the-os-measurement-was-observed-not-reproduced).
 - [A matching image digest does not prove the source is honest](docs/LIMITS.md#what-a-matching-image-digest-proves).
-- [One owner key decides the allowlist](docs/LIMITS.md#one-owner-key-decides-the-allowlist).
-- [The registry RPC endpoint is trusted](docs/LIMITS.md#the-registry-rpc-endpoint-is-trusted).
+- [One owner key decides the allowlist](docs/LIMITS.md#one-owner-key-decides-the-allowlist); [the registry RPC endpoint is trusted](docs/LIMITS.md#the-registry-rpc-endpoint-is-trusted).
 - [Phala's gateway terminates TLS](docs/LIMITS.md#phalas-gateway-terminates-tls) (it sees only tunnel ciphertext).
 - [The fixture replay proves the past](docs/LIMITS.md#the-fixture-replay-proves-the-past), not the present.
 - [Intel, the dstack OS and side channels are trusted / out of scope](docs/LIMITS.md#tee-vendor-trust-and-side-channels).
 
 ## Tracks
 
-Privacy & Private AI (main) · AI Security & Defense · Open Innovation
+Built for the NEAR hackathon (2026-11). Tracks: Privacy & Private AI (main) · AI Security & Defense · Open Innovation
 
 ## Prior code
 
