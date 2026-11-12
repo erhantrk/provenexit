@@ -86,8 +86,8 @@ describe("verifyAttestation extra", () => {
   it("reports every check in order", async () => {
     const s = setup(); const n = randomBytes(32);
     const v = await s.run(await s.bundle(n), n);
-    // TCB and COMPOSE_POLICY are INTEL-only (SPEC-TDX §3.1): a MOCK verification never pushes them.
-    const mockChecks = Object.entries(CHECKS).filter(([k]) => k !== "TCB" && k !== "COMPOSE_POLICY").map(([, v2]) => v2);
+    // TCB, COMPOSE_POLICY and COLLATERAL are INTEL-only (SPEC-TDX §3.1): a MOCK verification never pushes them.
+    const mockChecks = Object.entries(CHECKS).filter(([k]) => k !== "TCB" && k !== "COMPOSE_POLICY" && k !== "COLLATERAL").map(([, v2]) => v2);
     expect(v.checks).toEqual(mockChecks);
   });
 

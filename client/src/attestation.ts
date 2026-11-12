@@ -6,8 +6,6 @@
 import { randomBytes } from "node:crypto";
 import {
   PlrError,
-  fromHex,
-  isHex,
   isInstanceRecord,
   isPlrError,
   toHex,
@@ -18,10 +16,7 @@ import {
   type RegistryReader,
   type VerifiedRouter,
 } from "@plr/shared";
-import { fetchPccsCollateral } from "./pccs.js";
-
-/** `MAX_TDX_QUOTE_BYTES` (SPEC-TDX §0) in hex. */
-const MAX_PCCS_QUOTE_HEX = 2 * 8192;
+import { collateralSource, fetchPccsCollateral, type CollateralSource } from "./pccs.js";
 
 /** A verified attestation plus the nonce it was verified with (the tunnel / session binds that nonce). */
 export interface AttestationSession {
@@ -31,6 +26,8 @@ export interface AttestationSession {
   at: number;
   /** The published `app-compose.json` exactly as received (its hash was verified against the quote). */
   appCompose: string;
+  /** INTEL mode only: where the collateral of this verification came from (the client's PCCS, or the exit). */
+  collateral?: CollateralSource;
 }
 
 export interface AttestationCacheOptions {
@@ -45,10 +42,13 @@ export interface AttestationCacheOptions {
   /** Monotonic clock in ms. */
   clock: () => number;
   /**
-   * `PLR_PCCS_URL` (TASKS T24): fetch fresh Intel collateral for the quote from this PCCS instead of using the
-   * exit's copy. INTEL mode only; unset ⇒ the bundle's `collateral` field is used as before.
+   * `PLR_PCCS_URL` (TASKS T24), INTEL mode only: the PCCS this client fetches fresh Intel collateral from, instead
+   * of using the exit's copy. Unset ⇒ `DEFAULT_PCCS_URL` (on by default, fails closed with `E_COLLATERAL_FETCH`);
+   * `"exit"` ⇒ opt out and use the bundle's `collateral` field.
    */
   pccsUrl?: string;
+  /** Tests only: replaces the PCCS fetch (default `fetchPccsCollateral`), so no test needs Intel's service. */
+  fetchCollateral?: (pccsUrl: string, quote: Uint8Array) => Promise<Record<string, unknown>>;
 }
 
 export class AttestationCache {
@@ -64,19 +64,34 @@ export class AttestationCache {
     return this.#o.ttlMs;
   }
 
+  /** Where an INTEL verification takes its collateral from; undefined for a MOCK verifier (it has no collateral). */
+  get collateral(): CollateralSource | undefined {
+    return this.#o.verifier.rootKind === "INTEL" ? collateralSource(this.#o.pccsUrl) : undefined;
+  }
+
   /** Fetches and verifies a fresh attestation (new random nonce every call) and caches it. @throws PlrError */
   async attest(): Promise<AttestationSession> {
     const nonce = new Uint8Array(randomBytes(32));
     try {
-      const bundle = await this.#withFreshCollateral(await this.#o.fetchBundle(nonce));
+      const bundle = await this.#o.fetchBundle(nonce);
+      // SPEC-TDX §1.5 / TASKS T24: by default the collateral comes from the client's own PCCS fetch, made inside
+      // `verifyAttestation` right before the DCAP check. The exit's copy is untrusted for freshness.
+      const src = this.collateral;
       const verified = await verifyAttestation({
         bundle,
         nonce,
         verifier: this.#o.verifier,
         registry: this.#o.registry,
         trustedRoot: this.#o.trustedRoot,
+        ...(src?.source === "pccs" ? { freshCollateral: (quote: Uint8Array) => (this.#o.fetchCollateral ?? fetchPccsCollateral)(src.url, quote) } : {}),
       });
-      const session: AttestationSession = { verified, attNonce: nonce, at: this.#o.clock(), appCompose: bundle.app_compose };
+      const session: AttestationSession = {
+        verified,
+        attNonce: nonce,
+        at: this.#o.clock(),
+        appCompose: bundle.app_compose,
+        ...(src !== undefined ? { collateral: src } : {}),
+      };
       this.#session = session;
       return session;
     } catch (e) {
@@ -84,23 +99,6 @@ export class AttestationCache {
       if (isPlrError(e)) throw e;
       throw new PlrError("E_BAD_RESPONSE");
     }
-  }
-
-  /**
-   * SPEC-TDX §1.5 / TASKS T24: in INTEL mode with `pccsUrl` set, replace the exit's `collateral` with a fresh
-   * copy fetched from the PCCS (`getCollateral`) before verification. The fetch is async and runs here, so
-   * `verifyAttestation` stays synchronous and receives the value through the bundle field. The exit's own copy is
-   * untrusted anyway; a stale or missing one must not decide whether the client can verify.
-   * @throws PlrError E_BAD_RESPONSE (malformed quote), E_COLLATERAL (PCCS unreachable / not collateral)
-   */
-  async #withFreshCollateral(bundle: AttestationBundle): Promise<AttestationBundle> {
-    const pccsUrl = this.#o.pccsUrl;
-    if (pccsUrl === undefined || this.#o.verifier.rootKind !== "INTEL") return bundle;
-    const q = bundle.quote;
-    if (typeof q !== "string" || !isHex(q) || q.length === 0 || q.length > MAX_PCCS_QUOTE_HEX) {
-      throw new PlrError("E_BAD_RESPONSE", "quote");
-    }
-    return { ...bundle, collateral: await fetchPccsCollateral(pccsUrl, fromHex(q)) };
   }
 
   /** The cached verification if it is younger than `ttlMs`, else a fresh one (shared between concurrent callers). */

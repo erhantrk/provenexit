@@ -46,7 +46,7 @@ Offline (no network): the same exit's quote and registry state, captured 2026-11
 npm ci && npx tsc -b && node client/dist/cli.js vpn verify --fixture fixtures/live-exit
 ```
 
-You see 16 `✔` lines and `✔ VERIFIED (FIXTURE REPLAY …)`. The full local demo with revocation (needs Rust) is [option 1](#try-it-all-options).
+You see 16 `✔` lines, one `·` line (the replay uses the recorded Intel collateral instead of fetching fresh collateral) and `✔ VERIFIED (FIXTURE REPLAY …)`. The full local demo with revocation (needs Rust) is [option 1](#try-it-all-options).
 
 ## Numbers
 
@@ -110,8 +110,9 @@ A keyless NEAR contract on testnet ([`vpnreg.pe-owner-erhan.testnet`](https://te
    npm ci && npx tsc -b && node client/dist/cli.js vpn verify --fixture fixtures/live-exit
    ```
 
-   - see: every check `✔`, then `✔ VERIFIED (FIXTURE REPLAY …)` with the registration tx. No network is used; the
-     DCAP check runs at the capture time (2026-11-12).
+   - see: every check `✔`, then `✔ VERIFIED (FIXTURE REPLAY …)` with the registration tx. No network is used: the
+     DCAP check runs at the capture time (2026-11-12) on the recorded collateral, so the one line a live run adds
+     (`fresh Intel collateral fetched by the client from the PCCS`) is printed as `·` not checked.
    - the older test-VM quote (2026-11-09, before the exit existed) is kept too:
      `node client/dist/cli.js vpn verify --fixture fixtures/phala-spike/replay`. It shows `✔ quote signature chain to root`, `✔ Intel TCB status accepted`, then the expected refusal
      `✘ E_REPORT_DATA_KEYS` — the recorded 2026-11-09 Phala CVM asked dstack for `report_data = 64 × 0x42`, so it
@@ -252,10 +253,12 @@ Every limit and disclosure from the earlier README that applies to the code in t
   (`MOCK ROOT (local test root, NOT Intel)`). Mock-host limits, which real TDX removes: the quote socket is a 0600
   Unix socket of the operator's uid (any same-uid process can obtain a genuine quote for **any** `report_data`), the
   root secret is a 0600 file of the same uid, and the TD is a set of same-uid processes.
-- **Collateral freshness window (R7).** The exit serves the Intel collateral (PCK CRL, TCB info, QE identity) it
-  fetched from a PCCS. `dcap-qvl` checks it against the client's clock, so it cannot be expired — but an exit can
-  serve a CRL that is *stale yet unexpired* and hide a freshly revoked platform. Setting `PLR_PCCS_URL` on the client
-  makes the client fetch fresh collateral itself (T24); the residual window is the CRL's own update interval.
+- **Collateral freshness window (R7).** In INTEL mode the client fetches the Intel collateral (PCK CRL, TCB info,
+  QE identity) itself, by default from Intel's PCS (`https://api.trustedservices.intel.com`; `PLR_PCCS_URL` names
+  another PCCS), and refuses the exit with `E_COLLATERAL_FETCH` when it cannot — it never falls back to the exit's
+  copy. The residual window is the CRL's own update interval. `PLR_PCCS_URL=exit` opts out (the exit's copy, which
+  can be *stale yet unexpired*), and the offline fixture replay uses the recorded collateral; both say so in
+  `vpn verify`.
 - **The OS measurement was observed, not reproduced (T26 not done).** The allowlisted value `821d442f…d323d` is the
   `SHA256(mr_td ‖ rtmr0 ‖ rtmr1 ‖ rtmr2)` of the dstack OS image that booted, read from the quote. It was not
   re-derived with `dstack-mr` from the dstack release. The owner approves the value they saw, not one computed from
@@ -371,7 +374,7 @@ Older history (commit timeline, the removed router and multi-chain code, the Oct
 `@phala/dstack-sdk` 0.5.8 (Apache-2.0), `yaml` 2.8.1, `@modelcontextprotocol/sdk`, `zod`, `esbuild`,
 `vitest`, `near-sdk` 5.29.1, the `dcap-qvl` 0.7.1 crate (MIT), `sha2`, `p256`, `ed25519-dalek`.
 Test vectors from dcap-qvl's `sample/` (MIT). Infrastructure: Phala Cloud (dstack: the live exit and a test CVM), NEAR testnet,
-FASTNEAR RPC, Phala PCCS.
+FASTNEAR RPC, Phala PCCS (the exit), Intel PCS (the client).
 
 ## Other project by the same submitter (rule Q-015)
 

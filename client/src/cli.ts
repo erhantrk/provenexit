@@ -5,7 +5,7 @@
  * allow_compose / allow_os).
  * Env: PLR_VPN_URL, PLR_VPN_REGISTRY, PLR_NEAR_RPC, PLR_TRUSTED_ROOT; optional PLR_VPN_SOCKS_PORT (default 18180),
  * PLR_VPN_ATTEST_TTL_MS (default 60000), PLR_VPN_ENTRY_URL (set ⇒ two-hop, SPEC-VPN §10, with PLR_VPN_URL as the exit),
- * PLR_PCCS_URL (INTEL mode: fetch fresh Intel collateral from that PCCS instead of the exit's copy).
+ * PLR_PCCS_URL (INTEL mode: the PCCS the client fetches fresh Intel collateral from; default Intel's PCS, `exit` = use the exit's copy).
  */
 import { createHash, randomBytes } from "node:crypto";
 import { realpathSync } from "node:fs";
@@ -37,9 +37,9 @@ import {
   type VerifiedRouter,
 } from "@plr/shared";
 import { NearRegistry, checkRpcUrl } from "./near-registry.js";
-import { TracingRegistry, checkLines, formatCheckLine } from "./verify-report.js";
+import { TracingRegistry, checkLines, formatCheckLine, type CollateralMode } from "./verify-report.js";
 import { recheckRegistry, type AttestationSession } from "./attestation.js";
-import { isPccsUrl } from "./pccs.js";
+import { COLLATERAL_FROM_EXIT, DEFAULT_PCCS_URL, collateralSource, fetchPccsCollateral, isPccsUrl, type CollateralSource } from "./pccs.js";
 import { VpnClient, VPN_ATTEST_TTL_MS } from "./vpn/client.js";
 import { TwoHopClient } from "./vpn/twohop.js";
 import { startVpn, type VpnConnector } from "./vpn/socks5-server.js";
@@ -62,7 +62,7 @@ export interface VpnCliConfig {
   trustedRoot: Uint8Array;
   socksPort: number;
   attestTtlMs: number;
-  /** `PLR_PCCS_URL`: fetch fresh Intel collateral from this PCCS (INTEL mode); undefined = use the exit's copy. */
+  /** `PLR_PCCS_URL` (INTEL mode): the PCCS to fetch fresh collateral from; undefined = `DEFAULT_PCCS_URL`, `"exit"` = use the exit's copy. */
   pccsUrl: string | undefined;
 }
 
@@ -77,8 +77,8 @@ const VPN_USAGE = `usage: plr vpn             verify the VPN exit, then serve a 
        plr vpn verify      print every attestation + registry check of the VPN exit (✔/✘); in two-hop mode both
                             hops and the operator-organization check
        plr vpn verify --fixture <dir>
-                            replay a captured fixture (SPEC-TDX §3.3); needs no network and runs the DCAP check
-                            at the capture time
+                            replay a captured fixture (SPEC-TDX §3.3); needs no network, uses the recorded
+                            collateral and runs the DCAP check at the capture time
        plr vpn inspect     INTEL checks 1–7b without the registry: compose hash, OS measurement, key hash, TCB and
                             images — the values the owner approves with allow_compose / allow_os
 env:   PLR_VPN_URL       VPN exit URL (default ${DEFAULTS.vpnExit})
@@ -87,8 +87,10 @@ env:   PLR_VPN_URL       VPN exit URL (default ${DEFAULTS.vpnExit})
        PLR_VPN_REGISTRY  NEAR VPN registry contract account id (required)
        PLR_NEAR_RPC      (default ${DEFAULTS.rpc}; https, or http to a loopback host only)
        PLR_TRUSTED_ROOT  pinned attestation root, 128 hex (required)
-       PLR_PCCS_URL      fetch fresh Intel collateral from this PCCS instead of the exit's copy
-                            (https; INTEL mode only)
+       PLR_PCCS_URL      INTEL mode only: the PCCS this client fetches fresh Intel collateral from, instead of
+                            trusting the exit's copy (https; default ${DEFAULT_PCCS_URL}, Intel's own
+                            service). If it cannot be reached the exit is refused (E_COLLATERAL_FETCH).
+                            PLR_PCCS_URL=${COLLATERAL_FROM_EXIT} opts out: use the collateral the exit serves (offline use)
        PLR_VPN_SOCKS_PORT (default ${DEFAULTS.vpnSocksPort}), PLR_VPN_ATTEST_TTL_MS (default ${VPN_ATTEST_TTL_MS}; 0 = attest every connection)`;
 
 const USAGE = VPN_USAGE;
@@ -103,11 +105,24 @@ function trustedRootFrom(env: Record<string, string | undefined>): Uint8Array {
   return trustedRoot;
 }
 
-/** `PLR_PCCS_URL` (TASKS T24): unset ⇒ undefined (use the bundle's collateral); else an https URL (SPEC-TDX §4.1). */
+/**
+ * `PLR_PCCS_URL` (TASKS T24): unset ⇒ undefined (the client fetches from `DEFAULT_PCCS_URL`); `exit` ⇒ the opt-out
+ * (use the bundle's collateral); else an https URL (SPEC-TDX §4.1).
+ */
 function pccsUrlFrom(env: Record<string, string | undefined>): string | undefined {
   const u = env.PLR_PCCS_URL || undefined;
-  if (u !== undefined && !isPccsUrl(u)) throw new ConfigError("PLR_PCCS_URL must be an https URL (at most 2048 chars)");
+  if (u !== undefined && u !== COLLATERAL_FROM_EXIT && !isPccsUrl(u)) {
+    throw new ConfigError(`PLR_PCCS_URL must be an https URL (at most 2048 chars) or "${COLLATERAL_FROM_EXIT}"`);
+  }
   return u;
+}
+
+/** `plr vpn verify` header line: where the Intel collateral of this run comes from (INTEL mode only). */
+function collateralLine(c: CollateralSource | undefined): string | undefined {
+  if (c === undefined) return undefined;
+  return c.source === "pccs"
+    ? `  collateral: fetched fresh by this client from ${c.url}`
+    : `  collateral: the exit's own copy (PLR_PCCS_URL=${COLLATERAL_FROM_EXIT}); its freshness is not checked against a PCCS`;
 }
 
 function rpcUrlFrom(env: Record<string, string | undefined>): string {
@@ -229,7 +244,7 @@ async function printInstance(io: CliIo, registry: TracingRegistry, s: Attestatio
 }
 
 async function cmdVpnVerify(cfg: VpnCliConfig, registry: TracingRegistry, client: VpnClient, io: CliIo): Promise<number> {
-  const intel = client.rootKind === "INTEL";
+  const opts = { intel: client.rootKind === "INTEL", collateral: client.collateral?.source ?? ("pccs" as const) };
   io.out(`PLR VPN verify`);
   io.out(`  exit:     ${client.exitUrl}`);
   io.out(`  registry: ${registry.contractId} on ${registry.chain} (${cfg.rpcUrl})`);
@@ -237,18 +252,20 @@ async function cmdVpnVerify(cfg: VpnCliConfig, registry: TracingRegistry, client
   const explorer = explorerLine(cfg);
   if (explorer !== undefined) io.out(explorer);
   io.out(`  pinned root: ${client.rootKind} ROOT ${toHex(cfg.trustedRoot)}`);
+  const collateral = collateralLine(client.collateral);
+  if (collateral !== undefined) io.out(collateral);
   io.out("");
   let session: AttestationSession;
   try {
     session = await client.attestSession();
   } catch (e) {
-    for (const l of checkLines(e, registry.lastCall, { intel })) io.out(formatCheckLine(l));
+    for (const l of checkLines(e, registry.lastCall, opts)) io.out(formatCheckLine(l));
     io.out(`  · ${RECHECK_LINE}  (not checked)`);
     io.out("");
     io.out(`✘ REFUSED — ${errCode(e)}. No connection would be tunnelled through this exit.`);
     return 1;
   }
-  for (const l of checkLines(undefined, undefined, { intel })) io.out(formatCheckLine(l));
+  for (const l of checkLines(undefined, undefined, opts)) io.out(formatCheckLine(l));
   try {
     await recheckRegistry(registry, session.verified);
     io.out(`  ✔ ${RECHECK_LINE}`);
@@ -273,18 +290,18 @@ async function verifyHop(
   attest: () => Promise<AttestationSession>,
   check: (s: AttestationSession) => Promise<string>,
   orgLines: (code: string | undefined, org: string | undefined) => string[],
-  intel: boolean,
+  opts: { intel: boolean; collateral: CollateralMode },
 ): Promise<{ session: AttestationSession; org: string } | { error: unknown }> {
   let session: AttestationSession;
   try {
     session = await attest();
   } catch (e) {
-    for (const l of checkLines(e, registry.lastCall, { intel })) io.out(formatCheckLine(l));
+    for (const l of checkLines(e, registry.lastCall, opts)) io.out(formatCheckLine(l));
     io.out(`  · ${RECHECK_LINE}  (not checked)`);
     for (const l of orgLines(undefined, undefined)) io.out(`  · ${l}  (not checked)`);
     return { error: e };
   }
-  for (const l of checkLines(undefined, undefined, { intel })) io.out(formatCheckLine(l));
+  for (const l of checkLines(undefined, undefined, opts)) io.out(formatCheckLine(l));
   try {
     const org = await check(session);
     io.out(`  ✔ ${RECHECK_LINE}`);
@@ -310,7 +327,7 @@ async function verifyHop(
 }
 
 async function cmdTwoHopVerify(cfg: VpnCliConfig, registry: TracingRegistry, client: TwoHopClient, io: CliIo): Promise<number> {
-  const intel = client.rootKind === "INTEL";
+  const opts = { intel: client.rootKind === "INTEL", collateral: client.collateral?.source ?? ("pccs" as const) };
   io.out(`PLR VPN verify (two-hop)`);
   io.out(`  entry:    ${client.entryUrl}`);
   io.out(`  exit:     ${client.exitUrl}  (reached only through the entry)`);
@@ -319,6 +336,8 @@ async function cmdTwoHopVerify(cfg: VpnCliConfig, registry: TracingRegistry, cli
   const explorer = explorerLine(cfg);
   if (explorer !== undefined) io.out(explorer);
   io.out(`  pinned root: ${client.rootKind} ROOT ${toHex(cfg.trustedRoot)}`);
+  const collateral = collateralLine(client.collateral);
+  if (collateral !== undefined) io.out(collateral);
   io.out("");
   const refused = (e: unknown): number => {
     io.out("");
@@ -328,7 +347,7 @@ async function cmdTwoHopVerify(cfg: VpnCliConfig, registry: TracingRegistry, cli
   io.out(`entry hop (direct)`);
   const entry = await verifyHop(io, registry, () => client.attestEntrySession(), (s) => client.checkEntry(s), (_c, org) => [
     `entry operator approved by the registry owner${org !== undefined ? ` (organization ${org})` : ""}`,
-  ], intel);
+  ], opts);
   if ("error" in entry) {
     io.out(`exit hop  (not checked)`);
     return refused(entry.error);
@@ -337,7 +356,7 @@ async function cmdTwoHopVerify(cfg: VpnCliConfig, registry: TracingRegistry, cli
   const exit = await verifyHop(io, registry, () => client.attestExitSession(), (s) => client.checkExit(s, entry.org), (code, org) => [
     `exit operator approved by the registry owner${org !== undefined ? ` (organization ${org})` : code === "E_SAME_OPERATOR" ? ` (organization ${entry.org})` : ""}`,
     `entry and exit run by different organizations${org !== undefined ? ` (${entry.org} ≠ ${org})` : ""}`,
-  ], intel);
+  ], opts);
   if ("error" in exit) return refused(exit.error);
   io.out(`  ✔ ${REMOTE_DNS_LINE}`);
   io.out(`  ✔ the entry sees only the exit's address; destinations and payload are end-to-end encrypted to the exit`);
@@ -409,14 +428,29 @@ async function cmdVpnInspect(env: Record<string, string | undefined>, io: CliIo,
     io.err(VPN_USAGE);
     return 2;
   }
+  let source: CollateralSource;
+  try {
+    source = collateralSource(pccsUrlFrom(env));
+  } catch (e) {
+    io.err(`config error: ${e instanceof ConfigError ? e.message : errCode(e)}`);
+    io.err(VPN_USAGE);
+    return 2;
+  }
   io.out(`PLR VPN inspect`);
   io.out(`  exit:     ${exitUrl}`);
   io.out(`  root:     INTEL ROOT (Intel SGX Root CA)`);
+  io.out(collateralLine(source) ?? "");
   io.out("");
   const nonce = new Uint8Array(randomBytes(32));
   let r: IntelInspection;
   try {
-    r = inspectIntelBundle(await fetchAttestationDirect(normalizeExitUrl(exitUrl), nonce), nonce, verifier);
+    let bundle = await fetchAttestationDirect(normalizeExitUrl(exitUrl), nonce);
+    // Same rule as `vpn verify`: the TCB the owner reads here comes from collateral this client fetched itself.
+    if (source.source === "pccs" && (bundle as AttestationBundle | null)?.root_kind === "INTEL") {
+      if (!isHex(bundle.quote) || bundle.quote.length === 0 || bundle.quote.length > 2 * 8192) throw new PlrError("E_BAD_RESPONSE", "quote");
+      bundle = { ...bundle, collateral: await fetchPccsCollateral(source.url, fromHex(bundle.quote)) };
+    }
+    r = inspectIntelBundle(bundle, nonce, verifier);
   } catch (e) {
     io.out(`✘ ${errCode(e)}`);
     return 1;
@@ -444,17 +478,19 @@ async function cmdVpnVerifyFixture(dir: string, io: CliIo): Promise<number> {
   io.out(`  exit:     ${fixture.meta.exit_url}`);
   io.out(`  registry: ${fixture.meta.registry} (snapshot, no network)`);
   io.out(`  pinned root: INTEL ROOT ${toHex(INTEL_ROOT_P256)}`);
+  io.out(`  collateral: the recorded copy from the capture (offline replay; no PCCS is contacted)`);
   io.out("");
+  const replay = { intel: true, collateral: "recorded" as const };
   let verified: VerifiedRouter;
   try {
     verified = await verifyFixture(dir);
   } catch (e) {
-    for (const l of checkLines(e, undefined, { intel: true })) io.out(formatCheckLine(l));
+    for (const l of checkLines(e, undefined, replay)) io.out(formatCheckLine(l));
     io.out("");
     io.out(`✘ REFUSED — ${errCode(e)}. The fixture does not verify.`);
     return 1;
   }
-  for (const l of checkLines(undefined, undefined, { intel: true })) io.out(formatCheckLine(l));
+  for (const l of checkLines(undefined, undefined, replay)) io.out(formatCheckLine(l));
   io.out("");
   io.out(fixtureReplayLine(fixture.meta));
   printVpnSummary(io, { verified, appCompose: fixture.bundle.app_compose });
@@ -603,6 +639,8 @@ if (isMain()) {
   runCli(process.argv.slice(2), process.env).then(
     (code) => {
       process.exitCode = code;
+      // A PCCS fetch that timed out is abandoned, not cancelled: do not let its sockets keep the process alive.
+      setTimeout(() => process.exit(code), 1_000).unref();
     },
     (e: unknown) => {
       console.error(`✘ ${e instanceof PlrError ? e.code : "unexpected error"}`);

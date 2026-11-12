@@ -16,6 +16,8 @@ export interface VerifyCheck {
   ok: boolean;
   /** "" when ok; the error code of the failing check; "not checked" for checks after the failing one. */
   detail: string;
+  /** Why a check was not run when the reason is not an earlier failure (collateral taken from the exit or a recording). */
+  note?: string;
 }
 
 export interface VerifyReport {
@@ -32,20 +34,21 @@ export interface VerifyReport {
 
 const errCode = (e: unknown): string => (isPlrError(e) ? e.code : e instanceof Error ? e.message : "error");
 
-const fromLine = (l: CheckLine): VerifyCheck => ({
+export const fromLine = (l: CheckLine): VerifyCheck => ({
   name: l.name,
   ok: l.status === "pass",
   detail: l.status === "pass" ? "" : l.status === "fail" ? (l.code ?? "error") : "not checked",
+  ...(l.note !== undefined ? { note: l.note } : {}),
 });
 
 /**
  * Runs exactly what `plr vpn verify` runs (attest, registry re-check) and returns the ordered check list
- * (INTEL: 16 lines + re-check + remote DNS). Never throws.
+ * (INTEL: 17 lines + re-check + remote DNS). Never throws.
  */
 export async function verifyVpnReport(client: VpnClient, registry: TracingRegistry): Promise<VerifyReport> {
   const root = client.rootKind;
   const intel = root === "INTEL";
-  const opts = { intel };
+  const opts = { intel, collateral: client.collateral?.source ?? ("pccs" as const) };
   const refused = (e: unknown, lines: CheckLine[], recheck: "skip" | "fail"): VerifyReport => {
     const code = errCode(e);
     const checks = lines.map(fromLine);

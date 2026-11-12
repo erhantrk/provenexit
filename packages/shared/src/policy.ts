@@ -59,6 +59,13 @@ export interface VerifyAttestationParams {
   trustedRoot: Uint8Array;
   /** Clock for the instance-expiry check (default `Date.now()`). */
   now?: number;
+  /**
+   * INTEL mode only: fetches fresh Intel collateral for the quote from a PCCS chosen by the client. When set, its
+   * result replaces the bundle's `collateral` (the exit's copy, which may be stale yet unexpired) for the DCAP
+   * check, and {@link CHECKS.COLLATERAL} is reported. Runs after the root check, right before the signature
+   * check. Any failure is `E_COLLATERAL_FETCH`: the exit's copy is never used as a fallback.
+   */
+  freshCollateral?: (quote: Uint8Array) => Promise<Record<string, unknown>>;
 }
 
 /** Max UTF-8 size of `app_compose` (matches the contract bound, SPEC §7). */
@@ -85,6 +92,7 @@ export const CHECKS = Object.freeze({
   INSTANCE: "instance registered with matching keys",
   TCB: "Intel TCB status accepted",
   COMPOSE_POLICY: "dstack compose: images pinned by digest, exit logging disabled",
+  COLLATERAL: "fresh Intel collateral fetched by the client from the PCCS (not the exit's copy)",
 } as const);
 
 const fail = (code: PlrErrorCode, detail?: string): never => {
@@ -204,7 +212,21 @@ export async function verifyAttestation(p: VerifyAttestationParams): Promise<Ver
     fail("E_ROOT_UNTRUSTED", "verifier root differs from pinned root");
   }
   checks.push(CHECKS.ROOT);
-  const ctx: VerifyContext = { collateral: b.collateral, nowSecs };
+  // INTEL only: the client's own fresh collateral replaces the exit's copy (fail closed, no fallback).
+  let collateral = b.collateral;
+  if (b.rootKind === "INTEL" && p.freshCollateral !== undefined) {
+    const fetchFresh = p.freshCollateral;
+    let fresh: unknown;
+    try {
+      fresh = await fetchFresh(b.quote);
+    } catch {
+      fail("E_COLLATERAL_FETCH");
+    }
+    if (!isCollateralJson(fresh)) return fail("E_COLLATERAL_FETCH", "not collateral");
+    collateral = fresh;
+    checks.push(CHECKS.COLLATERAL);
+  }
+  const ctx: VerifyContext = { collateral, nowSecs };
   const verified = guard(
     () => verifier.verify(b.quote, ctx),
     ["E_QUOTE_FORMAT", "E_TEE_TYPE", "E_QUOTE_SIG", "E_TCB_STATUS", "E_COLLATERAL"],

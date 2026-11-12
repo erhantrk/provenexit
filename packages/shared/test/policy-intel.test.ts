@@ -178,6 +178,41 @@ describe("verifyAttestation — INTEL branch (SPEC-TDX §3.1)", () => {
     ]);
   });
 
+  it("freshCollateral: the client's own copy replaces the exit's and COLLATERAL is reported right before QUOTE_SIG", async () => {
+    const f = intelFixture();
+    const n = randomBytes(32);
+    const seen: Seen[] = [];
+    const fresh = { ...COLLATERAL, tcb_info: '{"fresh":true}' };
+    const quotes: Uint8Array[] = [];
+    const v = await verifyAttestation({
+      bundle: f.bundle(n), nonce: n, verifier: stubVerifier(seen), registry: f.registry, trustedRoot: INTEL_ROOT_P256, now: NOW_MS,
+      freshCollateral: async (q) => {
+        quotes.push(q);
+        return fresh;
+      },
+    });
+    expect(quotes).toHaveLength(1);
+    expect(seen[0]!.collateral).toEqual(fresh);
+    expect(v.checks.slice(3, 6)).toEqual([CHECKS.ROOT, CHECKS.COLLATERAL, CHECKS.QUOTE_SIG]);
+  });
+
+  it("freshCollateral failing or answering garbage is E_COLLATERAL_FETCH: the exit's copy is never a fallback", async () => {
+    const f = intelFixture();
+    const n = randomBytes(32);
+    for (const freshCollateral of [
+      async () => Promise.reject(new Error("pccs down")),
+      async () => ({ not: "collateral" }),
+    ]) {
+      const seen: Seen[] = [];
+      const p = verifyAttestation({
+        bundle: f.bundle(n), nonce: n, verifier: stubVerifier(seen), registry: f.registry, trustedRoot: INTEL_ROOT_P256, now: NOW_MS,
+        freshCollateral,
+      });
+      expect(await codeOf(p)).toBe("E_COLLATERAL_FETCH");
+      expect(seen).toHaveLength(0);
+    }
+  });
+
   it("requires collateral: a missing or malformed one is E_BAD_RESPONSE", async () => {
     const f = intelFixture();
     const n = randomBytes(32);

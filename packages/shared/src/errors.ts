@@ -52,6 +52,8 @@ export const ERROR_CODES = [
   "E_TCB_STATUS",
   "E_COMPOSE_POLICY",
   "E_COLLATERAL",
+  // the client could not fetch fresh Intel collateral from the PCCS itself (INTEL mode; fails closed)
+  "E_COLLATERAL_FETCH",
 ] as const;
 
 export type PlrErrorCode = (typeof ERROR_CODES)[number];

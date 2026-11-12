@@ -61454,7 +61454,9 @@ var ERROR_CODES = [
   // INTEL / dstack mode (SPEC-TDX §0)
   "E_TCB_STATUS",
   "E_COMPOSE_POLICY",
-  "E_COLLATERAL"
+  "E_COLLATERAL",
+  // the client could not fetch fresh Intel collateral from the PCCS itself (INTEL mode; fails closed)
+  "E_COLLATERAL_FETCH"
 ];
 var CODE_SET = new Set(ERROR_CODES);
 var PlrError = class extends Error {
@@ -65917,7 +65919,8 @@ var CHECKS = Object.freeze({
   OS_ALLOWED: "OS measurement allowed by registry",
   INSTANCE: "instance registered with matching keys",
   TCB: "Intel TCB status accepted",
-  COMPOSE_POLICY: "dstack compose: images pinned by digest, exit logging disabled"
+  COMPOSE_POLICY: "dstack compose: images pinned by digest, exit logging disabled",
+  COLLATERAL: "fresh Intel collateral fetched by the client from the PCCS (not the exit's copy)"
 });
 var fail = (code, detail) => {
   throw new PlrError(code, detail);
@@ -66020,7 +66023,21 @@ async function verifyAttestation(p) {
     fail("E_ROOT_UNTRUSTED", "verifier root differs from pinned root");
   }
   checks.push(CHECKS.ROOT);
-  const ctx = { collateral: b.collateral, nowSecs };
+  let collateral = b.collateral;
+  if (b.rootKind === "INTEL" && p.freshCollateral !== void 0) {
+    const fetchFresh = p.freshCollateral;
+    let fresh;
+    try {
+      fresh = await fetchFresh(b.quote);
+    } catch {
+      fail("E_COLLATERAL_FETCH");
+    }
+    if (!isCollateralJson(fresh))
+      return fail("E_COLLATERAL_FETCH", "not collateral");
+    collateral = fresh;
+    checks.push(CHECKS.COLLATERAL);
+  }
+  const ctx = { collateral, nowSecs };
   const verified = guard(() => verifier.verify(b.quote, ctx), ["E_QUOTE_FORMAT", "E_TEE_TYPE", "E_QUOTE_SIG", "E_TCB_STATUS", "E_COLLATERAL"], "E_QUOTE_SIG");
   if (!isPlainObject3(verified) || !isBytes2(verified.signedBytes) || !equalBytes(verified.signedBytes, parsed.signedBytes)) {
     fail("E_QUOTE_SIG", "verifier result");
@@ -76310,10 +76327,10 @@ var TracingRegistry = class {
     return this.inner.getAnchor(id2);
   }
 };
-var INTEL_ONLY = /* @__PURE__ */ new Set(["TCB", "COMPOSE_POLICY"]);
+var INTEL_ONLY = /* @__PURE__ */ new Set(["TCB", "COMPOSE_POLICY", "COLLATERAL"]);
 var ALL_CHECKS = Object.keys(CHECKS);
 var MOCK_ORDER = ALL_CHECKS.filter((k) => !INTEL_ONLY.has(k));
-var INTEL_ORDER = MOCK_ORDER.flatMap((k) => k === "QUOTE_SIG" ? [k, "TCB"] : k === "COMPOSE" ? [k, "COMPOSE_POLICY"] : [k]);
+var INTEL_ORDER = MOCK_ORDER.flatMap((k) => k === "QUOTE_SIG" ? ["COLLATERAL", k, "TCB"] : k === "COMPOSE" ? [k, "COMPOSE_POLICY"] : [k]);
 function orderFor(o) {
   return [...o.intel === true ? INTEL_ORDER : MOCK_ORDER];
 }
@@ -76338,6 +76355,7 @@ var CODE_TO_CHECK = {
   E_INSTANCE_NOT_REGISTERED: "INSTANCE",
   E_TCB_STATUS: "TCB",
   E_COLLATERAL: "QUOTE_SIG",
+  E_COLLATERAL_FETCH: "COLLATERAL",
   E_COMPOSE_POLICY: "COMPOSE_POLICY"
 };
 var REGISTRY_STEP = {
@@ -76347,7 +76365,18 @@ var REGISTRY_STEP = {
   getInstance: "INSTANCE",
   getAnchor: "INSTANCE"
 };
+var COLLATERAL_NOTES = {
+  exit: "not checked: PLR_PCCS_URL=exit, the exit's own copy is used",
+  recorded: "not checked: offline replay uses the recorded collateral"
+};
 function checkLines(err, lastRegistryCall, o = {}) {
+  const mode = o.collateral ?? "pccs";
+  if (mode === "pccs")
+    return rawCheckLines(err, lastRegistryCall, o);
+  const note = COLLATERAL_NOTES[mode];
+  return rawCheckLines(err, lastRegistryCall, o).map((l) => l.name === CHECKS.COLLATERAL ? { name: l.name, status: "skipped", note } : l);
+}
+function rawCheckLines(err, lastRegistryCall, o) {
   const order = orderFor(o);
   if (err === void 0)
     return order.map((k) => ({ name: label(k), status: "pass" }));
@@ -76480,23 +76509,48 @@ import { randomBytes as randomBytes8 } from "node:crypto";
 init_define_STATUS_DEFAULTS();
 init_define_STATUS_REPLAY();
 import { createRequire as createRequire2 } from "node:module";
+var DEFAULT_PCCS_URL = "https://api.trustedservices.intel.com";
+var COLLATERAL_FROM_EXIT = "exit";
+var PCCS_TIMEOUT_MS = 8e3;
+function collateralSource(pccsUrl) {
+  if (pccsUrl === COLLATERAL_FROM_EXIT)
+    return { source: "exit" };
+  return { source: "pccs", url: pccsUrl === void 0 || pccsUrl === "" ? DEFAULT_PCCS_URL : pccsUrl };
+}
 var dcap2;
 function getDcap2() {
   dcap2 ??= createRequire2(import.meta.url)("@phala/dcap-qvl");
   return dcap2;
 }
-async function fetchPccsCollateral(pccsUrl, quote) {
-  let raw;
+async function fetchPccsCollateral(pccsUrl, quote, timeoutMs = PCCS_TIMEOUT_MS) {
+  let timer;
   try {
-    raw = await getDcap2().getCollateral(pccsUrl, Buffer.from(quote));
+    const work = getDcap2().getCollateral(pccsUrl, Buffer.from(quote));
+    work.catch(() => void 0);
+    const raw = await Promise.race([
+      work,
+      new Promise((_, rej) => {
+        timer = setTimeout(() => rej(new Error("timeout")), timeoutMs);
+      })
+    ]);
+    return canonicalCollateral(raw);
   } catch {
-    throw new PlrError("E_COLLATERAL", "PCCS");
+    throw new PlrError("E_COLLATERAL_FETCH", "PCCS");
+  } finally {
+    clearTimeout(timer);
   }
-  return canonicalCollateral(raw);
+}
+function isPccsUrl(u) {
+  if (u.length > 2048)
+    return false;
+  try {
+    return new URL(u).protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 // client/dist/attestation.js
-var MAX_PCCS_QUOTE_HEX = 2 * 8192;
 var AttestationCache = class {
   #o;
   #session;
@@ -76507,19 +76561,31 @@ var AttestationCache = class {
   get ttlMs() {
     return this.#o.ttlMs;
   }
+  /** Where an INTEL verification takes its collateral from; undefined for a MOCK verifier (it has no collateral). */
+  get collateral() {
+    return this.#o.verifier.rootKind === "INTEL" ? collateralSource(this.#o.pccsUrl) : void 0;
+  }
   /** Fetches and verifies a fresh attestation (new random nonce every call) and caches it. @throws PlrError */
   async attest() {
     const nonce = new Uint8Array(randomBytes8(32));
     try {
-      const bundle = await this.#withFreshCollateral(await this.#o.fetchBundle(nonce));
+      const bundle = await this.#o.fetchBundle(nonce);
+      const src = this.collateral;
       const verified = await verifyAttestation({
         bundle,
         nonce,
         verifier: this.#o.verifier,
         registry: this.#o.registry,
-        trustedRoot: this.#o.trustedRoot
+        trustedRoot: this.#o.trustedRoot,
+        ...src?.source === "pccs" ? { freshCollateral: (quote) => (this.#o.fetchCollateral ?? fetchPccsCollateral)(src.url, quote) } : {}
       });
-      const session = { verified, attNonce: nonce, at: this.#o.clock(), appCompose: bundle.app_compose };
+      const session = {
+        verified,
+        attNonce: nonce,
+        at: this.#o.clock(),
+        appCompose: bundle.app_compose,
+        ...src !== void 0 ? { collateral: src } : {}
+      };
       this.#session = session;
       return session;
     } catch (e) {
@@ -76528,23 +76594,6 @@ var AttestationCache = class {
         throw e;
       throw new PlrError("E_BAD_RESPONSE");
     }
-  }
-  /**
-   * SPEC-TDX §1.5 / TASKS T24: in INTEL mode with `pccsUrl` set, replace the exit's `collateral` with a fresh
-   * copy fetched from the PCCS (`getCollateral`) before verification. The fetch is async and runs here, so
-   * `verifyAttestation` stays synchronous and receives the value through the bundle field. The exit's own copy is
-   * untrusted anyway; a stale or missing one must not decide whether the client can verify.
-   * @throws PlrError E_BAD_RESPONSE (malformed quote), E_COLLATERAL (PCCS unreachable / not collateral)
-   */
-  async #withFreshCollateral(bundle) {
-    const pccsUrl = this.#o.pccsUrl;
-    if (pccsUrl === void 0 || this.#o.verifier.rootKind !== "INTEL")
-      return bundle;
-    const q = bundle.quote;
-    if (typeof q !== "string" || !isHex(q) || q.length === 0 || q.length > MAX_PCCS_QUOTE_HEX) {
-      throw new PlrError("E_BAD_RESPONSE", "quote");
-    }
-    return { ...bundle, collateral: await fetchPccsCollateral(pccsUrl, fromHex(q)) };
   }
   /** The cached verification if it is younger than `ttlMs`, else a fresh one (shared between concurrent callers). */
   async current() {
@@ -77250,6 +77299,10 @@ var ExitHop = class {
       ...o.pccsUrl !== void 0 ? { pccsUrl: o.pccsUrl } : {}
     });
   }
+  /** Where an INTEL verification takes its collateral from (undefined in MOCK mode). */
+  get collateral() {
+    return this.#attestation.collateral;
+  }
   /** Fresh attestation (new nonce, SPEC §9 checks 1–10). @throws PlrError */
   attest() {
     return this.#attestation.attest();
@@ -77399,6 +77452,10 @@ var VpnClient = class {
   get rootKind() {
     return this.#hop.verifier.rootKind;
   }
+  /** Where an INTEL verification takes its collateral from: the client's PCCS (default) or the exit; undefined in MOCK mode. */
+  get collateral() {
+    return this.#hop.collateral;
+  }
   /** Fetches and verifies a fresh attestation (new random nonce, SPEC §9 against the VPN registry). @throws PlrError */
   async attest() {
     return (await this.#hop.attest()).verified;
@@ -77455,12 +77512,13 @@ var errCode = (e) => isPlrError(e) ? e.code : e instanceof Error ? e.message : "
 var fromLine = (l) => ({
   name: l.name,
   ok: l.status === "pass",
-  detail: l.status === "pass" ? "" : l.status === "fail" ? l.code ?? "error" : "not checked"
+  detail: l.status === "pass" ? "" : l.status === "fail" ? l.code ?? "error" : "not checked",
+  ...l.note !== void 0 ? { note: l.note } : {}
 });
 async function verifyVpnReport(client, registry2) {
   const root = client.rootKind;
   const intel = root === "INTEL";
-  const opts = { intel };
+  const opts = { intel, collateral: client.collateral?.source ?? "pccs" };
   const refused = (e, lines, recheck) => {
     const code = errCode(e);
     const checks2 = lines.map(fromLine);
@@ -77704,6 +77762,8 @@ function emptyStatus(now) {
     links: { repo: REPO, explorer_tx: EXPLORER_TX }
   };
 }
+var REPLAY_LINES = { intel: true, collateral: "recorded" };
+var replayChecks = (e) => checkLines(e, void 0, REPLAY_LINES).filter((l) => l.note === void 0).map(fromLine);
 async function replayOf(raw, verifier) {
   if (raw === void 0)
     return null;
@@ -77716,7 +77776,7 @@ async function replayOf(raw, verifier) {
         captured_at: iso(f.meta.captured_at_ms),
         verdict: "VERIFIED",
         code: null,
-        checks: checkLines(void 0, void 0, { intel: true }).map((l) => ({ name: l.name, ok: true, detail: "" })),
+        checks: replayChecks(void 0),
         compose: compose(verified)
       };
     } catch (e) {
@@ -77725,11 +77785,7 @@ async function replayOf(raw, verifier) {
         captured_at: iso(f.meta.captured_at_ms),
         verdict: "REFUSED",
         code,
-        checks: checkLines(e, void 0, { intel: true }).map((l) => ({
-          name: l.name,
-          ok: l.status === "pass",
-          detail: l.status === "pass" ? "" : l.status === "fail" ? l.code ?? "error" : "not checked"
-        })),
+        checks: replayChecks(e),
         compose: null
       };
     }
@@ -77813,7 +77869,12 @@ function resolveConfig(o) {
   if (rpcUrl === void 0)
     throw new Error("NEAR RPC not configured (PLR_NEAR_RPC)");
   checkRpcUrl(rpcUrl);
-  return { exitUrl, registry: registry2, trustedRoot, rpcUrl };
+  const envPccs = env.PLR_PCCS_URL || void 0;
+  if (o.pccsUrl === void 0 && envPccs !== void 0 && envPccs !== COLLATERAL_FROM_EXIT && !isPccsUrl(envPccs)) {
+    throw new Error(`PLR_PCCS_URL must be an https URL or "${COLLATERAL_FROM_EXIT}"`);
+  }
+  const pccsUrl = o.pccsUrl ?? envPccs;
+  return { exitUrl, registry: registry2, trustedRoot, rpcUrl, ...pccsUrl !== void 0 ? { pccsUrl } : {} };
 }
 async function getStatus(opts = {}) {
   const status = emptyStatus(Date.now());
@@ -77842,7 +77903,8 @@ async function getStatus(opts = {}) {
         registry: tracing,
         trustedRoot: cfg.trustedRoot,
         ...opts.verifier !== void 0 ? { verifier: opts.verifier } : {},
-        timeouts: { attestMs: Math.min(15e3, T.verify), connectMs: T.egress }
+        timeouts: { attestMs: Math.min(15e3, T.verify), connectMs: T.egress },
+        ...cfg.pccsUrl !== void 0 ? { pccsUrl: cfg.pccsUrl } : {}
       });
     } catch {
       return void 0;
@@ -77988,7 +78050,8 @@ function openExit(opts = {}) {
     registry: registry2,
     trustedRoot: cfg.trustedRoot,
     ...opts.verifier !== void 0 ? { verifier: opts.verifier } : {},
-    timeouts: { attestMs: Math.min(15e3, T.verify), connectMs: T.egress }
+    timeouts: { attestMs: Math.min(15e3, T.verify), connectMs: T.egress },
+    ...cfg.pccsUrl !== void 0 ? { pccsUrl: cfg.pccsUrl } : {}
   });
   return { exitUrl: cfg.exitUrl, registryId: cfg.registry, rpcUrl: cfg.rpcUrl, client, registry: registry2 };
 }

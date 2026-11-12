@@ -1,6 +1,6 @@
-// T24 (TASKS): with `PLR_PCCS_URL` set, the client fetches fresh Intel collateral from the PCCS
-// (`getCollateral(url, quote)`) inside `AttestationCache.attest()`, before `verifyAttestation`, and the verifier
-// receives it through the bundle's `collateral` field. The fake PCCS serves the recorded dcap-qvl sample
+// T24 (TASKS) + R7: in INTEL mode the client fetches fresh Intel collateral from a PCCS itself BY DEFAULT
+// (`getCollateral(url, quote)`, Intel's PCS unless `PLR_PCCS_URL` names another), right before the DCAP check, and
+// refuses the exit when it cannot (E_COLLATERAL_FETCH). `PLR_PCCS_URL=exit` opts out. The fake PCCS serves the recorded dcap-qvl sample
 // collateral, so the real `@phala/dcap-qvl` `getCollateral` runs (quote PCK chain → CRL / TCB / QE identity / root
 // CA CRL endpoints) and its output is a genuine Intel-signed collateral set for TV-Q1.
 import { readFileSync } from "node:fs";
@@ -20,7 +20,10 @@ import {
   type RegistryReader,
   type VerifyContext,
 } from "@plr/shared";
-import { AttestationCache, fetchPccsCollateral, isPccsUrl, loadVpnConfig } from "../src/index.js";
+import {
+  AttestationCache, COLLATERAL_FROM_EXIT, DEFAULT_PCCS_URL, VpnClient, collateralSource, fetchPccsCollateral, isPccsUrl, loadVpnConfig,
+} from "../src/index.js";
+import { checkLines, formatCheckLine } from "../src/verify-report.js";
 
 const VECTORS = new URL("../../packages/shared/test/vectors/dcap/", import.meta.url);
 const QUOTE = new Uint8Array(readFileSync(new URL("tdx_quote.bin", VECTORS)));
@@ -120,7 +123,9 @@ function bundleWith(collateral: CollateralJson): AttestationBundle {
   };
 }
 
-function cache(o: { bundle: AttestationBundle; verifier: QuoteVerifier; pccsUrl?: string }): AttestationCache {
+type FetchCollateral = (pccsUrl: string, quote: Uint8Array) => Promise<Record<string, unknown>>;
+
+function cache(o: { bundle: AttestationBundle; verifier: QuoteVerifier; pccsUrl?: string; fetchCollateral?: FetchCollateral }): AttestationCache {
   return new AttestationCache({
     fetchBundle: async () => o.bundle,
     verifier: o.verifier,
@@ -129,6 +134,7 @@ function cache(o: { bundle: AttestationBundle; verifier: QuoteVerifier; pccsUrl?
     ttlMs: 0,
     clock: () => 0,
     ...(o.pccsUrl !== undefined ? { pccsUrl: o.pccsUrl } : {}),
+    ...(o.fetchCollateral !== undefined ? { fetchCollateral: o.fetchCollateral } : {}),
   });
 }
 
@@ -168,8 +174,53 @@ describe("fetchPccsCollateral", () => {
   });
 });
 
-describe("AttestationCache.attest with PLR_PCCS_URL (T24)", () => {
-  it("fetches fresh collateral before verifyAttestation and passes it via the bundle field", async () => {
+describe("AttestationCache.attest: fresh collateral (T24, R7)", () => {
+  it("default-on: with no PLR_PCCS_URL the client fetches from the default PCCS and the verifier gets that copy", async () => {
+    const verifier = new RecordingVerifier();
+    const asked: string[] = [];
+    const c = cache({
+      bundle: bundleWith(STALE),
+      verifier,
+      fetchCollateral: async (url, quote) => {
+        asked.push(url);
+        expect(toHex(quote)).toBe(toHex(QUOTE));
+        return SAMPLE;
+      },
+    });
+    expect(c.collateral).toEqual({ source: "pccs", url: DEFAULT_PCCS_URL });
+    expect(DEFAULT_PCCS_URL).toBe("https://api.trustedservices.intel.com");
+    expect(await codeOf(c.attest())).toBe("E_QUOTE_SIG");
+    expect(asked).toEqual([DEFAULT_PCCS_URL]);
+    expect(verifier.calls).toHaveLength(1);
+    expect(verifier.calls[0]?.collateral).toEqual(SAMPLE);
+  });
+
+  it("default-on fails closed: a PCCS failure refuses with E_COLLATERAL_FETCH and never falls back to the exit's copy", async () => {
+    const verifier = new RecordingVerifier();
+    const c = cache({ bundle: bundleWith(STALE), verifier, fetchCollateral: async () => Promise.reject(new Error("pccs down")) });
+    expect(await codeOf(c.attest())).toBe("E_COLLATERAL_FETCH");
+    expect(verifier.calls).toHaveLength(0);
+  });
+
+  it("opt-out: PLR_PCCS_URL=exit uses the exit's collateral and contacts no PCCS", async () => {
+    const verifier = new RecordingVerifier();
+    let fetched = 0;
+    const c = cache({
+      bundle: bundleWith(STALE),
+      verifier,
+      pccsUrl: COLLATERAL_FROM_EXIT,
+      fetchCollateral: async () => {
+        fetched++;
+        return SAMPLE;
+      },
+    });
+    expect(c.collateral).toEqual({ source: "exit" });
+    expect(await codeOf(c.attest())).toBe("E_QUOTE_SIG");
+    expect(fetched).toBe(0);
+    expect(verifier.calls[0]?.collateral).toEqual(STALE);
+  });
+
+  it("an explicit PLR_PCCS_URL: fetches fresh collateral from that PCCS right before the DCAP check", async () => {
     pccs = await new FakePccs().start();
     const verifier = new RecordingVerifier();
     expect(await codeOf(cache({ bundle: bundleWith(STALE), verifier, pccsUrl: pccs.url }).attest())).toBe("E_QUOTE_SIG");
@@ -182,17 +233,25 @@ describe("AttestationCache.attest with PLR_PCCS_URL (T24)", () => {
     expect(pccs.paths.length).toBeGreaterThan(0);
   });
 
-  it("uses the exit's collateral when PLR_PCCS_URL is not set (unchanged behaviour)", async () => {
-    const verifier = new RecordingVerifier();
-    expect(await codeOf(cache({ bundle: bundleWith(STALE), verifier }).attest())).toBe("E_QUOTE_SIG");
-    expect(verifier.calls[0]?.collateral).toEqual(STALE);
-  });
-
-  it("fails closed with E_COLLATERAL when the PCCS is unreachable, before the verifier runs", async () => {
+  it("fails closed with E_COLLATERAL_FETCH when the PCCS is unreachable, before the verifier runs", async () => {
     const verifier = new RecordingVerifier();
     const c = cache({ bundle: bundleWith(STALE), verifier, pccsUrl: "http://127.0.0.1:1" });
-    expect(await codeOf(c.attest())).toBe("E_COLLATERAL");
+    expect(await codeOf(c.attest())).toBe("E_COLLATERAL_FETCH");
     expect(verifier.calls).toHaveLength(0);
+  });
+
+  it("fails closed when the PCCS answers but not in time (the fetch is bounded)", async () => {
+    const stalled = createServer(() => undefined);
+    await new Promise<void>((resolve) => stalled.listen(0, "127.0.0.1", resolve));
+    try {
+      const url = `http://127.0.0.1:${(stalled.address() as AddressInfo).port}`;
+      const t = Date.now();
+      expect(await codeOf(fetchPccsCollateral(url, QUOTE, 200))).toBe("E_COLLATERAL_FETCH");
+      expect(Date.now() - t).toBeLessThan(5_000);
+    } finally {
+      stalled.closeAllConnections();
+      await new Promise<void>((resolve) => stalled.close(() => resolve()));
+    }
   });
 
   it("never contacts the PCCS for a MOCK verifier (collateral is an INTEL-mode input)", async () => {
@@ -217,9 +276,24 @@ describe("PLR_PCCS_URL config", () => {
     PLR_VPN_REGISTRY: "pe-vpnreg-erhan.testnet",
   };
 
-  it("accepts an https PCCS and leaves it undefined when unset", () => {
+  it("accepts an https PCCS, the `exit` opt-out, and leaves it undefined (= the default PCCS) when unset", () => {
     expect(loadVpnConfig({ ...base, PLR_PCCS_URL: "https://pccs.phala.network" }).pccsUrl).toBe("https://pccs.phala.network");
+    expect(loadVpnConfig({ ...base, PLR_PCCS_URL: "exit" }).pccsUrl).toBe(COLLATERAL_FROM_EXIT);
     expect(loadVpnConfig(base).pccsUrl).toBeUndefined();
+    expect(loadVpnConfig({ ...base, PLR_PCCS_URL: "" }).pccsUrl).toBeUndefined();
+    expect(collateralSource(undefined)).toEqual({ source: "pccs", url: DEFAULT_PCCS_URL });
+    expect(collateralSource("https://pccs.phala.network")).toEqual({ source: "pccs", url: "https://pccs.phala.network" });
+    expect(collateralSource("exit")).toEqual({ source: "exit" });
+  });
+
+  it("a client pinned to the Intel root fetches from the default PCCS; a MOCK-root client has no collateral source", () => {
+    const o = { exitUrl: "https://exit.example", registry };
+    expect(new VpnClient({ ...o, trustedRoot: INTEL_ROOT_P256 }).collateral).toEqual({ source: "pccs", url: DEFAULT_PCCS_URL });
+    expect(new VpnClient({ ...o, trustedRoot: INTEL_ROOT_P256, pccsUrl: "exit" }).collateral).toEqual({ source: "exit" });
+    const mockRoot = new Uint8Array(64);
+    mockRoot.set(INTEL_ROOT_P256);
+    const mock: QuoteVerifier = { rootKind: "MOCK", rootPublicKey: mockRoot, verify: () => { throw new PlrError("E_QUOTE_SIG"); } };
+    expect(new VpnClient({ ...o, trustedRoot: INTEL_ROOT_P256, verifier: mock }).collateral).toBeUndefined();
   });
 
   it("rejects a non-https or oversized PCCS URL", () => {
@@ -230,5 +304,36 @@ describe("PLR_PCCS_URL config", () => {
     for (const u of ["http://pccs.example", "pccs.example", "ftp://pccs.example"]) {
       expect(() => loadVpnConfig({ ...base, PLR_PCCS_URL: u }), u).toThrow(/PLR_PCCS_URL/);
     }
+  });
+});
+
+describe("vpn verify lines for the collateral check", () => {
+  const NAME = "fresh Intel collateral fetched by the client from the PCCS (not the exit's copy)";
+  const text = (e: unknown, collateral?: "pccs" | "exit" | "recorded"): string[] =>
+    checkLines(e, undefined, { intel: true, ...(collateral !== undefined ? { collateral } : {}) }).map(formatCheckLine);
+
+  it("INTEL: 17 lines, the collateral check right before the signature check; MOCK: unchanged 14", () => {
+    const lines = text(undefined);
+    expect(lines).toHaveLength(17);
+    expect(lines[4]).toBe(`  ✔ ${NAME}`);
+    expect(lines[5]).toBe("  ✔ quote signature chain to root");
+    const mock = checkLines(undefined, undefined, {});
+    expect(mock).toHaveLength(14);
+    expect(mock.some((l) => l.name === NAME)).toBe(false);
+  });
+
+  it("a PCCS failure fails exactly that line; earlier lines passed, later ones did not run", () => {
+    const lines = text(new PlrError("E_COLLATERAL_FETCH"));
+    expect(lines[3]).toMatch(/^  ✔ /);
+    expect(lines[4]).toBe(`  ✘ ${NAME}  [E_COLLATERAL_FETCH]`);
+    expect(lines[5]).toBe("  · quote signature chain to root  (not checked)");
+  });
+
+  it("opt-out and fixture replay say the collateral was not fetched, and why", () => {
+    expect(text(undefined, "exit")[4]).toBe(`  · ${NAME}  (not checked: PLR_PCCS_URL=exit, the exit's own copy is used)`);
+    expect(text(undefined, "recorded")[4]).toBe(`  · ${NAME}  (not checked: offline replay uses the recorded collateral)`);
+    expect(text(undefined, "recorded").filter((l) => l.startsWith("  ✔ "))).toHaveLength(16);
+    // A later failure keeps the note on the collateral line.
+    expect(text(new PlrError("E_TCB_STATUS"), "exit")[4]).toContain("PLR_PCCS_URL=exit");
   });
 });

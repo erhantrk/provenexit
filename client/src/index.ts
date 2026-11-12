@@ -3,7 +3,7 @@ export { NearRegistry, NearRegistryError, isNearAccountId, isLoopbackHost, check
 export { TracingRegistry, checkLines, formatCheckLine, type CheckLine, type CheckStatus } from "./verify-report.js";
 export { runCli, loadVpnConfig, makeRegistry, ConfigError, inspectIntelBundle, type VpnCliConfig, type CliIo, type IntelInspection } from "./cli.js";
 export { AttestationCache, recheckRegistry, type AttestationSession, type AttestationCacheOptions } from "./attestation.js";
-export { fetchPccsCollateral, isPccsUrl } from "./pccs.js";
+export { COLLATERAL_FROM_EXIT, DEFAULT_PCCS_URL, PCCS_TIMEOUT_MS, collateralSource, fetchPccsCollateral, isPccsUrl, type CollateralSource } from "./pccs.js";
 // PLR-VPN-v1 (SPEC-VPN §9.2)
 export { VpnClient, VPN_ATTEST_TTL_MS, type VpnClientOptions, type VpnClientTimeouts } from "./vpn/client.js";
 export { TunnelStream, TwoHopTunnelStream, type VpnStream, type TwoHopStream, type VpnReceiptResult, type TunnelStreamParams } from "./vpn/stream.js";
