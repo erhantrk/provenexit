@@ -21,15 +21,6 @@ refusal of the old key; the transactions and the commands for the live registry 
 After it, a revoke takes three transactions instead of one and waits for a second person, and you trust any two of
 the three council members plus the DAO contract instead of one key.
 
-## What has been shown about revocation
-
-A client refusing the next connection right after an owner revocation is shown on the local demo stack (MOCK root):
-`E_COMPOSE_NOT_ALLOWED`, then restored by re-approval. On testnet, owner revoke and re-allow transactions ran on the
-first, now retired, registry against a test compose. On the live registry the owner revoked the previous exit
-compose `9411d0f7…` after the redeploy (tx `9HhvupZA…`); no exit ran that compose any more, so no client refusal
-was observed for it. [`scripts/demo-live.sh`](../scripts/demo-live.sh) drives verify → browse → owner revoke →
-refusal → re-allow against the live exit; the two owner transactions are signed by the owner, not by the script.
-
 ## Proxy mode only
 
 Only what you send through the local SOCKS5 proxy goes through the exit: TCP only, no UDP (so no QUIC, no WebRTC
@@ -54,6 +45,10 @@ These hold for any VPN exit, or any app on Intel TDX, and ProvenExit does not ch
 
 ## Closed limits
 
+- **Revocation was not shown on the live exit.** Closed on 2026-11-13: with [`scripts/demo-live.sh`](../scripts/demo-live.sh)
+  against the live exit, the owner revoked the running compose `2f4100e6…dabf` ([`2JJdbyoG…`](https://testnet.nearblocks.io/txns/2JJdbyoGGr5GewNMDd9aeGrDSDjQ33xDoAWWovR8s1u2)); the very next
+  connection through the open proxy was refused and `vpn verify` refused with `E_COMPOSE_NOT_ALLOWED`. The owner
+  re-allowed it ([`tdQDjQkF…`](https://testnet.nearblocks.io/txns/tdQDjQkF6ZBVcsxuebHwuvykLEDJ9CvuuVSkicY57LW)) and the next connection went through again. See [VERIFY.md](VERIFY.md#the-on-chain-record).
 - **Registry code could be swapped.** Closed: the registry `vpnreg.pe-owner-erhan.testnet` has no access keys, so
   nobody can deploy different code under its name, and its code is a reproducible build of this repo (code hash
   `C1hvenbrzHKN1n1f2z63Duburr8YXLAKBescrEvarCGM`). The client pins that code hash: before it uses any registry answer
