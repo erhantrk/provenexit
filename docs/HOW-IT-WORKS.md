@@ -38,7 +38,7 @@ approved builds. The byte formats are specified in [`spec/SPEC-TDX.md`](spec/SPE
 ```
 
 This is the live deployment, the configuration [`deploy/phala/`](../deploy/phala) pins. The local demo stack runs
-the same path with a MOCK root in place of Intel (see [LIMITS.md](LIMITS.md#the-local-demo-stack-uses-a-mock-root)).
+the same path with a MOCK root in place of Intel (a local test root; `vpn verify` prints `MOCK ROOT (local test root, NOT Intel)`).
 
 ## What NEAR does
 

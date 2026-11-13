@@ -44,7 +44,7 @@ the builder (BuildKit v0.34.2 by digest) and the manifest options (`linux/amd64`
 media types, gzip layers). The full list, what is not pinned, how the image was pushed and why the tag resolves to an
 image index that wraps this manifest: [`deploy/phala/README.md`](../deploy/phala/README.md#reproduce-the-exit-image).
 
-What a `MATCH` proves and does not prove: [LIMITS.md](LIMITS.md#what-a-matching-image-digest-proves).
+`MATCH` shows the image is exactly what this source builds; whether the source does what it says is for the reader to check.
 
 ## The registry contract
 

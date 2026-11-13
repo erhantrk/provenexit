@@ -61,8 +61,7 @@ curl -s https://rpc.testnet.fastnear.com -H 'content-type: application/json' -d 
    npm ci && npx near-sandbox --version && npx tsc -b && npm run build -w @plr/enclave && (cd contracts/near && cargo near build non-reproducible-wasm --no-abi) && bash scripts/demo.sh
    ```
 
-   It runs on a local near-sandbox with the MOCK root (not Intel; see
-   [LIMITS.md](LIMITS.md#the-local-demo-stack-uses-a-mock-root)). You see `✔ VERIFIED`, a fetch through the SOCKS5
+   It runs on a local near-sandbox with the MOCK root (a local test root, not Intel). You see `✔ VERIFIED`, a fetch through the SOCKS5
    proxy and the attested tunnel, the evil exit refused with `E_COMPOSE_NOT_ALLOWED`, the MITM refused with
    `E_REPORT_DATA_KEYS`, owner revocation then a refused connection and a restore, DoH-only DNS (resolver down ⇒
    `E_DNS`), two-hop, and the final lines `━━ VPN PASSED`, `━━ DNS + TWO-HOP PASSED`, `━━ DEMO PASSED`. Nothing is left

@@ -1,105 +1,13 @@
 # Limits
 
-What ProvenExit does not prove, what it trusts, and what has only been shown in part. Each section says what the
-limit is, why it exists, and what you can do about it. Closed limits are listed at the end with what closed them.
+What ProvenExit does not do yet, and what it trusts. Closed limits are listed at the end with what closed them.
 
 ## Testnet only
 
 The registry is on NEAR **testnet** (`vpnreg.pe-owner-erhan.testnet`); nothing runs on mainnet. There is one live
 exit, a `tdx.small` CVM on Phala Cloud running the production OS `dstack-0.6.1` (not the SSH-enabled dev OS). It is
-paid by the hour: it runs through judging and may be stopped afterwards. When it is down, `npx provenexit verify`
-refuses (the exit is unreachable), and the offline replay of [`fixtures/live-exit`](../fixtures/live-exit) still
-works (see [The fixture replay proves the past](#the-fixture-replay-proves-the-past)).
-
-## The exit sees your destinations
-
-Any VPN exit must know the host and port it connects to and relays the bytes. ProvenExit proves the approved code
-does not *keep* them (no destination, DNS name, IP, port or payload in logs, receipts or on-chain data), not that it
-never sees them.
-
-## "No logs" covers the attested code, not the operator's network
-
-DNS is not exposed: the exit resolves names over DNS-over-HTTPS only, so the exit's host and ISP see only TLS to the
-resolver's IP, and the resolver sees the names the exit asks for, never your IP (only the exit's).
-
-The exit still dials destinations over a network card the host controls. So the operator, not only the exit's ISP,
-can watch the upstream leg without touching the measured code: destination IP and port, timing, the TLS SNI, and
-every byte of plain-HTTP traffic. ProvenExit proves the approved exit code retains nothing; it does not stop the
-operator's host from watching the exit's own traffic to destinations. Use HTTPS (ideally with ECH) for anything
-sensitive, and two hops (see [HOW-IT-WORKS.md](HOW-IT-WORKS.md#two-hop)) so that operator does not also know who
-you are.
-
-## TLS is still needed for content
-
-For `https://` the exit relays TLS ciphertext. For plain `http://` the exit code processes the plaintext (it never
-stores it). The destination sees the exit's IP.
-
-## Metadata: timing and sizes
-
-Timing and sizes of tunnelled traffic are visible to the operator and the network. Tunnel data is not padded and
-there is no cover traffic; only the CONNECT / CONNECT_ERR payloads have fixed sizes. With one hop, your own IP is
-visible to the exit operator's network.
-
-## Proxy mode only
-
-Only what you send through the local SOCKS5 proxy is protected: TCP CONNECT only, no UDP (so no QUIC, no WebRTC
-media), no system-wide tunnel. Use `socks5h://` (or "proxy DNS" in a browser) so names are not resolved locally.
-
-The same holds for AI agents using the MCP server: only what goes through `fetch_via_exit` uses the exit. The agent's
-other traffic (its model API calls, its other tools, any command it runs) does not.
-
-## Direct connection only
-
-The client opens its own TLS connections to the exit and does not use `HTTP_PROXY` /
-`HTTPS_PROXY`. On a network that only lets traffic out through an HTTP(S) proxy, `vpn verify` and
-`scripts/try-live.sh` stop at the first exit check with `E_BAD_RESPONSE` (exit unreachable) although the exit is up.
-The offline replay (`vpn verify --fixture fixtures/live-exit`) needs no network.
-
-## The local demo stack uses a MOCK root
-
-The full local demo (`scripts/demo.sh`, with revocation, two hops and attacker exits) runs on a **MOCK root, not
-Intel**. Its quote is signed by a locally generated test root through a per-boot attestation key, and the "TD" is a
-Node process supervised by a mock TDX host. The byte layouts, hashes, event log and verification logic are the real
-TDX/dstack ones, but a MOCK root attests nothing about hardware: whoever holds the mock root secret can forge quotes.
-The CLI says so on every verify (`MOCK ROOT (local test root, NOT Intel)`).
-
-Mock-host limits, which real TDX removes: the quote socket is a 0600 Unix socket of the operator's uid (any same-uid
-process can obtain a genuine quote for any `report_data`), the root secret is a 0600 file of the same uid, and the TD
-is a set of same-uid processes.
-
-## What has been shown about revocation
-
-A client refusing the next connection right after an owner revocation is shown on the local demo stack (MOCK root):
-`E_COMPOSE_NOT_ALLOWED`, then restored by re-approval. On testnet, owner revoke and re-allow transactions ran on the
-first, now retired, registry against a test compose. On the live registry the owner revoked the previous exit
-compose `9411d0f7…` after the redeploy (tx `9HhvupZA…`); no exit ran that compose any more, so no client refusal
-was observed for it. [`scripts/demo-live.sh`](../scripts/demo-live.sh) drives verify → browse → owner revoke →
-refusal → re-allow against the live exit; the two owner transactions are signed by the owner, not by the script.
-
-## Collateral freshness
-
-The client fetches Intel's collateral (PCK CRL, TCB info, QE identity) itself, by default from Intel's PCS
-(`https://api.trustedservices.intel.com`; `PLR_PCCS_URL` names another PCCS), and refuses the exit with
-`E_COLLATERAL_FETCH` when it cannot. It never falls back to the exit's copy. The window that remains is the CRL's own
-update interval: a TCB or key revocation by Intel reaches the client only when Intel publishes it.
-
-Two modes skip the fresh fetch, and both say so in `vpn verify`: `PLR_PCCS_URL=exit` (opt out: use the collateral the
-exit serves, which can be stale yet unexpired) and the offline fixture replay (uses the recorded collateral, shown as
-the one `·` line).
-
-## What a matching image digest proves
-
-`scripts/verify-exit-image.sh` rebuilds the exit image from the checkout and compares it with the digest
-`deploy/phala/docker-compose.yml` pins, which is the image dstack pulls and whose compose hash the registry allows.
-`MATCH` says the image is byte for byte what this source builds. It does not say the source is honest: that question
-moves from "what is in that image" to "what does this source do", and the source still has to be read. It also says
-nothing about the base image beyond its digest, or about the npm packages beyond the lockfile's integrity hashes.
-
-Not pinned: the Docker client and buildx version, the host CPU (on an arm64 host the `linux/amd64` steps run under
-emulation), and the npm registry has to keep serving the tarballs the lockfile names.
-
-The image the exit ran before 2026-11-12 20:05 UTC (`sha256:7e53f383…`) was built on the host before the build was
-made reproducible; it cannot be rebuilt bit for bit. Details: [`deploy/phala/README.md`](../deploy/phala/README.md#reproduce-the-exit-image).
+paid by the hour and may be stopped outside judging. When it is down, `npx provenexit verify` refuses (the exit is
+unreachable); the offline replay of [`fixtures/live-exit`](../fixtures/live-exit) still works.
 
 ## One owner key decides the allowlist
 
@@ -113,44 +21,36 @@ refusal of the old key; the transactions and the commands for the live registry 
 After it, a revoke takes three transactions instead of one and waits for a second person, and you trust any two of
 the three council members plus the DAO contract instead of one key.
 
-## Registry answers are cross-checked, not proven
+## What has been shown about revocation
 
-The client runs no NEAR light client, so registry answers carry no state proof. Instead it sends every registry
-query (each contract view and the `view_account` call behind the code-hash pin) to every configured RPC provider in
-parallel and uses an answer only if all providers answer and all answers are identical. The live defaults are two
-providers run by different operators, FastNear and dRPC; `PLR_NEAR_RPC` takes one URL or a comma-separated list.
+A client refusing the next connection right after an owner revocation is shown on the local demo stack (MOCK root):
+`E_COMPOSE_NOT_ALLOWED`, then restored by re-approval. On testnet, owner revoke and re-allow transactions ran on the
+first, now retired, registry against a test compose. On the live registry the owner revoked the previous exit
+compose `9411d0f7…` after the redeploy (tx `9HhvupZA…`); no exit ran that compose any more, so no client refusal
+was observed for it. [`scripts/demo-live.sh`](../scripts/demo-live.sh) drives verify → browse → owner revoke →
+refusal → re-allow against the live exit; the two owner transactions are signed by the owner, not by the script.
 
-- Answers differ, also on a second try one second later: the client refuses with `E_REGISTRY_RPC_DISAGREE` on the
-  check that asked.
-- A provider is down: the client refuses with `E_REGISTRY_UNAVAILABLE`. There is no majority vote, so silencing the
-  honest provider does not help an attacker.
+## Proxy mode only
 
-One lying provider can therefore make the client refuse, but cannot make it accept a wrong registry state. What is
-still trusted: that the configured providers do not all give the same wrong answer, because they collude or share
-one upstream node (dRPC is a gateway and may route to other operators' nodes); the providers' TLS; and the default
-list shipped in the client. With a single endpoint configured, that endpoint is trusted as before. The cost is
-availability: an outage at either provider stops verification until it recovers or the list is changed. The client
-talks to providers only over `https:`, or plain `http:` to a loopback address.
+Only what you send through the local SOCKS5 proxy goes through the exit: TCP only, no UDP (so no QUIC, no WebRTC
+media), no system-wide tunnel. Use `socks5h://` (or "proxy DNS" in a browser) so names are not resolved locally. For
+AI agents on the MCP server, only `fetch_via_exit` uses the exit. The client connects to the exit directly and does
+not use `HTTP_PROXY` / `HTTPS_PROXY`.
 
-## Phala's gateway terminates TLS
+## Usual VPN and TEE caveats
 
-In a cloud deployment, HTTPS to the exit ends at Phala's dstack-gateway
-(`https://<app-id>-18200.<gateway-domain>`), which then speaks to the container. The tunnel inside is end-to-end
-encrypted to the attested key, so the gateway sees only ciphertext, cannot impersonate the exit (its key is inside
-the signed quote) and cannot read or forge tunnel content. It can still observe connection timing and volume, and it
-is a liveness dependency: it can always refuse to serve. The live exit runs behind it.
+These hold for any VPN exit, or any app on Intel TDX, and ProvenExit does not change them.
 
-## The fixture replay proves the past
-
-`vpn verify --fixture fixtures/live-exit` runs the DCAP check at the capture time (2026-11-12 20:13 UTC) on the
-recorded collateral and reads a recorded registry snapshot. It proves the recorded exit was genuine and registered at
-capture time, not that it is now; for that, run `npx provenexit verify` against the live exit.
-
-## TEE vendor trust and side channels
-
-Intel, the TDX module and Phala's dstack OS image are trusted roots, as for any app on Intel TDX and dstack. The
-allowlisted OS measurement `821d442f…323d` (`SHA256(mr_td ‖ rtmr0 ‖ rtmr1 ‖ rtmr2)`) is the one Phala's
-`dstack-0.6.1` image produced, read from the exit's quote. Micro-architectural side channels are not defended.
+- The exit sees the hosts and ports you connect to. ProvenExit proves the approved code does not keep them.
+- The network around the exit (Phala's host and its gateway) sees destination IPs, timing and sizes, the TLS server
+  name and plain HTTP. Use HTTPS; [two hops](HOW-IT-WORKS.md#two-hop) keep your IP from the exit's operator.
+- Phala's gateway terminates the outer TLS. The tunnel inside is encrypted end to end to the attested key, so the
+  gateway sees only ciphertext; it can refuse to serve.
+- Intel, the TDX module and Phala's dstack OS image are trusted roots. The allowlisted OS measurement `821d442f…323d`
+  is the one Phala's `dstack-0.6.1` image produced, read from the exit's quote. Side channels are not defended. The
+  client fetches Intel's revocation data itself, so an Intel revocation reaches it when Intel publishes it.
+- A matching image digest shows the image is exactly what this source builds; whether the source does what it says
+  is for the reader to check.
 
 ## Closed limits
 

@@ -345,7 +345,7 @@ test("the route section is a pinned scroll scene that reduced motion leaves unpi
 
 test("the limits heading and the compact history", () => {
   const html = text("../index.html");
-  assert.match(html, /<h3 class="also-h">More limits<\/h3>/);
+  assert.doesNotMatch(html, /More limits/);
   assert.doesNotMatch(html, /Also true/);
   const app = text("../assets/app.js");
   assert.match(app, /const HISTORY_SHOWN = 3;/);
@@ -357,10 +357,9 @@ test("the limits heading and the compact history", () => {
 test("long explanations are folded behind disclosures, proof data is not", () => {
   const html = text("../index.html");
   const limits = html.slice(html.indexOf('id="limits"'), html.indexOf("</section>", html.indexOf('id="limits"')));
-  // Ten limits, each title-first with its explanation in a panel; the five smaller ones fold as a group.
-  assert.equal(limits.match(/data-more-title/g).length, 10);
-  assert.equal(limits.match(/data-more="limit-\d+"/g).length, 10);
-  assert.match(limits, /data-more="more-limits"[^>]*data-more-label="Show 5 more limits"/);
+  // Four limits, each title-first with its explanation in a panel.
+  assert.equal(limits.match(/data-more-title/g).length, 4);
+  assert.equal(limits.match(/data-more="limit-\d+"/g).length, 4);
   const more = text("../assets/more.js");
   assert.match(more, /aria-expanded/);
   assert.match(more, /aria-controls/);

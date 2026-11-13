@@ -192,7 +192,7 @@ SPEC §6.2 shape plus one field. `root_kind` becomes `"INTEL"`, `app_compose` is
 Client rules: missing `collateral`, or `collateral` not a plain object of strings, gives `E_BAD_RESPONSE`.
 `app_compose` up to 32 768 bytes. The collateral is Intel-signed and freshness-checked against the client's
 clock, so taking it from the (untrusted) exit is safe. The residual risk (an exit can serve a CRL that is stale
-but not yet expired) is listed in [`docs/LIMITS.md`](../LIMITS.md#collateral-freshness).
+but not yet expired) is why the client now fetches fresh collateral itself by default ([`docs/LIMITS.md`](../LIMITS.md#closed-limits)).
 
 ---
 
@@ -459,8 +459,8 @@ fixtures/phala-2026-11-12/
 contractId: meta.registry, verifiesOnChain: true, now: () => meta.captured_at_ms }), trustedRoot: INTEL_ROOT_P256,
 now: meta.captured_at_ms })`. It prints every check and a final line
 `✔ VERIFIED (FIXTURE REPLAY of <exit_url>, captured <ISO date>; registry snapshot of <registry>; registration tx <hash>)`.
-It needs **no network**. The DCAP check runs at `captured_at` time, so a fixture verifies forever. [`docs/LIMITS.md`](../LIMITS.md#the-fixture-replay-proves-the-past) states this
-honestly ("proves the recorded exit was genuine at capture time").
+It needs **no network**. The DCAP check runs at `captured_at` time, so a fixture verifies forever. A replay
+proves the recorded exit was genuine at capture time, not that it is now.
 
 Mock-mode fixture: none needed. `bash scripts/demo.sh` is the fully offline judge path.
 

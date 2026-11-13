@@ -273,46 +273,19 @@
     <ol class="limits stagger">
       <li>
         <h3 data-more-title>Testnet only.</h3>
-        <p data-more="limit-1">The registry is on NEAR testnet.</p>
-      </li>
-      <li>
-        <h3 data-more-title>The exit sees your destinations.</h3>
-        <p data-more="limit-2">Any VPN exit must know the host and port it connects to. ProvenExit proves the approved code does not keep them, not that it never sees them. TLS hides the content, not the host.</p>
-      </li>
-      <li>
-        <h3 data-more-title>Timing and metadata are visible to the operator's network.</h3>
-        <p data-more="limit-3">“No logs” covers the attested code, not the operator's host, which can observe destination IP and port, timing, the TLS SNI and every byte of plain HTTP. Traffic is not padded. With one hop, your IP is visible to the exit operator's network.</p>
-      </li>
-      <li>
-        <h3 data-more-title>Intel and the dstack OS are trusted.</h3>
-        <p data-more="limit-4">Intel, the TDX module and Phala's dstack OS image are trusted roots, as for any app on TDX. Side channels are not defended.</p>
+        <p data-more="limit-1">The registry is on NEAR testnet, and there is one live exit. It is paid by the hour and may be stopped outside judging.</p>
       </li>
       <li>
         <h3 data-more-title>One owner key decides the allowlist.</h3>
-        <p data-more="limit-5"><span class="mono" data-bind="registry.owner">The owner</span> is one NEAR account. Whoever holds that key can allow or revoke builds and operators. A handover to a 2-of-3 council is prepared, not done.</p>
-      </li>
-    </ol>
-    <h3 class="also-h">More limits</h3>
-    <ol class="limits limits-small" start="6" data-more="more-limits" data-more-button="big" data-more-label="Show 5 more limits" data-more-less="Hide the 5 more limits">
-      <li>
-        <h4 data-more-title>Proxy only.</h4>
-        <p data-more="limit-6">TCP through a SOCKS5 proxy. No UDP, no QUIC, no system-wide tunnel.</p>
+        <p data-more="limit-2"><span class="mono" data-bind="registry.owner">The owner</span> is one NEAR account. Whoever holds that key can allow or revoke builds and operators. A handover to a 2-of-3 council is prepared, not done.</p>
       </li>
       <li>
-        <h4 data-more-title>Registry answers are cross-checked, not proven.</h4>
-        <p data-more="limit-7">The client asks two NEAR RPC providers run by different operators and refuses unless both give the same answer. View results still carry no state proofs: two providers giving the same wrong answer would not be noticed.</p>
+        <h3 data-more-title>Proxy only.</h3>
+        <p data-more="limit-3">TCP through a local SOCKS5 proxy. No UDP, no QUIC, no system-wide tunnel.</p>
       </li>
       <li>
-        <h4 data-more-title>Phala's gateway sits in front of the exit.</h4>
-        <p data-more="limit-8">It terminates TLS. It sees only tunnel ciphertext, can observe timing and volume, and can refuse to serve.</p>
-      </li>
-      <li>
-        <h4 data-more-title>Intel revocations arrive on Intel's schedule.</h4>
-        <p data-more="limit-9">The client fetches Intel's revocation data itself, never the exit's copy. A revocation reaches it only when Intel publishes the update.</p>
-      </li>
-      <li>
-        <h4 data-more-title>The exit may be stopped after judging.</h4>
-        <p data-more="limit-10">The exit is paid by the hour. It runs through judging and may be stopped afterwards.</p>
+        <h3 data-more-title>The usual VPN and TEE caveats.</h3>
+        <p data-more="limit-4">The exit sees the hosts you connect to; ProvenExit proves the approved code does not keep them. The network around the exit sees timing and sizes, so use HTTPS. Intel, the TDX module and Phala's dstack OS are trusted roots, as for any app on TDX.</p>
       </li>
     </ol>
     <p class="limits-more" hidden><a class="link" data-href="links.repo" data-href-suffix="/blob/main/docs/LIMITS.md">Read every limit</a></p>

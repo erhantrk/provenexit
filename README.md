@@ -108,17 +108,9 @@ has the architecture, the two-hop mode and a map of the repository. Specs: [docs
 Each one in full in [docs/LIMITS.md](docs/LIMITS.md).
 
 - [NEAR testnet only](docs/LIMITS.md#testnet-only); one live exit.
-- [The exit sees your destinations](docs/LIMITS.md#the-exit-sees-your-destinations); it proves the code does not keep them.
-- ["No logs" covers the attested code, not the operator's network](docs/LIMITS.md#no-logs-covers-the-attested-code-not-the-operators-network).
-- [TLS is still needed for content](docs/LIMITS.md#tls-is-still-needed-for-content); [timing and sizes are visible](docs/LIMITS.md#metadata-timing-and-sizes) (no padding, no cover traffic).
-- [Proxy mode only](docs/LIMITS.md#proxy-mode-only): TCP through SOCKS5, no UDP, no system-wide tunnel; [direct connection only](docs/LIMITS.md#direct-connection-only), no `HTTP_PROXY` support.
-- [The local demo stack uses a MOCK root, not Intel](docs/LIMITS.md#the-local-demo-stack-uses-a-mock-root).
-- [Collateral freshness is bounded by Intel's CRL interval](docs/LIMITS.md#collateral-freshness).
-- [A matching image digest does not prove the source is honest](docs/LIMITS.md#what-a-matching-image-digest-proves).
-- [One owner key decides the allowlist](docs/LIMITS.md#one-owner-key-decides-the-allowlist); [registry answers are cross-checked between two RPC providers, not proven](docs/LIMITS.md#registry-answers-are-cross-checked-not-proven).
-- [Phala's gateway terminates TLS](docs/LIMITS.md#phalas-gateway-terminates-tls) (it sees only tunnel ciphertext).
-- [The fixture replay proves the past](docs/LIMITS.md#the-fixture-replay-proves-the-past), not the present.
-- [Intel, the dstack OS and side channels are trusted / out of scope](docs/LIMITS.md#tee-vendor-trust-and-side-channels).
+- [One owner key decides the allowlist](docs/LIMITS.md#one-owner-key-decides-the-allowlist); a 2-of-3 council handover is prepared.
+- [Proxy mode only](docs/LIMITS.md#proxy-mode-only): TCP through SOCKS5, no system-wide tunnel.
+- [The usual VPN and TEE caveats](docs/LIMITS.md#usual-vpn-and-tee-caveats): the exit sees destinations, and Intel and Phala are trusted.
 
 ## Tracks
 
