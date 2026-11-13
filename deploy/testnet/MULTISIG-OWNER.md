@@ -209,9 +209,9 @@ scripts/owner.sh accept_owner '{}'
 
 It needs two council members to agree. The old owner cannot take the role back alone.
 
-## Left on testnet
+## After the test
 
-The six throwaway accounts in the table above stay on testnet, with the registry copy owned by the DAO. Their keys
-are in `~/.near-credentials/testnet/` (the files with `pe-msdemo` in the name) on the machine that ran the test. They hold only faucet
-NEAR and control nothing real. Unlike the live registry, the registry copy still has an access key on its own
-account; that does not matter for this test.
+On 2026-11-13, after the live handover, the five throwaway accounts with keys (the registry copy, the single owner and
+the three council members) were deleted, so their transactions above stay on chain but the accounts are gone. The
+throwaway DAO `pe-msdemo.sputnikv2.testnet` has no key, so nobody can delete it; it holds only faucet NEAR and controls
+nothing.

@@ -34,7 +34,7 @@ The builder's commits are the ones whose message starts with `T<nn>:`. Claude se
 baseline, did the review passes, and ran the testnet/Phala operator work. Commits that are not task commits
 (`fix: …`, `e2e: …`) are review follow-ups from those Claude sessions.
 
-## What the AI did not do
+## What the AI did, and did not do
 
 - It never printed or committed a private key, mnemonic or API token. For the live exit, the operator key was read
   from the local NEAR credentials into a temporary env file, passed to `phala deploy -e` (encrypted to the CVM) and
@@ -49,11 +49,16 @@ baseline, did the review passes, and ran the testnet/Phala operator work. Commit
 - The 2026-11-13 docs rewrite (the short README, `docs/VERIFY.md`, `docs/HOW-IT-WORKS.md`, `docs/LIMITS.md`,
   `docs/REPRODUCE.md`, the specs moved to `docs/spec/`) was written by a Claude Code agent; it sent no transaction,
   pushed nothing and did not touch Phala.
+- On 2026-11-13, on Erhan's instruction, the Claude Code session he was working in added the release workflow and
+  published `provenexit` 0.1.2 and 0.1.3 through it (npm trusted publishing), created the 2-of-3 council DAO and its
+  three member accounts, handed the registry's ownership to it, ran the live revoke and re-allow, started and paused
+  the exit, and redeployed the site. Every transaction was signed from the local near-cli-rs keychain; no key was
+  printed.
 - It did not submit the hackathon form.
 - It did not decide the product: the name, the pitch, the tracks, the trust model, the fallback used before the live exit existed and
   the limits in [`docs/LIMITS.md`](docs/LIMITS.md) are Erhan's calls.
 
 ## Exact model names
 
-Per-commit model names and versions were not recorded while the work happened, so this file names the products
-(Claude, Claude Code, the headless builder) rather than claiming versions.
+Per-commit model names and versions were not recorded for most of the work, so this file names the products
+(Claude, Claude Code, the headless builder) and gives a model version only where it was recorded.
