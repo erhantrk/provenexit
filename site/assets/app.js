@@ -9,7 +9,8 @@ import { startMore, enhanceMore } from "./more.js";
 const POLL_MS = 15_000;
 const FETCH_TIMEOUT_MS = 70_000;
 const HISTORY_SHOWN = 3;
-const CMD_LIVE = "npm ci && npx tsc -b && scripts/try-live.sh";
+const CMD_LIVE = "npx provenexit verify";
+const CMD_MCP = "claude mcp add provenexit -- npx -y -p provenexit provenexit-mcp";
 const CMD_REPLAY = "npm ci && npx tsc -b && node client/dist/cli.js vpn verify --fixture fixtures/live-exit";
 const KEY_CHECKS = ["report_data binds the exit's keys", "instance registered with matching keys"];
 
@@ -527,7 +528,7 @@ function renderTraffic(state) {
   return put("traffic-body", `<div class="pair"><div class="pair-card"><p class="pair-label">${icon("you")}You, now</p>${you}</div><div class="pair-arrow" aria-hidden="true"><svg viewBox="0 0 48 24" focusable="false"><path d="M2 12h42M34 3l10 9-10 9"/></svg></div><div class="pair-card pair-exit"><p class="pair-label">${icon("exit")}Through the exit</p>${exit}</div></div>${line}`);
 }
 
-// ---- run it, agents ---------------------------------------------------------------------------
+// ---- run it ---------------------------------------------------------------------------------
 function renderRun(state) {
   const repo = safeUrl(json?.links?.repo);
   let clone = "";
@@ -542,8 +543,10 @@ function renderRun(state) {
       : state === "refused"
         ? `<p class="cmd-note">The client refuses the exit right now, so this command prints the same refusal.</p>`
         : "";
-  const liveCmd = `<div class="cmd-block"><h3>Verify the live exit and send one request through it</h3>${command("cmd-live", CMD_LIVE)}${note}
-<p data-more="run-live" data-more-label="What it does">Prints every check, starts a local SOCKS5 proxy on 127.0.0.1:18180, and shows your IP next to the IP a website sees through the exit. It changes no system settings and needs no sudo.</p></div>`;
+  const liveCmd = `<div class="cmd-block"><h3>Verify the live exit</h3>${command("cmd-live", CMD_LIVE)}${note}
+<p data-more="run-live" data-more-label="What it does">Prints every check and the verdict. <span class="mono">npx provenexit connect</span> then runs a local SOCKS5 proxy on 127.0.0.1:18180 through the exit. It changes no system settings and needs no sudo.</p></div>`;
+  const agentCmd = `<div class="cmd-block"><h3>Give it to an AI agent</h3>${command("cmd-mcp", CMD_MCP)}${agentsLine(state)}
+<p data-more="run-agent" data-more-label="What the agent gets">An MCP server with three tools: <span class="mono">verify_exit</span> runs these checks, <span class="mono">fetch_via_exit</span> gets a URL through the verified tunnel, and <span class="mono">registry_status</span> reads the NEAR registry. If any check fails, it fetches nothing and returns the error code. Only what goes through <span class="mono">fetch_via_exit</span> uses the exit.</p></div>`;
   const captured = json?.replay?.captured_at && fmtDate(json.replay.captured_at) ? `, captured ${time(json.replay.captured_at, fmtDate)}` : "";
   const lines = checksOf(json?.replay).length;
   const see = lines > 0 ? `${lines} ✔ lines` : "one ✔ line for each check";
@@ -551,26 +554,19 @@ function renderRun(state) {
 <p>Replays the same exit's quote and registry state${captured}. You see ${see} and ✔ VERIFIED (FIXTURE REPLAY …).</p></div>`;
   const video = safeUrl(CONFIG.demoVideoUrl);
   const videoLink = video ? `<p class="video"><a class="btn" href="${esc(video)}" rel="noopener noreferrer">Watch the demo video</a></p>` : "";
-  return put("run-body", `${clone}${state === "offline" ? replayCmd + liveCmd : liveCmd + replayCmd}${videoLink}`);
+  return put("run-body", `${state === "offline" ? "" : liveCmd}${agentCmd}${clone}${replayCmd}${state === "offline" ? liveCmd : ""}${videoLink}`);
 }
 
-function renderAgents(state) {
+function agentsLine(state) {
   const tool = `<span class="mono">fetch_via_exit</span>`;
   const code = json?.verify?.code ? ` and returns <span class="mono">${esc(json.verify.code)}</span>` : "";
-  let html = "";
-  if (state === "verified") {
-    html = `<p class="agents-live">${mark("pass", "confirmed")}<span>As of ${esc(fmtTime(checkedAt()))} every check passes, so ${tool} fetches.</span></p>`;
-  } else if (state === "offline") {
-    html = `<p class="agents-live"><span>The exit is stopped, so ${tool} fetches nothing${code}.</span></p>`;
-  } else if (state === "refused") {
+  if (state === "verified") return `<p class="agents-live">${mark("pass", "confirmed")}<span>As of ${esc(fmtTime(checkedAt()))} every check passes, so ${tool} fetches.</span></p>`;
+  if (state === "offline") return `<p class="agents-live"><span>The exit is stopped, so ${tool} fetches nothing${code}.</span></p>`;
+  if (state === "refused") {
     const why = json.verify?.code === "E_COMPOSE_NOT_ALLOWED" ? "The build is revoked" : "A check fails";
-    html = `<p class="agents-live" data-ok="fail">${mark("fail", "refused")}<span>${why}, so ${tool} fetches nothing${code}.</span></p>`;
+    return `<p class="agents-live" data-ok="fail">${mark("fail", "refused")}<span>${why}, so ${tool} fetches nothing${code}.</span></p>`;
   }
-  put("agents-live", html ? `<div class="live">${html}</div>` : "");
-  const repo = safeUrl(json?.links?.repo);
-  put("mcp-path", repo
-    ? `<a class="mono" href="${esc(repo.replace(/\/$/, ""))}/tree/HEAD/mcp/dist" rel="noopener noreferrer">mcp/dist/provenexit-mcp.mjs</a>`
-    : `<span class="mono">mcp/dist/provenexit-mcp.mjs</span>`);
+  return "";
 }
 
 // ---- static bindings --------------------------------------------------------------------------
@@ -631,7 +627,6 @@ function render() {
   renderHistory(state);
   renderTraffic(state);
   renderRun(state);
-  renderAgents(state);
   enhanceMore();
   scanMotion();
 }

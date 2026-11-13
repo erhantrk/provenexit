@@ -316,31 +316,24 @@ test("the hero check-flow card is gone; the hero keeps headline, buttons and pla
   assert.doesNotMatch(text("../assets/app.js"), /setFlowStop/);
 });
 
-test("the route section is a pinned scroll scene that reduced motion leaves unpinned", () => {
+test("the route section is four plain steps, with no pinned scroll scene", () => {
   const html = text("../index.html");
   const route = html.slice(html.indexOf('id="route"'), html.indexOf("</section>", html.indexOf('id="route"')));
-  // Track, then a sticky stage holding the heading, the diagram, all four steps in order and the counter.
-  assert.match(route, /<div class="route-pin" id="route-pin">\s*<div class="route-stage">/);
-  assert.ok(route.indexOf("route-stage") < route.indexOf('id="route-h"'));
   assert.equal(route.match(/<li>/g).length, 4);
-  assert.match(route, /id="route-count" aria-hidden="true"/);
+  assert.doesNotMatch(route, /route-pin|route-stage|route-count|station/);
   const css = text("../assets/styles.css");
-  // Pinning lives only under the "motion" class, which reduced motion never sets.
-  assert.match(css, /\.motion #route:not\(\[data-nopin\]\) \.route-pin \{ height: 280vh; \}/);
-  assert.match(css, /\.motion #route:not\(\[data-nopin\]\) \.route-stage \{\s*position: sticky; top: var\(--nav-h\);/);
-  for (const m of css.matchAll(/position: sticky|route-pin \{ height/g)) {
-    // The rule holding it: the text since the previous "}", minus an opening "@media (...) {".
-    const rule = css.slice(css.lastIndexOf("}", m.index) + 1, m.index).replace(/^\s*@media[^{]*\{/, "").replace(/\/\*[^]*?\*\//g, "");
-    assert.match(rule.trim(), /^\.motion /);
-  }
-  const flag = text("../assets/motion-flag.js");
-  assert.match(flag, /prefers-reduced-motion: reduce\)"\)\.matches\) return;\n  root\.classList\.add\("motion"\)/);
-  const motion = text("../assets/motion.js");
-  assert.match(motion, /room > 0 \? clamp\(\(stage\.getBoundingClientRect\(\)\.top - r\.top\) \/ room\) : 1/);
-  assert.match(motion, /sec\.dataset\.nopin = "1"/);
-  // Switching to reduced motion mid-visit drops the motion class (and with it the pin) and the step states.
-  assert.match(motion, /root\.classList\.remove\("motion"\);\n    removeEventListener\("scroll", queue\)/);
-  assert.match(motion, /classList\.remove\("lit", "done", "now"\)/);
+  assert.doesNotMatch(css, /position: sticky|route-pin|\.station/);
+  assert.doesNotMatch(text("../assets/motion.js"), /routeSteps|route-pin/);
+});
+
+test("build, NEAR and keys share one proof section; the agent command lives under Run it", () => {
+  const html = text("../index.html");
+  const proof = html.slice(html.indexOf('id="proof"'), html.indexOf("</section>", html.indexOf('id="proof"')));
+  for (const id of ["build", "near", "keys"]) assert.match(proof, new RegExp(`class="proof-part" id="${id}"`));
+  assert.doesNotMatch(html, /id="agents"|href="#agents"/);
+  const app = text("../assets/app.js");
+  assert.match(app, /const CMD_MCP = "claude mcp add provenexit -- npx -y -p provenexit provenexit-mcp";/);
+  assert.match(app, /const CMD_LIVE = "npx provenexit verify";/);
 });
 
 test("the limits heading and the compact history", () => {

@@ -38,13 +38,10 @@
     <nav class="menu" id="menu" aria-label="Sections">
       <ul>
         <li><a href="#checks">Checks</a></li>
-        <li><a href="#build">Build</a></li>
-        <li><a href="#near">NEAR</a></li>
-        <li><a href="#keys">Keys</a></li>
+        <li><a href="#proof">Proof</a></li>
         <li><a href="#history">History</a></li>
         <li><a href="#traffic">Traffic</a></li>
         <li><a href="#run">Run it</a></li>
-        <li><a href="#agents">Agents</a></li>
         <li><a href="#limits">Limits</a></li>
         <li><a data-href="links.repo" hidden>GitHub</a></li>
       </ul>
@@ -107,73 +104,35 @@
 </section>
 
 <section class="sec sec-unlit" id="route" aria-labelledby="route-h">
-  <div class="route-pin" id="route-pin">
-  <div class="route-stage">
   <div class="wrap">
     <header class="sec-head reveal" data-label="02  How it works">
       <h2 id="route-h">How one connection is decided</h2>
     </header>
-    <div class="route" id="route-fig">
-      <div class="route-registry">
-        <p class="station-name">The NEAR registry</p>
-        <p class="station-sub mono" data-bind="registry.account">–</p>
-      </div>
-      <div class="route-drop" aria-hidden="true"></div>
-      <div class="route-line" aria-hidden="true"><i></i></div>
-      <ol class="stations" aria-label="The route of a connection">
-        <li class="station">
-          <span class="station-dot" aria-hidden="true"></span>
-          <p class="station-name">Your machine</p>
-          <p class="station-sub">The client and its local proxy</p>
-        </li>
-        <li class="station station-mid">
-          <span class="station-dot" aria-hidden="true"></span>
-          <p class="station-name">The exit</p>
-          <p class="station-sub" data-bind-platform>–</p>
-        </li>
-        <li class="station station-end">
-          <span class="station-dot" aria-hidden="true"></span>
-          <p class="station-name">The website</p>
-          <p class="station-sub">It sees the exit's address</p>
-        </li>
-      </ol>
-    </div>
-    <ol class="steps" id="route-steps">
+    <ol class="steps stagger" id="route-steps">
       <li>Your client sends the exit a fresh random number and asks for its Intel quote.</li>
       <li>It checks Intel's signature, that debug is off, and that the quote contains the exit's keys and your number.</li>
       <li>It reads the NEAR registry: is this build allowed, is this OS allowed, is this exit registered.</li>
       <li>Only then it opens an encrypted tunnel to the key in the quote. If the owner revokes the build, the next connection is refused.</li>
     </ol>
-    <p class="route-count" id="route-count" aria-hidden="true"><span class="route-count-n">Step <b id="route-n">1</b> of 4</span><span class="route-count-bar"><i></i></span></p>
-  </div>
-  </div>
   </div>
 </section>
 
-<section class="sec" id="build" aria-labelledby="build-h">
+<section class="sec" id="proof" aria-labelledby="proof-h">
   <div class="wrap">
-    <header class="sec-head reveal" data-label="03  The build">
-      <h2 id="build-h">The image the exit runs</h2>
-      <p class="sec-lead">These values are part of the measurement Intel signs.<span id="build-lead"></span></p>
+    <header class="sec-head reveal" data-label="03  The proof">
+      <h2 id="proof-h">What the exit runs, and who decides</h2>
     </header>
-    <div id="build-body" class="stagger"></div>
-  </div>
-</section>
-
-<section class="sec" id="near" aria-labelledby="near-h">
-  <div class="wrap">
-    <header class="sec-head reveal" data-label="04  On NEAR">
-      <h2 id="near-h">NEAR ran the Intel check itself</h2>
-    </header>
-    <div id="near-body" class="stagger"></div>
-  </div>
-</section>
-
-<section class="sec sec-unlit" id="keys" aria-labelledby="keys-h">
-  <div class="wrap">
-    <header class="sec-head reveal" data-label="05  Keys">
-      <h2 id="keys-h">Who holds each key</h2>
-    </header>
+    <div class="proof-part" id="build">
+      <h3>The image the exit runs</h3>
+      <p class="proof-lead">These values are part of the measurement Intel signs.<span id="build-lead"></span></p>
+      <div id="build-body" class="stagger"></div>
+    </div>
+    <div class="proof-part" id="near">
+      <h3>NEAR ran the Intel check itself</h3>
+      <div id="near-body" class="stagger"></div>
+    </div>
+    <div class="proof-part" id="keys">
+      <h3>Who holds each key</h3>
     <div id="keys-body" class="stagger">
       <div class="cards cards-2">
         <article class="card">
@@ -183,12 +142,13 @@
         </article>
       </div>
     </div>
+    </div>
   </div>
 </section>
 
 <section class="sec" id="history" aria-labelledby="history-h">
   <div class="wrap">
-    <header class="sec-head reveal" data-label="06  History">
+    <header class="sec-head reveal" data-label="04  History">
       <h2 id="history-h">Every change to the allowlist</h2>
       <p class="sec-lead">Approvals, revocations and registrations on <span class="mono" data-bind="registry.account">the registry</span>, newest first.</p>
     </header>
@@ -198,7 +158,7 @@
 
 <section class="sec" id="traffic" aria-labelledby="traffic-h">
   <div class="wrap">
-    <header class="sec-head reveal" data-label="07  Traffic">
+    <header class="sec-head reveal" data-label="05  Traffic">
       <h2 id="traffic-h">The address websites see</h2>
     </header>
     <div id="traffic-body" class="stagger"></div>
@@ -208,7 +168,7 @@
 
 <section class="sec sec-unlit" id="run" aria-labelledby="run-h">
   <div class="wrap">
-    <header class="sec-head reveal" data-label="08  Run it">
+    <header class="sec-head reveal" data-label="06  Run it">
       <h2 id="run-h">Check the exit from your own machine</h2>
       <p class="sec-lead">Node 22 and a network connection. No accounts.</p>
     </header>
@@ -227,47 +187,9 @@
   </div>
 </section>
 
-<section class="sec" id="agents" aria-labelledby="agents-h">
-  <div class="wrap">
-    <header class="sec-head reveal" data-label="09  For agents">
-      <h2 id="agents-h">An MCP server for AI agents</h2>
-      <p class="sec-lead">Your agent checks the exit, then fetches pages through it. If any check fails, it fetches nothing and returns the error code.</p>
-    </header>
-    <div id="agents-live"></div>
-    <div class="agents-grid">
-      <dl class="tools">
-        <div>
-          <dt class="mono">verify_exit</dt>
-          <dd>Runs the same checks as this page and returns the verdict and each check.</dd>
-        </div>
-        <div>
-          <dt class="mono">fetch_via_exit</dt>
-          <dd>Gets an http or https URL on port 80 or 443 through the verified tunnel. The exit resolves the hostname.</dd>
-        </div>
-        <div>
-          <dt class="mono">registry_status</dt>
-          <dd>Returns the NEAR registry: owner, code hash, key count, history.</dd>
-        </div>
-      </dl>
-      <div class="install">
-        <div class="cmd-block">
-          <h3>Add it to Claude Code</h3>
-          <div class="cmd"><pre><code id="cmd-mcp">claude mcp add provenexit -- node /path/to/provenexit-mcp.mjs</code></pre><button class="copy js-only" type="button" data-copy-from="cmd-mcp"><span>Copy command</span></button></div>
-          <p>One file, Node 22, runs on your machine. It is in the repo at <span id="mcp-path"><span class="mono">mcp/dist/provenexit-mcp.mjs</span></span>.</p>
-        </div>
-        <div class="cmd-block">
-          <h3>Claude Desktop, in <span class="mono">claude_desktop_config.json</span></h3>
-          <div class="cmd"><pre><code id="cmd-desktop">{ "mcpServers": { "provenexit": { "command": "node", "args": ["/path/to/provenexit-mcp.mjs"] } } }</code></pre><button class="copy js-only" type="button" data-copy-from="cmd-desktop"><span>Copy config</span></button></div>
-        </div>
-        <p class="quiet">Only what goes through <span class="mono">fetch_via_exit</span> uses the exit. The agent's model calls and its other tools do not.</p>
-      </div>
-    </div>
-  </div>
-</section>
-
 <section class="sec" id="limits" aria-labelledby="limits-h">
   <div class="wrap">
-    <header class="sec-head reveal" data-label="10  Limits">
+    <header class="sec-head reveal" data-label="07  Limits">
       <h2 id="limits-h">What this does not prove</h2>
     </header>
     <ol class="limits stagger">
