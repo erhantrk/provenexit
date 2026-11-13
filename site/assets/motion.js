@@ -1,4 +1,4 @@
-// Motion for the page, scrubbed by scroll position: section reveals and the
+// Motion for the page, scrubbed by scroll position: section reveals, the pinned route scene and the
 // history line. Nothing plays on a clock. One requestAnimationFrame-throttled scroll/resize handler
 // measures each element (getBoundingClientRect), turns its scroll position into a progress 0..1 and
 // writes it as a CSS custom property (--p, --draw) or a class; CSS turns that into transform and
@@ -60,6 +60,71 @@ function reveals() {
   }
 }
 
+// ---- the route: a pinned scene, four steps one after another ----------------------------------
+// The section is a tall track and its stage is position: sticky (styles.css), so the page seems to
+// stop while scrolling plays the steps. p is how far the track has scrolled past the stage, 0..1.
+// When the stage does not fit the viewport, the section gets data-nopin and the same steps are
+// scrubbed by the plain scroll position instead.
+function routeSteps() {
+  const sec = document.getElementById("route");
+  const pin = document.getElementById("route-pin");
+  const fig = document.getElementById("route-fig");
+  const list = document.getElementById("route-steps");
+  if (!sec || !pin || !fig || !list) return;
+  const stage = pin.querySelector(".route-stage");
+  const wrap = stage.querySelector(".wrap");
+  const line = fig.querySelector(".route-line i");
+  const drop = fig.querySelector(".route-drop");
+  const [machine, exit, site] = fig.querySelectorAll(".station");
+  const registry = fig.querySelector(".route-registry");
+  const items = [...list.children];
+  const count = document.getElementById("route-count");
+  const num = document.getElementById("route-n");
+  const seg = (p, a, b) => clamp((p - a) / (b - a));
+
+  // Pin only when the stage's content fits in it.
+  let width = -1;
+  const fit = () => {
+    // Recheck on a new width, or when content drawn later (live data) outgrows the pinned stage.
+    if (innerWidth === width && (sec.dataset.nopin || wrap.offsetHeight <= stage.clientHeight)) return;
+    width = innerWidth;
+    sec.removeAttribute("data-nopin");
+    if (wrap.offsetHeight > stage.clientHeight) sec.dataset.nopin = "1";
+  };
+
+  fig.dataset.anim = "1";
+  list.dataset.anim = "1";
+  parts.push(() => {
+    fit();
+    let p;
+    if (sec.dataset.nopin) {
+      // From the diagram's top at 85% of the viewport until the step cards' bottom is at 85%.
+      p = progress(fig, 0, 0.85, list, 1, 0.85);
+    } else {
+      const r = pin.getBoundingClientRect();
+      const room = r.height - stage.clientHeight;
+      p = room > 0 ? clamp((stage.getBoundingClientRect().top - r.top) / room) : 1;
+    }
+    const q = clamp(p / 0.92); // the last stretch holds the finished picture before the page moves on
+    const n = Math.min(4, Math.floor(q * 4) + 1);
+    // Step 1 draws the line to the exit, step 2 lights the exit, step 3 draws the read up to the
+    // registry and lights it, step 4 draws on to the website.
+    line.style.transform = `scaleX(${(seg(q, 0.02, 0.2) * 0.5 + seg(q, 0.76, 0.96) * 0.5).toFixed(3)})`;
+    drop.style.transform = `scaleY(${seg(q, 0.52, 0.7).toFixed(3)})`;
+    machine.classList.add("lit");
+    exit.classList.toggle("lit", q >= 0.25);
+    registry.classList.toggle("lit", q >= 0.7);
+    site.classList.toggle("lit", q >= 0.96);
+    fig.dataset.step = String(n);
+    items.forEach((li, i) => {
+      li.classList.toggle("done", i < n - 1);
+      li.classList.toggle("now", i === n - 1);
+    });
+    count.style.setProperty("--p", q.toFixed(3));
+    if (num.textContent !== String(n)) num.textContent = String(n);
+  });
+}
+
 // ---- history: the timeline draws down, rows appear as the line reaches them --------------------
 function historyDraw() {
   const sec = document.getElementById("history-body");
@@ -87,6 +152,7 @@ export function startMotion() {
     return;
   }
   parts.push(reveals);
+  routeSteps();
   historyDraw();
   addEventListener("scroll", queue, { passive: true });
   addEventListener("resize", queue);
@@ -98,12 +164,15 @@ export function startMotion() {
     removeEventListener("scroll", queue);
     removeEventListener("resize", queue);
     parts.length = 0;
-    for (const el of document.querySelectorAll("[style*='--p'], [style*='--draw']")) {
+    for (const el of document.querySelectorAll("[style*='--p'], [style*='--draw'], .route-line i, .route-drop")) {
       el.style.removeProperty("--p");
       el.style.removeProperty("--draw");
       el.style.removeProperty("transform");
     }
+    document.getElementById("route-fig")?.removeAttribute("data-anim");
+    document.getElementById("route-steps")?.removeAttribute("data-anim");
     document.getElementById("history-body")?.removeAttribute("data-anim");
+    for (const el of document.querySelectorAll("#route .lit, #route-steps .done, #route-steps .now")) el.classList.remove("lit", "done", "now");
   });
 }
 

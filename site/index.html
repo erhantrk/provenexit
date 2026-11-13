@@ -104,16 +104,46 @@
 </section>
 
 <section class="sec sec-unlit" id="route" aria-labelledby="route-h">
+  <div class="route-pin" id="route-pin">
+  <div class="route-stage">
   <div class="wrap">
     <header class="sec-head reveal" data-label="02  How it works">
       <h2 id="route-h">How one connection is decided</h2>
     </header>
-    <ol class="steps stagger" id="route-steps">
+    <div class="route" id="route-fig">
+      <div class="route-registry">
+        <p class="station-name">The NEAR registry</p>
+        <p class="station-sub mono" data-bind="registry.account">–</p>
+      </div>
+      <div class="route-drop" aria-hidden="true"></div>
+      <div class="route-line" aria-hidden="true"><i></i></div>
+      <ol class="stations" aria-label="The route of a connection">
+        <li class="station">
+          <span class="station-dot" aria-hidden="true"></span>
+          <p class="station-name">Your machine</p>
+          <p class="station-sub">The client and its local proxy</p>
+        </li>
+        <li class="station station-mid">
+          <span class="station-dot" aria-hidden="true"></span>
+          <p class="station-name">The exit</p>
+          <p class="station-sub" data-bind-platform>–</p>
+        </li>
+        <li class="station station-end">
+          <span class="station-dot" aria-hidden="true"></span>
+          <p class="station-name">The website</p>
+          <p class="station-sub">It sees the exit's address</p>
+        </li>
+      </ol>
+    </div>
+    <ol class="steps" id="route-steps">
       <li>Your client sends the exit a fresh random number and asks for its Intel quote.</li>
       <li>It checks Intel's signature, that debug is off, and that the quote contains the exit's keys and your number.</li>
       <li>It reads the NEAR registry: is this build allowed, is this OS allowed, is this exit registered.</li>
       <li>Only then it opens an encrypted tunnel to the key in the quote. If the owner revokes the build, the next connection is refused.</li>
     </ol>
+    <p class="route-count" id="route-count" aria-hidden="true"><span class="route-count-n">Step <b id="route-n">1</b> of 4</span><span class="route-count-bar"><i></i></span></p>
+  </div>
+  </div>
   </div>
 </section>
 

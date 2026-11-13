@@ -385,14 +385,71 @@ h3 { font-size: 22px; font-weight: 800; line-height: 1.2; }
   .tile-more { display: none; }
 }
 
-/* ---- route: four steps ---- */
-.steps { counter-reset: step; display: grid; gap: 16px; }
+/* ---- route ---- */
+.route { position: relative; display: grid; grid-template-columns: 1fr 1fr 1fr; padding: 32px 8px 36px; background: var(--card); border: 1px solid var(--rule); border-radius: 20px; }
+.route-registry { grid-column: 2; justify-self: center; text-align: center; padding: 12px 18px 10px; border-radius: 14px; border: 2px solid var(--accent-soft); background: var(--tint); max-width: 100%; }
+.route-registry .station-sub { overflow-wrap: anywhere; }
+.route-drop { grid-column: 2; justify-self: center; width: 2px; height: 44px; margin: 0; background: repeating-linear-gradient(to bottom, var(--accent) 0 6px, transparent 6px 12px); transform-origin: center bottom; }
+.route-line { grid-column: 1 / -1; height: 4px; margin: 7px calc(100% / 6) -11px; background: var(--rule); border-radius: 2px; overflow: hidden; }
+.route-line i { display: block; height: 100%; background: var(--accent); transform-origin: left center; }
+.stations { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr 1fr; }
+.station { text-align: center; padding: 0 8px; }
+.station-dot { display: block; width: 20px; height: 20px; margin: 0 auto 14px; border-radius: 50%; background: var(--card); border: 5px solid var(--accent); position: relative; }
+.station-name { font-weight: 800; font-size: 20px; line-height: 1.2; }
+.station-sub { color: var(--ink-2); font-size: 15px; margin-top: 4px; }
+.steps { counter-reset: step; display: grid; gap: 16px; margin-top: 28px; }
 .steps li { counter-increment: step; position: relative; padding: 18px 18px 20px; font-size: 17px; background: var(--card); border: 1px solid var(--rule); border-radius: var(--radius); }
 .steps li::before {
   content: counter(step); display: grid; place-items: center; width: 34px; height: 34px; margin-bottom: 12px; border-radius: 50%;
   background: var(--accent); color: #fff; font-weight: 800; font-size: 17px;
 }
 @media (min-width: 860px) { .steps { grid-template-columns: repeat(4, 1fr); } }
+@media (max-width: 620px) {
+  .route { padding: 24px 0 28px; }
+  .station-name { font-size: 15px; }
+  .station-sub { font-size: 12.5px; }
+  .station { padding: 0 4px; }
+  .route-registry { grid-column: 1 / -1; padding: 10px 14px 8px; }
+}
+
+/* route, stepped (JS and motion on): motion.js marks the lit parts (.lit) and the cards (.done, .now) */
+.route-count { display: none; }
+.route[data-anim] .station, .route[data-anim] .route-registry { transition: opacity .3s; }
+.route[data-anim] .station:not(.lit), .route[data-anim] .route-registry:not(.lit) { opacity: .35; }
+.route[data-anim] .station.lit .station-dot { background: var(--accent); }
+.route[data-anim] .route-registry.lit { border-color: var(--accent); }
+.steps[data-anim] li { transition: opacity .3s, translate .3s, border-color .3s, box-shadow .3s; }
+.steps[data-anim] li:not(.done):not(.now) { opacity: .35; color: var(--ink-2); }
+.steps[data-anim] li:not(.done):not(.now)::before { background: var(--tint-2); color: var(--accent); }
+.steps[data-anim] li.done { color: var(--ink-2); }
+.steps[data-anim] li.now { border-color: var(--accent); box-shadow: 0 18px 34px -22px rgb(80 52 230 / .65); translate: 0 -6px; }
+
+/* The pinned scene. The section is a tall track; its stage sticks under the nav, so the page seems to
+   stop while scrolling plays the steps, then it moves on. Only with motion on; motion.js sets
+   data-nopin when the stage does not fit the viewport, and the scene falls back to the plain layout. */
+.motion #route:not([data-nopin]) { padding: 0; }
+.motion #route:not([data-nopin]) .route-pin { height: 280vh; }
+.motion #route:not([data-nopin]) .route-stage {
+  position: sticky; top: var(--nav-h); display: flex; flex-direction: column; justify-content: center;
+  height: calc(100vh - var(--nav-h)); height: calc(100svh - var(--nav-h)); padding: 20px 0;
+}
+.motion #route:not([data-nopin]) .sec-head { margin-bottom: 28px; }
+.motion #route:not([data-nopin]) .route-count { display: flex; align-items: center; gap: 14px; margin-top: 22px; font-size: 14px; font-weight: 700; color: var(--ink-2); }
+.route-count-n b { color: var(--accent); }
+.route-count-bar { flex: 0 1 160px; height: 4px; border-radius: 2px; background: var(--rule); overflow: hidden; }
+.route-count-bar i { display: block; height: 100%; background: var(--accent); transform-origin: left center; transform: scaleX(var(--p, 1)); }
+@media (max-width: 859px) {
+  /* Narrow: the diagram on top and one card at a time below it, all four kept in the DOM in order. */
+  .motion #route:not([data-nopin]) .route-pin { height: 260vh; }
+  .motion #route:not([data-nopin]) .sec-head { margin-bottom: 16px; }
+  .motion #route:not([data-nopin]) .sec-head h2 { font-size: 26px; }
+  .motion #route:not([data-nopin]) .steps { margin-top: 16px; }
+  .motion #route:not([data-nopin]) .steps li { grid-area: 1 / 1; padding: 14px 16px 16px; font-size: 16px; }
+  .motion #route:not([data-nopin]) .steps li::before { float: left; width: 28px; height: 28px; margin: 0 10px 0 0; font-size: 15px; }
+  .motion #route:not([data-nopin]) .steps[data-anim] li:not(.now) { opacity: 0; translate: 0 10px; }
+  .motion #route:not([data-nopin]) .steps[data-anim] li.now { translate: none; }
+  .motion #route:not([data-nopin]) .route-count { margin-top: 14px; }
+}
 
 /* ---- NEAR ---- */
 .gas { font-size: clamp(20px, 2.1vw, 27px); line-height: 1.35; font-weight: 600; max-width: 30em; margin-bottom: 32px; }
