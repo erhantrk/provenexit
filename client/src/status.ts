@@ -18,7 +18,7 @@ import {
   toHex,
   type QuoteVerifier,
 } from "@plr/shared";
-import { NearRegistry, checkRpcUrl, isNearAccountId, resolveRegistryCodeHash } from "./near-registry.js";
+import { E_REGISTRY_RPC_DISAGREE, NearRegistry, parseRpcUrls, isNearAccountId, resolveRegistryCodeHash } from "./near-registry.js";
 import { TracingRegistry, checkLines } from "./verify-report.js";
 import { VpnClient } from "./vpn/client.js";
 import { composeFacts, fromLine, verifyVpnReport, type ComposeFacts, type VerifyCheck } from "./vpn-report.js";
@@ -390,7 +390,7 @@ function resolveConfig(o: StatusOptions): Cfg {
   const trustedRoot = fromHex(rootHex, 64);
   if (!isValidP256Pub(trustedRoot)) throw new Error("PLR_TRUSTED_ROOT is not a valid P-256 public key");
   if (rpcUrl === undefined) throw new Error("NEAR RPC not configured (PLR_NEAR_RPC)");
-  checkRpcUrl(rpcUrl);
+  parseRpcUrls(rpcUrl); // one endpoint, or several separated by commas (NearRegistry then requires equal answers)
   // The baked pin belongs to the baked registry only: another registry needs its own (or a shipped) pin.
   const explicit = o.registryCodeHash || env.PLR_VPN_REGISTRY_CODE_HASH || (registry === BAKED.registry ? BAKED.registryCodeHash : undefined);
   const codeHash = resolveRegistryCodeHash(registry, explicit, isIntelRoot(trustedRoot));
@@ -451,20 +451,26 @@ export async function getStatus(opts: StatusOptions = {}): Promise<Status> {
   const verifyP = client === undefined
     ? Promise.resolve(undefined)
     : withTimeout(verifyVpnReport(client, tracing), T.verify, "verify").catch(() => undefined);
+  // The two account facts shown on the status page (code hash, number of full-access keys) follow the same rule
+  // as the registry views: every configured endpoint is asked and all must report the same fact.
+  const factFromAll = async <T>(requestType: string, pick: (result: Record<string, unknown>) => T): Promise<T> => {
+    const facts = await Promise.all(near.rpcUrls.map(async (url) =>
+      pick(await withTimeout(rpcCall(fetchFn, url, "query", { request_type: requestType, finality: "final", account_id: cfg.registry }, T.chain), T.chain + 500, requestType)),
+    ));
+    if (facts.some((f) => f !== facts[0])) throw new Error(`${E_REGISTRY_RPC_DISAGREE}: ${requestType}`);
+    return facts[0] as T;
+  };
   const regFacts = (async () => {
     const [owner, root, acct, keys] = await Promise.all([
       near.view("get_owner", {}),
       near.getRoot(),
-      withTimeout(rpcCall(fetchFn, cfg.rpcUrl, "query", { request_type: "view_account", finality: "final", account_id: cfg.registry }, T.chain), T.chain + 500, "view_account"),
-      withTimeout(rpcCall(fetchFn, cfg.rpcUrl, "query", { request_type: "view_access_key_list", finality: "final", account_id: cfg.registry }, T.chain), T.chain + 500, "view_access_key_list"),
+      factFromAll("view_account", (a) => str(a.code_hash)),
+      factFromAll("view_access_key_list", (k) => {
+        const list = Array.isArray(k.keys) ? (k.keys as { access_key?: { permission?: unknown } }[]) : null;
+        return list === null ? null : list.filter((x) => x.access_key?.permission === "FullAccess").length;
+      }),
     ]);
-    const list = Array.isArray(keys.keys) ? (keys.keys as { access_key?: { permission?: unknown } }[]) : null;
-    return {
-      owner: str(owner),
-      root: root.kind,
-      code_hash: str(acct.code_hash),
-      full_access_keys: list === null ? null : list.filter((k) => k.access_key?.permission === "FullAccess").length,
-    };
+    return { owner: str(owner), root: root.kind, code_hash: acct, full_access_keys: keys };
   })();
   const txnsP = withTimeout(listTxns(fetchFn, nearBlocks, cfg.registry, T.events, MAX_EVENT_PAGES), T.events + 500, "NearBlocks").catch(() => null);
 

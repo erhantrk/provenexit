@@ -91,6 +91,9 @@ and the previous compose `9411d0f7…` (image `7e53f383…`, registration `EZDve
   itself by default (`E_COLLATERAL_FETCH`). Both are client-only; the exit image did not change. The client went from
   18 to 20 checks; `provenexit@0.1.1` ships both. `provenexit@0.1.2` (2026-11-13) renames the key-binding check to "report_data binds the
   exit's keys" and is published from GitHub Actions by the release workflow, with npm provenance.
+  `provenexit@0.1.3` (2026-11-13) asks two RPC providers for every registry answer and refuses unless both agree
+  (`E_REGISTRY_RPC_DISAGREE`). The 2-of-3 owner handover was rehearsed on a throwaway registry copy
+  ([deploy/testnet/MULTISIG-OWNER.md](../deploy/testnet/MULTISIG-OWNER.md)); the live registry still has one owner.
 - The spike compose `b9823a79…` was revoked on the retired registry (tx `3DmY4Rqr…`).
 
 ## 2026-11-12/13: docs

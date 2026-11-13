@@ -38,7 +38,7 @@ import {
   type RootKind,
   type VerifiedRouter,
 } from "@plr/shared";
-import { NearRegistry, checkRpcUrl, resolveRegistryCodeHash } from "./near-registry.js";
+import { NearRegistry, parseRpcUrls, resolveRegistryCodeHash } from "./near-registry.js";
 import { TracingRegistry, checkLines, formatCheckLine, type CollateralMode } from "./verify-report.js";
 import { recheckRegistry, type AttestationSession } from "./attestation.js";
 import { COLLATERAL_FROM_EXIT, DEFAULT_PCCS_URL, collateralSource, fetchPccsCollateral, isPccsUrl, type CollateralSource } from "./pccs.js";
@@ -96,7 +96,10 @@ env:   PLR_VPN_URL       VPN exit URL (default ${DEFAULTS.vpnExit})
                          pinned code hash of that account (base58, view_account.code_hash); checked before any
                             registry answer is used. Shipped for the live registry; required for any other
                             registry with the Intel root; optional (warning) with a MOCK root
-       PLR_NEAR_RPC      (default ${DEFAULTS.rpc}; https, or http to a loopback host only)
+       PLR_NEAR_RPC      NEAR RPC endpoint (default ${DEFAULTS.rpc}; https, or http to a loopback host only).
+                            Several, separated by commas: every registry query goes to all of them and all must
+                            give the same answer, else the exit is refused (E_REGISTRY_RPC_DISAGREE; an endpoint
+                            that does not answer: E_REGISTRY_UNAVAILABLE)
        PLR_TRUSTED_ROOT  pinned attestation root, 128 hex (required)
        PLR_PCCS_URL      INTEL mode only: the PCCS this client fetches fresh Intel collateral from, instead of
                             trusting the exit's copy (https; default ${DEFAULT_PCCS_URL}, Intel's own
@@ -139,11 +142,17 @@ function collateralLine(c: CollateralSource | undefined): string | undefined {
 function rpcUrlFrom(env: Record<string, string | undefined>): string {
   const rpcUrl = env.PLR_NEAR_RPC || DEFAULTS.rpc;
   try {
-    checkRpcUrl(rpcUrl);
+    // one URL, or several separated by commas (then all must give the same answers); stored normalised
+    return parseRpcUrls(rpcUrl).length === 1 ? rpcUrl : parseRpcUrls(rpcUrl).map((u) => u.href).join(",");
   } catch {
-    throw new ConfigError("PLR_NEAR_RPC must be an https URL (plain http only to a loopback host: the RPC decides the registry checks)");
+    throw new ConfigError("PLR_NEAR_RPC must be an https URL, or several different ones separated by commas (plain http only to a loopback host: the RPC decides the registry checks)");
   }
-  return rpcUrl;
+}
+
+/** `plr vpn verify` header: the RPC endpoint, or the list of endpoints that must all agree. */
+function rpcLabel(rpcUrl: string): string {
+  const urls = rpcUrl.split(",");
+  return urls.length === 1 ? rpcUrl : `${urls.length} RPC endpoints that must give the same answers: ${urls.join(", ")}`;
 }
 
 function portFrom(env: Record<string, string | undefined>, name: string, dflt: number): number {
@@ -275,7 +284,7 @@ async function cmdVpnVerify(cfg: VpnCliConfig, registry: TracingRegistry, client
   const opts = { intel: client.rootKind === "INTEL", collateral: client.collateral?.source ?? ("pccs" as const) };
   io.out(`PLR VPN verify`);
   io.out(`  exit:     ${client.exitUrl}`);
-  io.out(`  registry: ${registry.contractId} on ${registry.chain} (${cfg.rpcUrl})`);
+  io.out(`  registry: ${registry.contractId} on ${registry.chain} (${rpcLabel(cfg.rpcUrl)})`);
   io.out(ONCHAIN_LINE);
   const explorer = explorerLine(cfg);
   if (explorer !== undefined) io.out(explorer);
@@ -360,7 +369,7 @@ async function cmdTwoHopVerify(cfg: VpnCliConfig, registry: TracingRegistry, cli
   io.out(`PLR VPN verify (two-hop)`);
   io.out(`  entry:    ${client.entryUrl}`);
   io.out(`  exit:     ${client.exitUrl}  (reached only through the entry)`);
-  io.out(`  registry: ${registry.contractId} on ${registry.chain} (${cfg.rpcUrl})`);
+  io.out(`  registry: ${registry.contractId} on ${registry.chain} (${rpcLabel(cfg.rpcUrl)})`);
   io.out(ONCHAIN_LINE);
   const explorer = explorerLine(cfg);
   if (explorer !== undefined) io.out(explorer);

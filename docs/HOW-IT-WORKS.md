@@ -96,7 +96,8 @@ connection), the registry re-check (19) is never cached. The first failure refus
 | 19 | registry re-check before each connection (compose, OS, instance) | the code of the failing view |
 | 20 | destinations resolved by the exit (remote DNS); the client never resolves them | (property of the proxy) |
 
-An unreadable registry refuses with `E_REGISTRY_UNAVAILABLE`. Checks 1 and 6 are the client's own: the contract
+An unreadable registry refuses with `E_REGISTRY_UNAVAILABLE`; RPC providers that give different answers refuse with
+`E_REGISTRY_RPC_DISAGREE` (the client asks two and both must agree). Checks 1 and 6 are the client's own: the contract
 cannot pin its own code hash, and it verifies the collateral the exit hands it at registration time. The offline
 fixture replay prints 17 lines: no code-hash line (the registry is a snapshot), check 6 shown as `·` (recorded
 collateral), and no lines 19–20 (no connection is made).
@@ -172,5 +173,5 @@ the same real-world organization under two ids. Spec: [`spec/SPEC-VPN.md`](spec/
 `@noble/curves`, `@noble/hashes`, `@noble/ciphers`, `near-api-js`, `@phala/dcap-qvl` 0.7.1 (Apache-2.0),
 `@phala/dstack-sdk` 0.5.8 (Apache-2.0), `yaml` 2.8.1, `@modelcontextprotocol/sdk`, `zod`, `esbuild`, `vitest`,
 `near-sdk` 5.29.1, the `dcap-qvl` 0.7.1 crate (MIT), `sha2`, `p256`, `ed25519-dalek`. Test vectors from dcap-qvl's
-`sample/` (MIT). Infrastructure: Phala Cloud (dstack: the live exit and a test CVM), NEAR testnet, FASTNEAR RPC,
+`sample/` (MIT). Infrastructure: Phala Cloud (dstack: the live exit and a test CVM), NEAR testnet, FASTNEAR and dRPC RPC,
 Phala PCCS (the exit's collateral), Intel PCS (the client's collateral).

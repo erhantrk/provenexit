@@ -111,16 +111,33 @@ made reproducible; it cannot be rebuilt bit for bit. Details: [`deploy/phala/REA
 ## One owner key decides the allowlist
 
 `pe-owner-erhan.testnet` is one NEAR account: whoever holds its key can allow or revoke builds, OS measurements and
-operators. The client pins the Intel root, the registry contract id and its code hash, not the owner. A multisig or a
-DAO as owner is future work (the contract has `propose_owner` / `accept_owner`).
+operators. The client pins the Intel root, the registry contract id and its code hash, not the owner.
 
-## The registry RPC endpoint is trusted
+The registry can hand this role to a 2-of-3 council (a Sputnik DAO account with no key of its own). The whole
+handover ran on a throwaway copy of the registry on testnet, including a revoke that needed two approvals and a
+refusal of the old key; the transactions and the commands for the live registry are in
+[deploy/testnet/MULTISIG-OWNER.md](../deploy/testnet/MULTISIG-OWNER.md). It has not been done on the live registry.
+After it, a revoke takes three transactions instead of one and waits for a second person, and you trust any two of
+the three council members plus the DAO contract instead of one key.
 
-NEAR view results carry no state proofs, so whoever answers the client's `get_root` / `is_*_allowed` /
-`get_instance` calls, and the `view_account` call behind the code-hash pin, decides those checks. The client
-therefore talks to the registry only over `https:`, or plain `http:` to a loopback address; a remote
-`PLR_NEAR_RPC=http://…` is refused. Pick an RPC provider you trust (the defaults use
-`https://rpc.testnet.fastnear.com`). A quorum of independent RPCs or light-client proofs is future work.
+## Registry answers are cross-checked, not proven
+
+The client runs no NEAR light client, so registry answers carry no state proof. Instead it sends every registry
+query (each contract view and the `view_account` call behind the code-hash pin) to every configured RPC provider in
+parallel and uses an answer only if all providers answer and all answers are identical. The live defaults are two
+providers run by different operators, FastNear and dRPC; `PLR_NEAR_RPC` takes one URL or a comma-separated list.
+
+- Answers differ, also on a second try one second later: the client refuses with `E_REGISTRY_RPC_DISAGREE` on the
+  check that asked.
+- A provider is down: the client refuses with `E_REGISTRY_UNAVAILABLE`. There is no majority vote, so silencing the
+  honest provider does not help an attacker.
+
+One lying provider can therefore make the client refuse, but cannot make it accept a wrong registry state. What is
+still trusted: that the configured providers do not all give the same wrong answer, because they collude or share
+one upstream node (dRPC is a gateway and may route to other operators' nodes); the providers' TLS; and the default
+list shipped in the client. With a single endpoint configured, that endpoint is trusted as before. The cost is
+availability: an outage at either provider stops verification until it recovers or the list is changed. The client
+talks to providers only over `https:`, or plain `http:` to a loopback address.
 
 ## Phala's gateway terminates TLS
 
@@ -148,7 +165,7 @@ Intel, the TDX module and the dstack OS image are trusted roots. Micro-architect
   it reads `view_account.code_hash`, compares it with the pin (`PLR_VPN_REGISTRY_CODE_HASH`, shipped for the live
   registry) and refuses with `E_REGISTRY_CODE_HASH` on a difference; this is the first of the 20 checks. A passed
   check is reused for 30 seconds. Any other registry needs its own pin with the Intel root; only the local MOCK demo
-  runs without one (it prints a warning). The hash comes from the same RPC as the views, so the RPC stays trusted
+  runs without one (it prints a warning). The hash comes from the same RPC providers as the views, cross-checked the same way
   (above). The first registry, `pe-vpnreg-erhan.testnet`, still has a full-access key and a non-reproducible build;
   it is retired and the client does not use it.
 - **The exit's copy of Intel collateral was trusted.** Closed: the client fetches fresh collateral itself by default

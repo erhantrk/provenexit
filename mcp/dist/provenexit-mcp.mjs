@@ -54,7 +54,7 @@ var __toCommonJS = (mod3) => __copyProps(__defProp({}, "__esModule", { value: tr
 var define_STATUS_DEFAULTS_default;
 var init_define_STATUS_DEFAULTS = __esm({
   "<define:__STATUS_DEFAULTS__>"() {
-    define_STATUS_DEFAULTS_default = { exitUrl: "https://d2c65be0bde4f9b7628ef399310823e9e6339251-18200.dstack-pha1-prod9.phala.network", registry: "vpnreg.pe-owner-erhan.testnet", registryCodeHash: "C1hvenbrzHKN1n1f2z63Duburr8YXLAKBescrEvarCGM", trustedRoot: "0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f567918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394", rpcUrl: "https://rpc.testnet.fastnear.com", operator: "pe-op-erhan.testnet", platform: "Intel TDX · Phala Cloud · dstack-0.6.1", reproducibleBuild: true };
+    define_STATUS_DEFAULTS_default = { exitUrl: "https://d2c65be0bde4f9b7628ef399310823e9e6339251-18200.dstack-pha1-prod9.phala.network", registry: "vpnreg.pe-owner-erhan.testnet", registryCodeHash: "C1hvenbrzHKN1n1f2z63Duburr8YXLAKBescrEvarCGM", trustedRoot: "0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f567918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394", rpcUrl: "https://rpc.testnet.fastnear.com,https://near-testnet.drpc.org", operator: "pe-op-erhan.testnet", platform: "Intel TDX · Phala Cloud · dstack-0.6.1", reproducibleBuild: true };
   }
 });
 
@@ -76093,10 +76093,37 @@ async function checkRegistryCode(registry2) {
   try {
     await f.call(registry2);
   } catch (e) {
-    if (isRegistryCodeHashError(e))
+    if (isRegistryRefusal(e))
       throw e;
     throw new PlrError("E_REGISTRY_UNAVAILABLE", "view_account");
   }
+}
+var E_REGISTRY_RPC_DISAGREE = "E_REGISTRY_RPC_DISAGREE";
+var RegistryRpcDisagreeError = class extends PlrError {
+  constructor(what = "") {
+    super("E_REGISTRY_UNAVAILABLE");
+    this.code = E_REGISTRY_RPC_DISAGREE;
+    this.message = `${E_REGISTRY_RPC_DISAGREE}: the RPC endpoints give different answers${what === "" ? "" : ` (${what})`}`;
+  }
+};
+function isRegistryRpcDisagreeError(e) {
+  return e instanceof PlrError && e.code === E_REGISTRY_RPC_DISAGREE;
+}
+function isRegistryRefusal(e) {
+  return isRegistryCodeHashError(e) || isRegistryRpcDisagreeError(e);
+}
+var RPC_DISAGREE_RETRY_MS = 1e3;
+var MAX_RPC_URLS = 5;
+function parseRpcUrls(rpcUrl) {
+  if (typeof rpcUrl !== "string")
+    throw new PlrError("E_BAD_INPUT", "rpcUrl must be a string");
+  const parts = rpcUrl.split(",");
+  if (parts.length > MAX_RPC_URLS)
+    throw new PlrError("E_BAD_INPUT", `at most ${MAX_RPC_URLS} RPC endpoints`);
+  const urls = parts.map((u) => checkRpcUrl(parts.length === 1 ? u : u.trim()));
+  if (new Set(urls.map((u) => u.href)).size !== urls.length)
+    throw new PlrError("E_BAD_INPUT", "the same RPC endpoint is listed twice");
+  return urls;
 }
 var CODE_HASH_TTL_MS = 3e4;
 var KNOWN_REGISTRY_CODE_HASHES = Object.freeze({
@@ -76182,8 +76209,12 @@ var ANCHOR_UINTS = ["id", "first_seq", "count", "at_ms"];
 var NearRegistry = class {
   chain = "near";
   contractId;
+  /** The endpoint URL; with several, their URLs joined by commas (as configured, normalised). */
   rpcUrl;
-  #provider;
+  /** Every endpoint asked, in the configured order. */
+  rpcUrls;
+  #providers;
+  #retryMs;
   #timeoutMs;
   #finality;
   /** The pinned `code_hash`, or undefined when only the account id is pinned. */
@@ -76193,7 +76224,7 @@ var NearRegistry = class {
   constructor(o) {
     if (typeof o !== "object" || o === null)
       throw new PlrError("E_BAD_INPUT", "NearRegistry options required");
-    const url = checkRpcUrl(o.rpcUrl);
+    const urls = parseRpcUrls(o.rpcUrl);
     if (!isNearAccountId(o.contractId))
       throw new PlrError("E_BAD_INPUT", "contractId is not a valid NEAR account id");
     const timeoutMs = o.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -76202,14 +76233,55 @@ var NearRegistry = class {
     const finality = o.finality ?? "optimistic";
     if (finality !== "optimistic" && finality !== "near-final" && finality !== "final")
       throw new PlrError("E_BAD_INPUT", "bad finality");
-    this.rpcUrl = url.href;
+    this.rpcUrls = Object.freeze(urls.map((u) => u.href));
+    this.rpcUrl = this.rpcUrls.join(",");
     this.contractId = o.contractId;
     this.#timeoutMs = timeoutMs;
     this.#finality = finality;
     if (o.codeHash !== void 0 && !isCodeHash(o.codeHash))
       throw new PlrError("E_BAD_INPUT", "codeHash is not a base58 code hash");
     this.pinnedCodeHash = o.codeHash;
-    this.#provider = new JsonRpcProvider({ url: url.href }, { retries: 2, wait: 100, backoff: 1.5 });
+    this.#providers = this.rpcUrls.map((url) => new JsonRpcProvider({ url }, { retries: 2, wait: 100, backoff: 1.5 }));
+    this.#retryMs = Math.min(RPC_DISAGREE_RETRY_MS, timeoutMs);
+  }
+  /**
+   * Sends one query to every endpoint in parallel (each bounded by the per-call timeout) and returns the answer
+   * they all gave. `ask` returns the part of the reply that must be the same everywhere, as text.
+   * One endpoint: its answer, as before. Several: see the file header (all must answer, all answers equal, one
+   * re-ask on a disagreement).
+   * @throws RegistryRpcDisagreeError; NearRegistryError (an endpoint failed, timed out or answered garbage)
+   */
+  async #askAll(what, ask) {
+    for (let attempt = 0; ; attempt++) {
+      const settled = await Promise.allSettled(this.#providers.map((p) => this.#askOne(what, p, ask)));
+      const answers = settled.flatMap((r) => r.status === "fulfilled" ? [r.value] : []);
+      if (answers.some((a) => a !== answers[0])) {
+        if (attempt > 0)
+          throw new RegistryRpcDisagreeError(what);
+        await new Promise((ok) => setTimeout(ok, this.#retryMs));
+        continue;
+      }
+      const failed = settled.find((r) => r.status === "rejected");
+      if (failed !== void 0)
+        throw failed.reason;
+      return answers[0];
+    }
+  }
+  async #askOne(what, p, ask) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new NearRegistryError(`${what}: timeout`)), this.#timeoutMs);
+      timer.unref?.();
+    });
+    try {
+      return await Promise.race([ask(p), timeout]);
+    } catch (e) {
+      if (e instanceof NearRegistryError)
+        throw e;
+      throw new NearRegistryError(`${what}: RPC failed`);
+    } finally {
+      clearTimeout(timer);
+    }
   }
   /** With a pin: true while the last code-hash check passed and is still fresh. Without a pin: undefined. */
   get codeHashVerified() {
@@ -76218,7 +76290,8 @@ var NearRegistry = class {
   /**
    * Checks the registry account's `code_hash` against the pin (no-op without one, or within the reuse window);
    * concurrent callers share one `view_account`.
-   * @throws RegistryCodeHashError (different code); NearRegistryError (RPC failed / malformed / timeout)
+   * @throws RegistryCodeHashError (different code); RegistryRpcDisagreeError (endpoints report different hashes);
+   *         NearRegistryError (RPC failed / malformed / timeout)
    */
   async checkCodeHash() {
     if (this.pinnedCodeHash === void 0 || performance.now() < this.#codeOkUntil)
@@ -76230,60 +76303,26 @@ var NearRegistry = class {
   }
   async #fetchAndCompareCode() {
     this.#codeOkUntil = 0;
-    let timer;
-    const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new NearRegistryError("view_account: timeout")), this.#timeoutMs);
-      timer.unref?.();
+    const hash = await this.#askAll("view_account", async (p) => {
+      const acct = await p.query({ request_type: "view_account", finality: this.#finality, account_id: this.contractId });
+      const h = typeof acct === "object" && acct !== null ? acct.code_hash : void 0;
+      if (typeof h !== "string" || !CODE_HASH_RE.test(h))
+        throw new NearRegistryError("view_account: malformed reply");
+      return h;
     });
-    let hash;
-    try {
-      const acct = await Promise.race([
-        this.#provider.query({ request_type: "view_account", finality: this.#finality, account_id: this.contractId }),
-        timeout
-      ]);
-      hash = typeof acct === "object" && acct !== null ? acct.code_hash : void 0;
-    } catch (e) {
-      if (e instanceof NearRegistryError)
-        throw e;
-      throw new NearRegistryError("view_account: RPC failed");
-    } finally {
-      clearTimeout(timer);
-    }
-    if (typeof hash !== "string" || !CODE_HASH_RE.test(hash))
-      throw new NearRegistryError("view_account: malformed reply");
     if (hash !== this.pinnedCodeHash)
       throw new RegistryCodeHashError();
     this.#codeOkUntil = performance.now() + CODE_HASH_TTL_MS;
   }
   /**
    * Raw view call: returns the JSON-decoded result. Rejects on any error or timeout; with a code-hash pin, first
-   * rejects with {@link RegistryCodeHashError} when the account runs other code.
+   * rejects with {@link RegistryCodeHashError} when the account runs other code. With several endpoints: rejects
+   * with {@link RegistryRpcDisagreeError} unless all give the same result.
    */
   async view(method, args) {
     await this.checkCodeHash();
-    let timer;
-    const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new NearRegistryError(`${method}: timeout`)), this.#timeoutMs);
-      timer.unref?.();
-    });
-    try {
-      const raw = await Promise.race([
-        this.#provider.callFunctionRaw({
-          contractId: this.contractId,
-          method,
-          args,
-          blockQuery: { finality: this.#finality }
-        }),
-        timeout
-      ]);
-      return decodeResult(method, raw);
-    } catch (e) {
-      if (e instanceof NearRegistryError)
-        throw e;
-      throw new NearRegistryError(`${method}: RPC failed`);
-    } finally {
-      clearTimeout(timer);
-    }
+    const text = await this.#askAll(method, async (p) => decodeResultText(method, await p.callFunctionRaw({ contractId: this.contractId, method, args, blockQuery: { finality: this.#finality } })));
+    return parseJsonIntegers(text);
   }
   async getRoot() {
     const v = await this.view("get_root", {});
@@ -76353,7 +76392,7 @@ var NearRegistry = class {
     return v;
   }
 };
-function decodeResult(method, raw) {
+function decodeResultText(method, raw) {
   if (typeof raw !== "object" || raw === null)
     throw new NearRegistryError(`${method}: malformed RPC reply`);
   const result = raw.result;
@@ -76368,7 +76407,9 @@ function decodeResult(method, raw) {
     bytes[i] = b;
   }
   try {
-    return parseJsonIntegers(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    parseJsonIntegers(text);
+    return text;
   } catch {
     throw new NearRegistryError(`${method}: result is not JSON`);
   }
@@ -76535,9 +76576,9 @@ function rawCheckLines(err, lastRegistryCall, o) {
   const order = orderFor(o);
   if (err === void 0)
     return order.map((k) => ({ name: label(k), status: "pass" }));
-  const code = isRegistryCodeHashError(err) ? E_REGISTRY_CODE_HASH : isCollateralFetchError(err) ? E_COLLATERAL_FETCH : err instanceof PlrError ? err.code : "E_BAD_RESPONSE";
-  let failing = code === E_REGISTRY_CODE_HASH ? "REGISTRY_CODE" : code === E_COLLATERAL_FETCH ? "COLLATERAL" : CODE_TO_CHECK[code];
-  if (code === "E_REGISTRY_UNAVAILABLE") {
+  const code = isRegistryCodeHashError(err) ? E_REGISTRY_CODE_HASH : isRegistryRpcDisagreeError(err) ? E_REGISTRY_RPC_DISAGREE : isCollateralFetchError(err) ? E_COLLATERAL_FETCH : err instanceof PlrError ? err.code : "E_BAD_RESPONSE";
+  let failing = code === E_REGISTRY_CODE_HASH ? "REGISTRY_CODE" : code === E_COLLATERAL_FETCH ? "COLLATERAL" : code === E_REGISTRY_RPC_DISAGREE ? void 0 : CODE_TO_CHECK[code];
+  if (code === "E_REGISTRY_UNAVAILABLE" || code === E_REGISTRY_RPC_DISAGREE) {
     failing = lastRegistryCall ? REGISTRY_STEP[lastRegistryCall] : "ROOT";
     if (o.codeHash === "unverified")
       failing = "REGISTRY_CODE";
@@ -76603,7 +76644,7 @@ async function chainAnchor(registry2, id2) {
   try {
     return await registry2.getAnchor(id2);
   } catch (e) {
-    if (isRegistryCodeHashError(e))
+    if (isRegistryRefusal(e))
       throw e;
     throw new PlrError("E_REGISTRY_UNAVAILABLE", "get_anchor");
   }
@@ -76681,15 +76722,16 @@ var AttestationCache = class {
   /** Fetches and verifies a fresh attestation (new random nonce every call) and caches it. @throws PlrError */
   async attest() {
     const nonce = new Uint8Array(randomBytes8(32));
+    const watched = watchRefusals(this.#o.registry);
     try {
       await checkRegistryCode(this.#o.registry);
       const bundle = await this.#o.fetchBundle(nonce);
       const src = this.collateral;
-      const verified = src?.source === "pccs" ? await this.#verifyWithFreshCollateral(bundle, nonce, src.url) : await verifyAttestation({
+      const verified = src?.source === "pccs" ? await this.#verifyWithFreshCollateral(bundle, nonce, src.url, watched.registry) : await verifyAttestation({
         bundle,
         nonce,
         verifier: this.#o.verifier,
-        registry: this.#o.registry,
+        registry: watched.registry,
         trustedRoot: this.#o.trustedRoot
       });
       const session = {
@@ -76703,6 +76745,8 @@ var AttestationCache = class {
       return session;
     } catch (e) {
       this.#session = void 0;
+      if (isPlrError(e) && e.code === "E_REGISTRY_UNAVAILABLE" && watched.refusal !== void 0)
+        throw watched.refusal;
       if (isPlrError(e))
         throw e;
       throw new PlrError("E_BAD_RESPONSE");
@@ -76720,9 +76764,8 @@ var AttestationCache = class {
    * The registry root is read once and reused by the second run.
    * @throws PlrError (incl. CollateralFetchError)
    */
-  async #verifyWithFreshCollateral(bundle, nonce, pccsUrl) {
+  async #verifyWithFreshCollateral(bundle, nonce, pccsUrl, inner) {
     const real = this.#o.verifier;
-    const inner = this.#o.registry;
     let root;
     const registry2 = {
       get chain() {
@@ -76787,12 +76830,34 @@ var AttestationCache = class {
     this.#session = void 0;
   }
 };
+function watchRefusals(inner) {
+  const w = { registry: inner, refusal: void 0 };
+  const watch = (p) => p.catch((e) => {
+    if (isRegistryRefusal(e))
+      w.refusal = e;
+    throw e;
+  });
+  w.registry = {
+    get chain() {
+      return inner.chain;
+    },
+    get contractId() {
+      return inner.contractId;
+    },
+    getRoot: () => watch(inner.getRoot()),
+    isComposeAllowed: (h) => watch(inner.isComposeAllowed(h)),
+    isOsAllowed: (h) => watch(inner.isOsAllowed(h)),
+    getInstance: (k) => watch(inner.getInstance(k)),
+    getAnchor: (id2) => watch(inner.getAnchor(id2))
+  };
+  return w;
+}
 async function regCall(f, valid) {
   let v;
   try {
     v = await f();
   } catch (e) {
-    if (isRegistryCodeHashError(e))
+    if (isRegistryRefusal(e))
       throw e;
     throw new PlrError("E_REGISTRY_UNAVAILABLE");
   }
@@ -78052,7 +78117,7 @@ function resolveConfig(o) {
     throw new Error("PLR_TRUSTED_ROOT is not a valid P-256 public key");
   if (rpcUrl === void 0)
     throw new Error("NEAR RPC not configured (PLR_NEAR_RPC)");
-  checkRpcUrl(rpcUrl);
+  parseRpcUrls(rpcUrl);
   const explicit = o.registryCodeHash || env.PLR_VPN_REGISTRY_CODE_HASH || (registry2 === BAKED.registry ? BAKED.registryCodeHash : void 0);
   const codeHash = resolveRegistryCodeHash(registry2, explicit, isIntelRoot(trustedRoot));
   const envPccs = env.PLR_PCCS_URL || void 0;
@@ -78097,20 +78162,23 @@ async function getStatus(opts = {}) {
     }
   })();
   const verifyP = client === void 0 ? Promise.resolve(void 0) : withTimeout(verifyVpnReport(client, tracing), T.verify, "verify").catch(() => void 0);
+  const factFromAll = async (requestType, pick2) => {
+    const facts2 = await Promise.all(near.rpcUrls.map(async (url) => pick2(await withTimeout(rpcCall(fetchFn, url, "query", { request_type: requestType, finality: "final", account_id: cfg.registry }, T.chain), T.chain + 500, requestType))));
+    if (facts2.some((f) => f !== facts2[0]))
+      throw new Error(`${E_REGISTRY_RPC_DISAGREE}: ${requestType}`);
+    return facts2[0];
+  };
   const regFacts = (async () => {
     const [owner, root, acct, keys] = await Promise.all([
       near.view("get_owner", {}),
       near.getRoot(),
-      withTimeout(rpcCall(fetchFn, cfg.rpcUrl, "query", { request_type: "view_account", finality: "final", account_id: cfg.registry }, T.chain), T.chain + 500, "view_account"),
-      withTimeout(rpcCall(fetchFn, cfg.rpcUrl, "query", { request_type: "view_access_key_list", finality: "final", account_id: cfg.registry }, T.chain), T.chain + 500, "view_access_key_list")
+      factFromAll("view_account", (a) => str2(a.code_hash)),
+      factFromAll("view_access_key_list", (k) => {
+        const list = Array.isArray(k.keys) ? k.keys : null;
+        return list === null ? null : list.filter((x) => x.access_key?.permission === "FullAccess").length;
+      })
     ]);
-    const list = Array.isArray(keys.keys) ? keys.keys : null;
-    return {
-      owner: str2(owner),
-      root: root.kind,
-      code_hash: str2(acct.code_hash),
-      full_access_keys: list === null ? null : list.filter((k) => k.access_key?.permission === "FullAccess").length
-    };
+    return { owner: str2(owner), root: root.kind, code_hash: acct, full_access_keys: keys };
   })();
   const txnsP = withTimeout(listTxns(fetchFn, nearBlocks, cfg.registry, T.events, MAX_EVENT_PAGES), T.events + 500, "NearBlocks").catch(() => null);
   const [online, verify, facts, txns] = await Promise.all([healthP, verifyP, regFacts.catch((e) => e), txnsP]);

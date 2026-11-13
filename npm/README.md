@@ -14,7 +14,7 @@ Use the proxy with `socks5h://` (names resolved by the exit), e.g.
 `curl -x socks5h://127.0.0.1:18180 https://ifconfig.me`. Only TCP through the proxy is protected.
 
 With no settings it checks the live testnet deployment. Override with `PLR_VPN_URL`, `PLR_VPN_REGISTRY`,
-`PLR_NEAR_RPC` and `PLR_TRUSTED_ROOT`; `npx provenexit --help` lists everything (`verify`, `inspect` and `connect`
+`PLR_NEAR_RPC` (one URL, or several separated by commas that must all agree) and `PLR_TRUSTED_ROOT`; `npx provenexit --help` lists everything (`verify`, `inspect` and `connect`
 are short for `vpn verify`, `vpn inspect` and `vpn`).
 
 MCP server for AI agents (verify the exit, fetch pages only through it, refuse if any check fails):

@@ -37,7 +37,7 @@ checks both before every new connection.
 | what | where |
 |---|---|
 | status site | <https://provenexit.vercel.app> (runs the 20 client checks against the live exit) |
-| npm | [`provenexit@0.1.2`](https://www.npmjs.com/package/provenexit): `npx provenexit verify` · `inspect` · `connect`; built and published by the [release workflow](.github/workflows/release.yml), files on the [release page](https://github.com/erhantrk/provenexit/releases) |
+| npm | [`provenexit@0.1.3`](https://www.npmjs.com/package/provenexit): `npx provenexit verify` · `inspect` · `connect`; built and published by the [release workflow](.github/workflows/release.yml), files on the [release page](https://github.com/erhantrk/provenexit/releases) |
 | MCP server for AI agents | `claude mcp add provenexit -- npx -y -p provenexit provenexit-mcp` |
 | exit | Intel TDX on Phala Cloud (`dstack-0.6.1`), up since 2026-11-12 20:05 UTC, image `ghcr.io/erhantrk/provenexit-exit@sha256:74c6d1c5…2785` |
 | registry | [`vpnreg.pe-owner-erhan.testnet`](https://testnet.nearblocks.io/address/vpnreg.pe-owner-erhan.testnet): no access keys, reproducible build, code hash `C1hvenbr…` |
@@ -116,7 +116,7 @@ Each one in full in [docs/LIMITS.md](docs/LIMITS.md).
 - [Collateral freshness is bounded by Intel's CRL interval](docs/LIMITS.md#collateral-freshness).
 - [The OS measurement was observed, not reproduced](docs/LIMITS.md#the-os-measurement-was-observed-not-reproduced).
 - [A matching image digest does not prove the source is honest](docs/LIMITS.md#what-a-matching-image-digest-proves).
-- [One owner key decides the allowlist](docs/LIMITS.md#one-owner-key-decides-the-allowlist); [the registry RPC endpoint is trusted](docs/LIMITS.md#the-registry-rpc-endpoint-is-trusted).
+- [One owner key decides the allowlist](docs/LIMITS.md#one-owner-key-decides-the-allowlist); [registry answers are cross-checked between two RPC providers, not proven](docs/LIMITS.md#registry-answers-are-cross-checked-not-proven).
 - [Phala's gateway terminates TLS](docs/LIMITS.md#phalas-gateway-terminates-tls) (it sees only tunnel ciphertext).
 - [The fixture replay proves the past](docs/LIMITS.md#the-fixture-replay-proves-the-past), not the present.
 - [Intel, the dstack OS and side channels are trusted / out of scope](docs/LIMITS.md#tee-vendor-trust-and-side-channels).
