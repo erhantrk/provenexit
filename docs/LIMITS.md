@@ -64,7 +64,7 @@ These hold for any VPN exit, or any app on Intel TDX, and ProvenExit does not ch
   (above). The first registry, `pe-vpnreg-erhan.testnet`, still has a full-access key and a non-reproducible build;
   it is retired and the client does not use it.
 - **The exit's copy of Intel collateral was trusted.** Closed: the client fetches fresh collateral itself by default
-  (see [Collateral freshness](#collateral-freshness) for what remains).
+  (an Intel revocation still reaches it only when Intel publishes it).
 - **The image rebuild was shown on one machine only.** Closed: besides two fresh clones on the owner's machine, the
   "verify exit image" GitHub Actions workflow rebuilds the image on a GitHub-hosted `ubuntu` `linux/amd64` runner on
   every push to `main` and prints `MATCH` (for example run
