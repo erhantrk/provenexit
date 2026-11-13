@@ -26,6 +26,7 @@ import { loadExitConfig } from "../src/vpn/config.js";
 import { createExit } from "../src/vpn/exit.js";
 import { VpnKeys } from "../src/vpn/keys.js";
 import { VpnReceiptLog } from "../src/vpn/receipts.js";
+import { shortTmp } from "./short-tmp.js";
 
 // Recording fakes for the two modules whose real counterparts need a PCCS or a live NEAR RPC.
 const nearCalls = vi.hoisted(() => [] as {
@@ -498,7 +499,7 @@ afterAll(() => {
 
 describe("DstackAttester (SPEC-TDX §4.2) against a dstack socket stub", () => {
   it("returns the real spike quote and only the IMR3 events; app-compose comes from /Info", async () => {
-    const dir = mkdtempSync(join(HERE, "dstack-sock-"));
+    const dir = shortTmp("dstack-sock-");
     sockDirs.push(dir);
     const stub = await startDstackStub(join(dir, "d.sock"));
     try {
@@ -529,7 +530,7 @@ describe("DstackAttester (SPEC-TDX §4.2) against a dstack socket stub", () => {
   });
 
   it("refuses a report_data that is not exactly 64 bytes, before any RPC", async () => {
-    const dir = mkdtempSync(join(HERE, "dstack-sock-"));
+    const dir = shortTmp("dstack-sock-");
     sockDirs.push(dir);
     const stub = await startDstackStub(join(dir, "d.sock"));
     try {

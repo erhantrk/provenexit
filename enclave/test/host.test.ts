@@ -7,13 +7,14 @@ import { MockRoot, MockVerifier, isDebug, toHex, verifyEventLog } from "@plr/sha
 import { HostError, generateRootSecret, launchVpn, loadRootSecret, measureVpnBoot, type VpnHostHandle } from "../src/mock-tdx/host.js";
 import { SocketAttester, parseQuoteResponse } from "../src/mock-tdx/attester.js";
 import { attest } from "./helpers.js";
+import { shortTmp } from "./short-tmp.js";
 
 const DIST = resolve(import.meta.dirname, "..", "dist");
 const COMPOSE = join(DIST, "vpn-exit", "vpn-honest-test", "app-compose.json");
 const EVIL_BUNDLE = join(DIST, "vpn-exit", "vpn-evil-logger", "vpn.bundle.mjs");
 // Short base path: Unix socket paths are limited to 104 bytes on macOS (os.tmpdir() can be long).
 mkdirSync(resolve(import.meta.dirname, "..", ".run"), { recursive: true });
-const tmp = mkdtempSync(join(resolve(import.meta.dirname, "..", ".run"), "t-"));
+const tmp = shortTmp("t-");
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 const hostErr = async (p: Promise<unknown>) => {

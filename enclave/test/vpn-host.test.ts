@@ -8,12 +8,13 @@ import { EXIT_ENV_ALLOWLIST, HostError, exitNodeFlags, launchVpn, measureVpnBoot
 import { composeBytes, makeVpnCompose, parseVpnCompose } from "../src/compose.js";
 import { startFakeDoh } from "./doh-server.js";
 import { TestTunnel, attestExit, mentionsNumber, startEchoUpstream } from "./vpn-helpers.js";
+import { shortTmp } from "./short-tmp.js";
 
 const DIST = resolve(import.meta.dirname, "..", "dist");
 const INFO = JSON.parse(readFileSync(join(DIST, "build-info.json"), "utf8"));
 const vpnCompose = (v: string) => join(DIST, INFO.vpn[v].compose.file);
 mkdirSync(resolve(import.meta.dirname, "..", ".run"), { recursive: true });
-const tmp = mkdtempSync(join(resolve(import.meta.dirname, "..", ".run"), "v-"));
+const tmp = shortTmp("v-");
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 const hostErr = async (p: Promise<unknown>) => {

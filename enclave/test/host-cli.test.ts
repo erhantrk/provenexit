@@ -6,12 +6,13 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { generateRootSecret } from "../src/mock-tdx/host.js";
+import { shortTmp } from "./short-tmp.js";
 
 const ENCLAVE = resolve(import.meta.dirname, "..");
 const CLI = join(ENCLAVE, "dist", "mock-tdx", "cli.js");
 const COMPOSE = join(ENCLAVE, "dist", "vpn-exit", "vpn-honest-test", "app-compose.json");
 mkdirSync(join(ENCLAVE, ".run"), { recursive: true });
-const tmp = mkdtempSync(join(ENCLAVE, ".run", "cli-"));
+const tmp = shortTmp("cli-");
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

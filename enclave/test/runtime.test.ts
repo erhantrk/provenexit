@@ -9,10 +9,11 @@ import { MockRoot, toHex } from "@plr/shared";
 import { VPN_ENTRY, composeBytes, makeVpnCompose, parseVpnCompose } from "../src/compose.js";
 import { HostError, measureVpnBoot } from "../src/mock-tdx/host.js";
 import { installRuntime, measureRuntime, readMacho, runtimeDigest } from "../src/mock-tdx/runtime.js";
+import { shortTmp } from "./short-tmp.js";
 
 const DIST = resolve(import.meta.dirname, "..", "dist");
 mkdirSync(resolve(import.meta.dirname, "..", ".run"), { recursive: true });
-const tmp = mkdtempSync(join(resolve(import.meta.dirname, "..", ".run"), "rt-"));
+const tmp = shortTmp("rt-");
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 const hostErr = async (p: Promise<unknown>) => {

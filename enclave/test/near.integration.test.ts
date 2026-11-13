@@ -10,6 +10,7 @@ import { Account, JsonRpcProvider, KeyPair, KeyPairSigner, type KeyPairString } 
 import { FRAME, MockRoot, fromHex, parseReceiptPayload, toHex, verifyMerkleProof, vpnReceiptLeaf } from "@plr/shared";
 import { launchVpn, type VpnHostHandle } from "../src/mock-tdx/host.js";
 import { TestTunnel, attestExit, startEchoUpstream } from "./vpn-helpers.js";
+import { shortTmp } from "./short-tmp.js";
 
 const ROOT_DIR = resolve(import.meta.dirname, "..", "..");
 const WASM = join(ROOT_DIR, "contracts", "near", "target", "near", "plr_registry.wasm");
@@ -36,7 +37,7 @@ describe.skipIf(!enabled)("VPN exit ↔ NEAR registry (sandbox)", () => {
 
   beforeAll(async () => {
     mkdirSync(resolve(import.meta.dirname, "..", ".run"), { recursive: true });
-    runDir = mkdtempSync(join(resolve(import.meta.dirname, "..", ".run"), "n-"));
+    runDir = shortTmp("n-");
     const ns = await import("near-sandbox");
     sandbox = await ns.Sandbox.start({});
     provider = new JsonRpcProvider({ url: sandbox.rpcUrl });

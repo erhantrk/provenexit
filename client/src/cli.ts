@@ -545,7 +545,7 @@ async function serveSocks(cfg: VpnCliConfig, client: VpnConnector, io: CliIo): P
   }
 }
 
-async function cmdVpn(cfg: VpnCliConfig, client: VpnClient, io: CliIo, untilStopped: () => Promise<void>): Promise<number> {
+async function cmdVpn(cfg: VpnCliConfig, registry: TracingRegistry, client: VpnClient, io: CliIo, untilStopped: () => Promise<void>): Promise<number> {
   let session: AttestationSession;
   try {
     session = await client.attestSession();
@@ -555,7 +555,10 @@ async function cmdVpn(cfg: VpnCliConfig, client: VpnClient, io: CliIo, untilStop
   }
   const p = await serveSocks(cfg, client, io);
   if (p === undefined) return 1;
-  const nChecks = session.verified.checks.length + (cfg.registryCodeHash !== undefined ? 1 : 0);
+  // Same count as `plr vpn verify` prints: the attestation and registry lines, plus the per-connection registry re-check
+  // and remote DNS lines.
+  const opts = { intel: client.rootKind === "INTEL", collateral: client.collateral?.source ?? ("pccs" as const) };
+  const nChecks = checkLines(undefined, undefined, { ...opts, codeHash: registry.codeHashState }).length + 2;
   io.out(`✔ VPN exit verified (${nChecks} checks against registry ${cfg.contractId}); every new connection re-checks the registry`);
   if (cfg.registryCodeHash === undefined) io.out(codePinLine(cfg));
   printVpnSummary(io, session);
@@ -647,7 +650,7 @@ async function runVpn(
     return cmdTwoHop(cfg, client, io, untilStopped);
   }
   if (sub === "verify") return cmdVpnVerify(cfg, registry, client, io);
-  return cmdVpn(cfg, client, io, untilStopped);
+  return cmdVpn(cfg, registry, client, io, untilStopped);
 }
 
 /** Runs the CLI; returns the exit code. `vpn` resolves only when `untilStopped` resolves (default: SIGINT/SIGTERM). */
