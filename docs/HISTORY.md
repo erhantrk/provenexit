@@ -89,7 +89,8 @@ and the previous compose `9411d0f7…` (image `7e53f383…`, registration `EZDve
   status site <https://provenexit.vercel.app> went live.
 - The client pins the registry contract's code hash (`E_REGISTRY_CODE_HASH`) and fetches fresh Intel collateral
   itself by default (`E_COLLATERAL_FETCH`). Both are client-only; the exit image did not change. The client went from
-  18 to 20 checks; `provenexit@0.1.1` ships both.
+  18 to 20 checks; `provenexit@0.1.1` ships both. `provenexit@0.1.2` (2026-11-13) renames the key-binding check to "report_data binds the
+  exit's keys" and is published from GitHub Actions by the release workflow, with npm provenance.
 - The spike compose `b9823a79…` was revoked on the retired registry (tx `3DmY4Rqr…`).
 
 ## 2026-11-12/13: docs

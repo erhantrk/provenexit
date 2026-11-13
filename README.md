@@ -37,7 +37,7 @@ checks both before every new connection.
 | what | where |
 |---|---|
 | status site | <https://provenexit.vercel.app> (runs the 20 client checks against the live exit) |
-| npm | [`provenexit@0.1.1`](https://www.npmjs.com/package/provenexit): `npx provenexit verify` · `inspect` · `connect` |
+| npm | [`provenexit@0.1.2`](https://www.npmjs.com/package/provenexit): `npx provenexit verify` · `inspect` · `connect`; built and published by the [release workflow](.github/workflows/release.yml), files on the [release page](https://github.com/erhantrk/provenexit/releases) |
 | MCP server for AI agents | `claude mcp add provenexit -- npx -y -p provenexit provenexit-mcp` |
 | exit | Intel TDX on Phala Cloud (`dstack-0.6.1`), up since 2026-11-12 20:05 UTC, image `ghcr.io/erhantrk/provenexit-exit@sha256:74c6d1c5…2785` |
 | registry | [`vpnreg.pe-owner-erhan.testnet`](https://testnet.nearblocks.io/address/vpnreg.pe-owner-erhan.testnet): no access keys, reproducible build, code hash `C1hvenbr…` |
@@ -98,8 +98,6 @@ In this order, before every new connection, as the client prints them. The first
 18. instance registered with matching keys
 19. registry re-check before each connection (compose, OS, instance)
 20. destinations resolved by the exit (remote DNS); the client never resolves them
-
-The published `provenexit@0.1.1` prints check 10 as "report_data binds router keys".
 
 The NEAR contract runs its own 13 checks when the exit registers (DCAP signature and TCB, event log, compose,
 allowlists, key binding). The two lists are separate: see [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md), which also
