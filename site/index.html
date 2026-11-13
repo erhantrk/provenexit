@@ -104,51 +104,46 @@
 </section>
 
 <section class="sec sec-unlit" id="route" aria-labelledby="route-h">
+  <div class="route-pin" id="route-pin">
+  <div class="route-stage">
   <div class="wrap">
     <header class="sec-head reveal" data-label="02  How it works">
       <h2 id="route-h">How one connection is decided</h2>
     </header>
-  </div>
-  <div class="story" id="story">
-    <div class="story-stage" id="story-stage">
-      <div class="story-hud" aria-hidden="true">
-        <p class="story-chip" id="story-chip">Asking the exit for proof</p>
-        <p class="story-bars"><span></span><span></span><span></span><span></span></p>
+    <div class="route" id="route-fig">
+      <div class="route-registry">
+        <p class="station-name">The NEAR registry</p>
+        <p class="station-sub mono" data-bind="registry.account">–</p>
       </div>
-      <svg class="story-map story-wide" viewBox="50 50 900 370" role="img" aria-labelledby="story-map-t">
-        <title id="story-map-t">Your machine asks the exit for an Intel quote, checks it, asks the NEAR registry, then opens a tunnel through the exit to the website.</title>
-        <g class="s-wire"><path class="k-ask" d="M190 300 H470"/><path class="k-read" d="M150 262 C150 150 320 92 420 92"/><path d="M590 300 H812"/></g>
-        <path class="s-tunnel k-tunnel" d="M190 300 H812" pathLength="1"/>
-        <path class="s-read-lit k-read-lit" d="M150 262 C150 150 320 92 420 92" pathLength="1"/>
-        <g class="s-node s-registry k-registry"><rect x="420" y="62" width="270" height="60" rx="14"/><text x="555" y="88" class="s-name">The NEAR registry</text><text x="555" y="108" class="s-sub k-reg-sub">allowed and registered</text></g>
-        <g class="s-node s-machine"><rect x="80" y="262" width="140" height="80" rx="12"/><path class="s-glyph" d="M118 292 h64 v28 h-64z M110 324 h80"/><text x="150" y="400" class="s-name">Your machine</text><rect class="chk" x="70" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="79" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="88" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="97" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="106" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="115" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="124" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="133" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="142" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="151" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="160" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="169" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="178" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="187" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="196" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="205" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="214" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="223" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="232" y="356" width="6" height="16" rx="1.5"/><rect class="chk" x="241" y="356" width="6" height="16" rx="1.5"/></g>
-        <g class="s-node s-exit k-exit"><rect x="470" y="246" width="120" height="108" rx="18"/><rect class="s-tee" x="486" y="262" width="88" height="76" rx="10"/><text x="530" y="306" class="s-tee-t">Intel TDX</text><text x="530" y="400" class="s-name">The exit</text></g>
-        <g class="s-node s-site k-site"><circle cx="850" cy="300" r="38"/><path class="s-glyph" d="M812 300 h76 M850 262 c-16 12 -16 64 0 76 c16 -12 16 -64 0 -76"/><text x="850" y="400" class="s-name">The website</text></g>
-        <circle class="s-dot s-nonce k-nonce" r="7"/>
-        <g class="s-dot s-quote k-quote"><rect x="-13" y="-16" width="26" height="32" rx="4"/><path d="M-7 -6 h14 M-7 1 h14 M-7 8 h9"/></g>
-        <circle class="s-dot s-ping k-ping" r="6"/>
-        <g class="s-flow k-flow"><circle class="s-pkt" r="5"/><circle class="s-pkt" r="5"/><circle class="s-pkt" r="5"/><circle class="s-pkt" r="5"/></g>
-      </svg>
-      <svg class="story-map story-tall" viewBox="0 0 400 520" aria-hidden="true">
-        <g class="s-wire"><path class="k-ask" d="M120 120 V236"/><path class="k-read" d="M190 80 C250 80 300 90 300 150"/><path d="M120 356 V430"/></g>
-        <path class="s-tunnel k-tunnel" d="M120 120 V430" pathLength="1"/>
-        <path class="s-read-lit k-read-lit" d="M190 80 C250 80 300 90 300 150" pathLength="1"/>
-        <g class="s-node s-registry k-registry"><rect x="210" y="150" width="180" height="62" rx="14"/><text x="300" y="177" class="s-name">NEAR registry</text><text x="300" y="198" class="s-sub k-reg-sub">allowed and registered</text></g>
-        <g class="s-node s-machine"><rect x="50" y="40" width="140" height="80" rx="12"/><path class="s-glyph" d="M88 70 h64 v28 h-64z M80 102 h80"/><text x="120" y="22" class="s-name">Your machine</text><rect class="chk" x="30" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="39" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="48" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="57" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="66" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="75" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="84" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="93" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="102" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="111" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="120" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="129" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="138" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="147" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="156" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="165" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="174" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="183" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="192" y="128" width="6" height="16" rx="1.5"/><rect class="chk" x="201" y="128" width="6" height="16" rx="1.5"/></g>
-        <g class="s-node s-exit k-exit"><rect x="60" y="236" width="120" height="120" rx="18"/><rect class="s-tee" x="76" y="252" width="88" height="88" rx="10"/><text x="120" y="302" class="s-tee-t">Intel TDX</text><text x="290" y="302" class="s-name">The exit</text></g>
-        <g class="s-node s-site k-site"><circle cx="120" cy="468" r="38"/><path class="s-glyph" d="M82 468 h76 M120 430 c-16 12 -16 64 0 76 c16 -12 16 -64 0 -76"/><text x="290" y="474" class="s-name">The website</text></g>
-        <circle class="s-dot s-nonce k-nonce" r="7"/>
-        <g class="s-dot s-quote k-quote"><rect x="-13" y="-16" width="26" height="32" rx="4"/><path d="M-7 -6 h14 M-7 1 h14 M-7 8 h9"/></g>
-        <circle class="s-dot s-ping k-ping" r="6"/>
-        <g class="s-flow k-flow"><circle class="s-pkt" r="5"/><circle class="s-pkt" r="5"/><circle class="s-pkt" r="5"/><circle class="s-pkt" r="5"/></g>
-      </svg>
-      <ol class="steps story-steps" id="route-steps">
-        <li>Your client sends the exit a fresh random number and asks for its Intel quote.</li>
-        <li>It checks Intel's signature, that debug is off, and that the quote contains the exit's keys and your number.</li>
-        <li>It reads the NEAR registry: is this build allowed, is this OS allowed, is this exit registered.</li>
-        <li>Only then it opens an encrypted tunnel to the key in the quote. If the owner revokes the build, the next connection is refused.</li>
+      <div class="route-drop" aria-hidden="true"></div>
+      <div class="route-line" aria-hidden="true"><i></i></div>
+      <ol class="stations" aria-label="The route of a connection">
+        <li class="station">
+          <span class="station-dot" aria-hidden="true"></span>
+          <p class="station-name">Your machine</p>
+          <p class="station-sub">The client and its local proxy</p>
+        </li>
+        <li class="station station-mid">
+          <span class="station-dot" aria-hidden="true"></span>
+          <p class="station-name">The exit</p>
+          <p class="station-sub" data-bind-platform>–</p>
+        </li>
+        <li class="station station-end">
+          <span class="station-dot" aria-hidden="true"></span>
+          <p class="station-name">The website</p>
+          <p class="station-sub">It sees the exit's address</p>
+        </li>
       </ol>
     </div>
+    <ol class="steps" id="route-steps">
+      <li>Your client sends the exit a fresh random number and asks for its Intel quote.</li>
+      <li>It checks Intel's signature, that debug is off, and that the quote contains the exit's keys and your number.</li>
+      <li>It reads the NEAR registry: is this build allowed, is this OS allowed, is this exit registered.</li>
+      <li>Only then it opens an encrypted tunnel to the key in the quote. If the owner revokes the build, the next connection is refused.</li>
+    </ol>
+    <p class="route-count" id="route-count" aria-hidden="true"><span class="route-count-n">Step <b id="route-n">1</b> of 4</span><span class="route-count-bar"><i></i></span></p>
+  </div>
+  </div>
   </div>
 </section>
 
