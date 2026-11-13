@@ -39,7 +39,7 @@ checks both before every new connection.
 | status site | <https://provenexit.vercel.app> (runs the 20 client checks against the live exit) |
 | npm | [`provenexit@0.1.3`](https://www.npmjs.com/package/provenexit): `npx provenexit verify` · `inspect` · `connect`; built and published by the [release workflow](.github/workflows/release.yml), files on the [release page](https://github.com/erhantrk/provenexit/releases) |
 | MCP server for AI agents | `claude mcp add provenexit -- npx -y -p provenexit provenexit-mcp` |
-| exit | Intel TDX on Phala Cloud (`dstack-0.6.1`), up since 2026-11-12 20:05 UTC, image `ghcr.io/erhantrk/provenexit-exit@sha256:74c6d1c5…2785` |
+| exit | Intel TDX on Phala Cloud (`dstack-0.6.1`), running this image since 2026-11-12 20:05 UTC (paused between demo runs; online for judging), image `ghcr.io/erhantrk/provenexit-exit@sha256:74c6d1c5…2785` |
 | registry | [`vpnreg.pe-owner-erhan.testnet`](https://testnet.nearblocks.io/address/vpnreg.pe-owner-erhan.testnet): no access keys, reproducible build, code hash `C1hvenbr…` |
 | on-chain registration | [tx `6yBT47ij…`](https://testnet.nearblocks.io/txns/6yBT47ijg4AgqpYGUk6dUw9tdD3kRFw4iScL7aaSBCp): the contract ran all 13 checks on the exit's real quote (186.76 Tgas) |
 | live revoke | the owner revoked the running build ([tx `2JJdbyoG…`](https://testnet.nearblocks.io/txns/2JJdbyoGGr5GewNMDd9aeGrDSDjQ33xDoAWWovR8s1u2)): the next connection was refused with `E_COMPOSE_NOT_ALLOWED`; re-allowed ([tx `tdQDjQkF…`](https://testnet.nearblocks.io/txns/tdQDjQkF6ZBVcsxuebHwuvykLEDJ9CvuuVSkicY57LW)), it worked again |
