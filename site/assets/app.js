@@ -464,7 +464,7 @@ function renderKeys(state) {
     `<div class="cards cards-2 live">
 ${card({ ic: "contract", k: "Registry contract", big: regBig, unit: regUnit, body: who(regWho) + regEv + codeRaw, hl: regWho === "Nobody." })}
 ${card({ ic: "key", k: "The exit", big: "In memory only", small: true, body: exitEv + keyRaw })}
-${card({ ic: "person", k: "The owner", big: "One NEAR account", small: true, body: `<p>It allows and revokes builds from the command line. Every call is a transaction in the <a href="#history">history below</a>.</p>${owner ? raws([rawRow("raw-owner", "Owner account", owner)]) : ""}` })}
+${card({ ic: "person", k: "The owner", big: "A 2-of-3 council", small: true, body: `<p>A NEAR DAO account with no key of its own. It allows or revokes a build only after two of its three members approve. Every call is a transaction in the <a href="#history">history below</a>.</p>${owner ? raws([rawRow("raw-owner", "Owner account", owner)]) : ""}` })}
 ${card({ ic: "globe", k: "This site", big: "No key", small: true, body: "<p>No wallet, no signing, no transactions. It reads the registry and the exit and shows the result.</p>" })}
 </div>`,
   );

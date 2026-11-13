@@ -84,7 +84,10 @@ trap 'exit 130' INT TERM
 # The owner command the human runs. This script never runs it (the key stays with its owner).
 owner_cmd() { # <method> '<json args>'
   local args='{"hash":"'"$COMPOSE"'"}'
-  if [[ "$PLR_NEAR_RPC" == *testnet* ]]; then
+  if [[ "$PLR_NEAR_RPC" == *testnet* && -n "${DAO_ID:-}" ]]; then
+    # the owner is the council DAO: one member proposes, two approve (the second approval runs the call)
+    printf "COUNCIL_ID=<member> scripts/owner-dao.sh call %s '%s', then two members: scripts/owner-dao.sh approve <id>" "$1" "$args"
+  elif [[ "$PLR_NEAR_RPC" == *testnet* ]]; then
     printf "scripts/owner.sh %s '%s'" "$1" "$args"
   else
     printf "node e2e/dist/stack-cli.js owner %s '%s' --vpn --env-out %s" "$1" "$args" "${PLR_DEMO_ENV:-$ENV_LIVE}"
@@ -163,7 +166,7 @@ if [[ -n $DIRECT ]]; then
 fi
 
 # ------------------------------------------------------------------------------------------- 4. revoke
-step "Revoke the exit's build on NEAR — one owner transaction"
+step "Revoke the exit's build on NEAR — the owner council approves it"
 info "every new connection re-checks the registry, so the revocation applies to the very next one"
 pause "Now revoke on NEAR ($(owner_cmd revoke_compose)), press enter"
 run "curl --proxy $PROXY https://api.ipify.org"

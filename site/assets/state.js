@@ -169,6 +169,8 @@ export const EVENT_WORDS = {
   revoke_compose: "Build revoked",
   revoke_os: "OS image revoked",
   register_instance_tdx: "Exit registered after the on-chain check",
+  propose_owner: "New owner proposed",
+  accept_owner: "Ownership accepted",
 };
 export const eventWords = (kind) => (Object.hasOwn(EVENT_WORDS, kind) ? EVENT_WORDS[kind] : String(kind ?? ""));
 export const isRevoke = (kind) => typeof kind === "string" && kind.startsWith("revoke_");

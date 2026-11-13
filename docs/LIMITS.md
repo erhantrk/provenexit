@@ -9,17 +9,14 @@ exit, a `tdx.small` CVM on Phala Cloud running the production OS `dstack-0.6.1` 
 paid by the hour and may be stopped outside judging. When it is down, `npx provenexit verify` refuses (the exit is
 unreachable); the offline replay of [`fixtures/live-exit`](../fixtures/live-exit) still works.
 
-## One owner key decides the allowlist
+## The owner council has one holder for now
 
-`pe-owner-erhan.testnet` is one NEAR account: whoever holds its key can allow or revoke builds, OS measurements and
-operators. The client pins the Intel root, the registry contract id and its code hash, not the owner.
-
-The registry can hand this role to a 2-of-3 council (a Sputnik DAO account with no key of its own). The whole
-handover ran on a throwaway copy of the registry on testnet, including a revoke that needed two approvals and a
-refusal of the old key; the transactions and the commands for the live registry are in
-[deploy/testnet/MULTISIG-OWNER.md](../deploy/testnet/MULTISIG-OWNER.md). It has not been done on the live registry.
-After it, a revoke takes three transactions instead of one and waits for a second person, and you trust any two of
-the three council members plus the DAO contract instead of one key.
+The registry's owner is a 2-of-3 council: the Sputnik DAO account `pe-owners.sputnikv2.testnet`, which has no access
+key and acts only when two of its three members approve a proposal. Every allow or revoke of a build, OS image or
+operator is such a proposal. The three member accounts (`pe-council1-erhan.testnet`, `pe-council2-erhan.testnet`,
+`pe-council3-erhan.testnet`) are all held by the author today, so in practice one person still decides. Giving two of
+the seats to other people is one DAO policy proposal; the registry does not change. The client pins the Intel root,
+the registry contract id and its code hash, not the owner.
 
 ## Proxy mode only
 
@@ -45,6 +42,9 @@ These hold for any VPN exit, or any app on Intel TDX, and ProvenExit does not ch
 
 ## Closed limits
 
+- **One owner key decided the allowlist.** Closed on 2026-11-13: the single owner `pe-owner-erhan.testnet` named the
+  council DAO as owner ([`BLaRVAn1…`](https://testnet.nearblocks.io/txns/BLaRVAn19UAjboeJEJQ9Xqc5nN7f2Yn1N9AeqYV1ao3K)), and the DAO accepted after two approvals ([`HzsVd6XC…`](https://testnet.nearblocks.io/txns/HzsVd6XCWaB3JCxKfhktTAvP7htxKtNESsqczxHfPgsq)). The old key is no
+  longer the owner. Details and every transaction: [deploy/testnet/MULTISIG-OWNER.md](../deploy/testnet/MULTISIG-OWNER.md).
 - **Revocation was not shown on the live exit.** Closed on 2026-11-13: with [`scripts/demo-live.sh`](../scripts/demo-live.sh)
   against the live exit, the owner revoked the running compose `2f4100e6…dabf` ([`2JJdbyoG…`](https://testnet.nearblocks.io/txns/2JJdbyoGGr5GewNMDd9aeGrDSDjQ33xDoAWWovR8s1u2)); the very next
   connection through the open proxy was refused and `vpn verify` refused with `E_COMPOSE_NOT_ALLOWED`. The owner

@@ -4,8 +4,18 @@ Today one account, `pe-owner-erhan.testnet`, owns the registry `vpnreg.pe-owner-
 one key decides which exit builds are allowed. This page shows how to hand that role to an account that only acts
 when two of three people agree, and proves the whole path on a throwaway copy of the registry.
 
-**Status: prepared, not done.** Nothing on this page was run against the real registry. Its owner is still
-`pe-owner-erhan.testnet`. The handover takes about ten minutes once three council accounts exist.
+**Status: done on 2026-11-13.** The registry's owner is the 2-of-3 council `pe-owners.sputnikv2.testnet`, with members
+`pe-council1-erhan.testnet`, `pe-council2-erhan.testnet` and `pe-council3-erhan.testnet`. All three seats are held by
+the author for now; giving two of them to other people is one DAO policy proposal and does not touch the registry.
+
+| step | transaction |
+|---|---|
+| DAO created (3 members, threshold 2, no access keys, code hash `AA4nA45v…`) | [`3ywCUrJW…`](https://testnet.nearblocks.io/txns/3ywCUrJWrLMRsSPe3bRP8rURxHzqf7T9rkmb9PtKW2n4) |
+| factory auto-update turned off (proposal 0, two approvals) | [`CMK9GzuD…`](https://testnet.nearblocks.io/txns/CMK9GzuDo8hnpY2sfgNHAsaABHPTSa8NpgRTko4zjGeW), [`BPWDHNp6…`](https://testnet.nearblocks.io/txns/BPWDHNp6S3oYPJhLBBRM9goThesGRB2Pe4supzhNNQAx), [`8DkW2KYg…`](https://testnet.nearblocks.io/txns/8DkW2KYgWgKtnobeCvgxjmHd2YdvoYeLAbYd6PyBVY9b) |
+| `propose_owner(pe-owners.sputnikv2.testnet)` by the single owner | [`BLaRVAn1…`](https://testnet.nearblocks.io/txns/BLaRVAn19UAjboeJEJQ9Xqc5nN7f2Yn1N9AeqYV1ao3K) |
+| proposal 1 `accept_owner`, first approval (owner unchanged), second approval (owner = DAO) | [`8w4hSwiy…`](https://testnet.nearblocks.io/txns/8w4hSwiybzMod8Jj8UU9MGJE1RN7PPNeMs3YV6w5AgWv), [`AG21wQyc…`](https://testnet.nearblocks.io/txns/AG21wQycaDwUC31kHHjP6Wm9SfvfE5evubKAKcBtwAi4), [`HzsVd6XC…`](https://testnet.nearblocks.io/txns/HzsVd6XCWaB3JCxKfhktTAvP7htxKtNESsqczxHfPgsq) |
+
+The steps below are the throwaway rehearsal and the generic commands it was done with.
 
 ## What changes, and what does not
 
@@ -88,7 +98,7 @@ policy's 7 days), and changing the council members.
 
 ## Commands for the real registry
 
-**Not run.** Replace `COUNCIL_1`, `COUNCIL_2`, `COUNCIL_3` with three existing testnet accounts held by three
+**Run on 2026-11-13 (see the top of this page).** Replace `COUNCIL_1`, `COUNCIL_2`, `COUNCIL_3` with three existing testnet accounts held by three
 different people (do not reuse the operator account), and pick a DAO name (`pe-owners` below).
 Each member needs about 1 NEAR for the bond and fees; whoever creates the DAO needs 6 NEAR more.
 

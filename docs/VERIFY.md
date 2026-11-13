@@ -101,7 +101,7 @@ replay and the contract tests on every push to `main`.
 
 ## The on-chain record
 
-All on NEAR testnet. Owner `pe-owner-erhan.testnet`, operator `pe-op-erhan.testnet` (organization `erhan-demo`).
+All on NEAR testnet. Owner `pe-owner-erhan.testnet` until 2026-11-13, then the 2-of-3 council `pe-owners.sputnikv2.testnet`; operator `pe-op-erhan.testnet` (organization `erhan-demo`).
 
 **The live registry `vpnreg.pe-owner-erhan.testnet`** (keyless, reproducible build):
 
@@ -119,6 +119,10 @@ All on NEAR testnet. Owner `pe-owner-erhan.testnet`, operator `pe-op-erhan.testn
 | 20:06:50 UTC: old compose `9411d0f7…` revoked | [`9HhvupZA…`](https://testnet.nearblocks.io/txns/9HhvupZAQWnrdFtXDMUuA4w6sVYfzHPF8Mtk4VXuhNVx) |
 | 2026-11-13 08:28 UTC, live demo: current compose revoked, the next connection refused (`E_COMPOSE_NOT_ALLOWED`) | [`2JJdbyoG…`](https://testnet.nearblocks.io/txns/2JJdbyoGGr5GewNMDd9aeGrDSDjQ33xDoAWWovR8s1u2) |
 | seconds later: re-allowed, the next connection works again | [`tdQDjQkF…`](https://testnet.nearblocks.io/txns/tdQDjQkF6ZBVcsxuebHwuvykLEDJ9CvuuVSkicY57LW) |
+| 2026-11-13: council DAO `pe-owners.sputnikv2.testnet` created (3 members, threshold 2, no access keys) | [`3ywCUrJW…`](https://testnet.nearblocks.io/txns/3ywCUrJWrLMRsSPe3bRP8rURxHzqf7T9rkmb9PtKW2n4) |
+| factory auto-update turned off by a 2-of-3 proposal | [`CMK9GzuD…`](https://testnet.nearblocks.io/txns/CMK9GzuDo8hnpY2sfgNHAsaABHPTSa8NpgRTko4zjGeW), [`BPWDHNp6…`](https://testnet.nearblocks.io/txns/BPWDHNp6S3oYPJhLBBRM9goThesGRB2Pe4supzhNNQAx), [`8DkW2KYg…`](https://testnet.nearblocks.io/txns/8DkW2KYgWgKtnobeCvgxjmHd2YdvoYeLAbYd6PyBVY9b) |
+| the single owner names the DAO as next owner (`propose_owner`) | [`BLaRVAn1…`](https://testnet.nearblocks.io/txns/BLaRVAn19UAjboeJEJQ9Xqc5nN7f2Yn1N9AeqYV1ao3K) |
+| DAO proposal `accept_owner`: first approval (nothing runs), second approval (owner = DAO) | [`8w4hSwiy…`](https://testnet.nearblocks.io/txns/8w4hSwiybzMod8Jj8UU9MGJE1RN7PPNeMs3YV6w5AgWv), [`AG21wQyc…`](https://testnet.nearblocks.io/txns/AG21wQycaDwUC31kHHjP6Wm9SfvfE5evubKAKcBtwAi4), [`HzsVd6XC…`](https://testnet.nearblocks.io/txns/HzsVd6XCWaB3JCxKfhktTAvP7htxKtNESsqczxHfPgsq) |
 
 Only the live exit's compose is allowed there. The exit re-registers every 6 hours (records expire after 24 hours)
 and anchors receipt roots on the same contract.

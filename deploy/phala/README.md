@@ -182,9 +182,19 @@ only so checks 1–12 could be shown on the real quote ([`docs/LIMITS.md`](../..
 `3DmY4RqrDAVknLov5pDYMgAQvjmMpM354eeGZdWifh7n`) and was never allowed on the live registry
 `vpnreg.pe-owner-erhan.testnet`.
 
-## `scripts/owner.sh`
+## Owner calls
 
-Owner calls against the registry, signed by `OWNER_ID` from `deploy/testnet/env.live`:
+Since 2026-11-13 the registry's owner is the 2-of-3 council `pe-owners.sputnikv2.testnet` (`DAO_ID` in
+`deploy/testnet/env.live`). An owner call is a DAO proposal that runs on the second approval:
+
+```sh
+COUNCIL_ID=pe-council1-erhan.testnet scripts/owner-dao.sh call revoke_compose '{"hash":"<compose hash>"}'   # prints the id N
+COUNCIL_ID=pe-council1-erhan.testnet scripts/owner-dao.sh approve N
+COUNCIL_ID=pe-council2-erhan.testnet scripts/owner-dao.sh approve N   # the call runs here
+```
+
+Before the handover the same calls were signed by the single owner `OWNER_ID` with `scripts/owner.sh` (the registry
+now refuses that key):
 
 ```sh
 scripts/owner.sh approve_operator '{"account_id":"pe-op-erhan.testnet","org_id":"erhan-demo"}'
