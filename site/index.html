@@ -285,15 +285,15 @@
       </li>
       <li>
         <h3 data-more-title>Intel and the dstack OS are trusted.</h3>
-        <p data-more="limit-4">Intel, the dstack OS image and the TDX module are trusted roots. Side channels are not defended.</p>
+        <p data-more="limit-4">Intel, the TDX module and Phala's dstack OS image are trusted roots, as for any app on TDX. Side channels are not defended.</p>
       </li>
       <li>
         <h3 data-more-title>One owner key decides the allowlist.</h3>
-        <p data-more="limit-5"><span class="mono" data-bind="registry.owner">The owner</span> is one NEAR account. Whoever holds that key can allow or revoke builds and operators. Multisig is future work.</p>
+        <p data-more="limit-5"><span class="mono" data-bind="registry.owner">The owner</span> is one NEAR account. Whoever holds that key can allow or revoke builds and operators. A handover to a 2-of-3 council is prepared, not done.</p>
       </li>
     </ol>
     <h3 class="also-h">More limits</h3>
-    <ol class="limits limits-small" start="6" data-more="more-limits" data-more-button="big" data-more-label="Show 7 more limits" data-more-less="Hide the 7 more limits">
+    <ol class="limits limits-small" start="6" data-more="more-limits" data-more-button="big" data-more-label="Show 5 more limits" data-more-less="Hide the 5 more limits">
       <li>
         <h4 data-more-title>Proxy only.</h4>
         <p data-more="limit-6">TCP through a SOCKS5 proxy. No UDP, no QUIC, no system-wide tunnel.</p>
@@ -307,20 +307,12 @@
         <p data-more="limit-8">It terminates TLS. It sees only tunnel ciphertext, can observe timing and volume, and can refuse to serve.</p>
       </li>
       <li>
-        <h4 data-more-title>The OS measurement is observed, not rebuilt.</h4>
-        <p data-more="limit-9">The OS measurement was observed in the quote, not rebuilt from source.</p>
-      </li>
-      <li>
-        <h4 data-more-title>The exit image is not reproducible yet.</h4>
-        <p data-more="limit-10">A rebuild is not shown to give the same digest.</p>
-      </li>
-      <li>
-        <h4 data-more-title>Intel revocation data can be stale.</h4>
-        <p data-more="limit-11">An exit can serve Intel revocation data that is stale but not expired; the window is the list's update interval.</p>
+        <h4 data-more-title>Intel revocations arrive on Intel's schedule.</h4>
+        <p data-more="limit-9">The client fetches Intel's revocation data itself, never the exit's copy. A revocation reaches it only when Intel publishes the update.</p>
       </li>
       <li>
         <h4 data-more-title>The exit may be stopped after judging.</h4>
-        <p data-more="limit-12">The exit is paid by the hour. It runs through judging and may be stopped afterwards.</p>
+        <p data-more="limit-10">The exit is paid by the hour. It runs through judging and may be stopped afterwards.</p>
       </li>
     </ol>
     <p class="limits-more" hidden><a class="link" data-href="links.repo" data-href-suffix="/blob/main/docs/LIMITS.md">Read every limit</a></p>

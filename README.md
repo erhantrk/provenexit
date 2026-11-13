@@ -114,7 +114,6 @@ Each one in full in [docs/LIMITS.md](docs/LIMITS.md).
 - [Proxy mode only](docs/LIMITS.md#proxy-mode-only): TCP through SOCKS5, no UDP, no system-wide tunnel; [direct connection only](docs/LIMITS.md#direct-connection-only), no `HTTP_PROXY` support.
 - [The local demo stack uses a MOCK root, not Intel](docs/LIMITS.md#the-local-demo-stack-uses-a-mock-root).
 - [Collateral freshness is bounded by Intel's CRL interval](docs/LIMITS.md#collateral-freshness).
-- [The OS measurement was observed, not reproduced](docs/LIMITS.md#the-os-measurement-was-observed-not-reproduced).
 - [A matching image digest does not prove the source is honest](docs/LIMITS.md#what-a-matching-image-digest-proves).
 - [One owner key decides the allowlist](docs/LIMITS.md#one-owner-key-decides-the-allowlist); [registry answers are cross-checked between two RPC providers, not proven](docs/LIMITS.md#registry-answers-are-cross-checked-not-proven).
 - [Phala's gateway terminates TLS](docs/LIMITS.md#phalas-gateway-terminates-tls) (it sees only tunnel ciphertext).

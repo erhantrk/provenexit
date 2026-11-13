@@ -87,13 +87,6 @@ Two modes skip the fresh fetch, and both say so in `vpn verify`: `PLR_PCCS_URL=e
 exit serves, which can be stale yet unexpired) and the offline fixture replay (uses the recorded collateral, shown as
 the one `·` line).
 
-## The OS measurement was observed, not reproduced
-
-The allowlisted OS measurement `821d442f07d638c696f4c5e1e4962bf4e28515ba5d790f5cf502b1c0d4dd323d` is
-`SHA256(mr_td ‖ rtmr0 ‖ rtmr1 ‖ rtmr2)` of the dstack OS image that booted, read from the quote. It has not been
-re-derived from Phala's `dstack-0.6.1` release with `dstack-mr`. The owner approved the value they saw, not one
-computed from source.
-
 ## What a matching image digest proves
 
 `scripts/verify-exit-image.sh` rebuilds the exit image from the checkout and compares it with the digest
@@ -155,7 +148,9 @@ capture time, not that it is now; for that, run `npx provenexit verify` against 
 
 ## TEE vendor trust and side channels
 
-Intel, the TDX module and the dstack OS image are trusted roots. Micro-architectural side channels are not defended.
+Intel, the TDX module and Phala's dstack OS image are trusted roots, as for any app on Intel TDX and dstack. The
+allowlisted OS measurement `821d442f…323d` (`SHA256(mr_td ‖ rtmr0 ‖ rtmr1 ‖ rtmr2)`) is the one Phala's
+`dstack-0.6.1` image produced, read from the exit's quote. Micro-architectural side channels are not defended.
 
 ## Closed limits
 

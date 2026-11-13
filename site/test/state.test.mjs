@@ -357,10 +357,10 @@ test("the limits heading and the compact history", () => {
 test("long explanations are folded behind disclosures, proof data is not", () => {
   const html = text("../index.html");
   const limits = html.slice(html.indexOf('id="limits"'), html.indexOf("</section>", html.indexOf('id="limits"')));
-  // Twelve limits, each title-first with its explanation in a panel; the seven smaller ones fold as a group.
-  assert.equal(limits.match(/data-more-title/g).length, 12);
-  assert.equal(limits.match(/data-more="limit-\d+"/g).length, 12);
-  assert.match(limits, /data-more="more-limits"[^>]*data-more-label="Show 7 more limits"/);
+  // Ten limits, each title-first with its explanation in a panel; the five smaller ones fold as a group.
+  assert.equal(limits.match(/data-more-title/g).length, 10);
+  assert.equal(limits.match(/data-more="limit-\d+"/g).length, 10);
+  assert.match(limits, /data-more="more-limits"[^>]*data-more-label="Show 5 more limits"/);
   const more = text("../assets/more.js");
   assert.match(more, /aria-expanded/);
   assert.match(more, /aria-controls/);
