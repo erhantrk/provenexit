@@ -32,6 +32,8 @@ connection is refused.
 the hardware signs what is running, a public registry says whether that build is still approved, and your client
 checks both before every new connection.
 
+[![The status site: the live exit verified, all 20 checks passed](docs/img/site.png)](https://provenexit.vercel.app)
+
 ## Live
 
 | what | where |
@@ -65,6 +67,13 @@ npm ci && npx tsc -b && node client/dist/cli.js vpn verify --fixture fixtures/li
 
 It prints 16 `✔` lines, one `·` line (the replay uses the recorded Intel collateral instead of fetching fresh
 collateral) and `✔ VERIFIED (FIXTURE REPLAY …)`.
+
+Every check that needs neither the exit nor NEAR (unit tests, both recorded quotes, the site), in one command, about a
+minute; it ends with `JUDGE-OFFLINE: ALL PASS`:
+
+```sh
+bash scripts/judge-offline.sh
+```
 
 Rebuild the exit image from this checkout and compare it with the digest the exit runs (git and Docker with buildx):
 

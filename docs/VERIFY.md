@@ -34,6 +34,11 @@ curl -s https://rpc.testnet.fastnear.com -H 'content-type: application/json' -d 
 
 ## Ways to run it
 
+0. **Everything offline, one command:** `bash scripts/judge-offline.sh` (`WITH_CONTRACT=1` adds the contract tests,
+   which need Rust). It installs, builds, runs the unit tests, replays the live exit's recorded attestation
+   (`VERIFIED`) and the first real quote (refused at the key binding), runs the site tests, and ends with
+   `JUDGE-OFFLINE: ALL PASS`.
+
 1. **Live exit, one command:** `npx provenexit verify`, then `npx provenexit connect` for a local SOCKS5 proxy on
    `127.0.0.1:18180` (use `socks5h://`, e.g. `curl -x socks5h://127.0.0.1:18180 https://ifconfig.me`).
 
