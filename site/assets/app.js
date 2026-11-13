@@ -9,6 +9,7 @@ import { startMore, enhanceMore } from "./more.js";
 const POLL_MS = 15_000;
 const FETCH_TIMEOUT_MS = 70_000;
 const HISTORY_SHOWN = 3;
+const RECEIPTS_SHOWN = 2;
 const CMD_LIVE = "npx provenexit verify";
 const CMD_MCP = "claude mcp add provenexit -- npx -y -p provenexit provenexit-mcp";
 const CMD_REPLAY = "npm ci && npx tsc -b && node client/dist/cli.js vpn verify --fixture fixtures/live-exit";
@@ -32,6 +33,7 @@ let visitorIp;       // undefined = not asked yet, null = could not be read, str
 let shownState = null;
 let openStage = { live: null, recorded: null };
 let historyOpen = false;
+let receiptsOpen = false;
 let lighting = 0;    // token of the running lighting sequence
 let holdPlate = false;
 const lastHtml = new Map();
@@ -499,12 +501,14 @@ function renderHistory(state) {
     : "";
 
   const anchors = Array.isArray(json.receipts?.anchors) ? json.receipts.anchors.filter((a) => a && typeof a === "object") : [];
-  const anchorRows = anchors
+  const anchorRows = (receiptsOpen ? anchors : anchors.slice(0, RECEIPTS_SHOWN))
     .map((a) => `<li class="row"><span>${time(a.at, fmtDateTime)}</span><span class="row-what"><span>${esc(a.count)} ${a.count === 1 ? "receipt" : "receipts"} anchored</span></span><span>${Number.isInteger(a.first_seq) ? `From sequence ${a.first_seq}` : ""}</span><span>${txLink(a.tx)}</span></li>`)
     .join("");
   const receipts = `<div class="receipts"><h3>Session receipts</h3>
 <p data-more="receipts">The exit anchors Merkle roots of its session receipts on the same contract. A receipt holds hashes, sequence numbers and times, never a destination.</p>
-${anchors.length ? `<ol class="rows anchors">${anchorRows}</ol>` : `<p>No anchors were read at ${esc(atTime())}.</p>`}</div>`;
+${anchors.length ? `<ol class="rows anchors" id="receipt-anchors">${anchorRows}</ol>${anchors.length > RECEIPTS_SHOWN
+    ? `<button class="more-btn" type="button" data-action="receipts-all" data-key="receipts-all" aria-controls="receipt-anchors" aria-expanded="${receiptsOpen}">${receiptsOpen ? "Show the newest " + RECEIPTS_SHOWN : `Show all ${anchors.length} anchors`}</button>`
+    : ""}` : `<p>No anchors were read at ${esc(atTime())}.</p>`}</div>`;
   return put("history-body", `<ol class="rows events live" id="history-events">${rows}</ol>${more}${receipts}`);
 }
 
@@ -687,6 +691,15 @@ document.addEventListener("click", (ev) => {
     const n = Number(pip.dataset.pip);
     const stage = groupChecks(json?.verify?.checks).find((s) => s.rows.some((r) => r.number === n));
     if (stage) openStageFor("live", stage.id, false);
+    return;
+  }
+
+  if (t.closest('[data-action="receipts-all"]')) {
+    receiptsOpen = !receiptsOpen;
+    renderHistory(shownState);
+    document.querySelector('[data-action="receipts-all"]')?.focus({ preventScroll: true });
+    enhanceMore();
+    scanMotion();
     return;
   }
 
