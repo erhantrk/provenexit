@@ -109,7 +109,6 @@ has the architecture, the two-hop mode and a map of the repository. Specs: [docs
 Each one in full in [docs/LIMITS.md](docs/LIMITS.md).
 
 - [NEAR testnet only](docs/LIMITS.md#testnet-only); one live exit.
-- [The owner is a 2-of-3 council, but one person holds all three seats for now](docs/LIMITS.md#the-owner-council-has-one-holder-for-now).
 - [Proxy mode only](docs/LIMITS.md#proxy-mode-only): TCP through SOCKS5, no system-wide tunnel.
 - [The usual VPN and TEE caveats](docs/LIMITS.md#usual-vpn-and-tee-caveats): the exit sees destinations, and Intel and Phala are trusted.
 

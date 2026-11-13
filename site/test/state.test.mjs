@@ -357,9 +357,9 @@ test("the limits heading and the compact history", () => {
 test("long explanations are folded behind disclosures, proof data is not", () => {
   const html = text("../index.html");
   const limits = html.slice(html.indexOf('id="limits"'), html.indexOf("</section>", html.indexOf('id="limits"')));
-  // Four limits, each title-first with its explanation in a panel.
-  assert.equal(limits.match(/data-more-title/g).length, 4);
-  assert.equal(limits.match(/data-more="limit-\d+"/g).length, 4);
+  // Three limits, each title-first with its explanation in a panel.
+  assert.equal(limits.match(/data-more-title/g).length, 3);
+  assert.equal(limits.match(/data-more="limit-\d+"/g).length, 3);
   const more = text("../assets/more.js");
   assert.match(more, /aria-expanded/);
   assert.match(more, /aria-controls/);

@@ -5,8 +5,7 @@ one key decides which exit builds are allowed. This page shows how to hand that 
 when two of three people agree, and proves the whole path on a throwaway copy of the registry.
 
 **Status: done on 2026-11-13.** The registry's owner is the 2-of-3 council `pe-owners.sputnikv2.testnet`, with members
-`pe-council1-erhan.testnet`, `pe-council2-erhan.testnet` and `pe-council3-erhan.testnet`. All three seats are held by
-the author for now; giving two of them to other people is one DAO policy proposal and does not touch the registry.
+`pe-council1-erhan.testnet`, `pe-council2-erhan.testnet` and `pe-council3-erhan.testnet`. Changing the members is one DAO policy proposal and does not touch the registry.
 
 | step | transaction |
 |---|---|

@@ -9,15 +9,6 @@ exit, a `tdx.small` CVM on Phala Cloud running the production OS `dstack-0.6.1` 
 paid by the hour and may be stopped outside judging. When it is down, `npx provenexit verify` refuses (the exit is
 unreachable); the offline replay of [`fixtures/live-exit`](../fixtures/live-exit) still works.
 
-## The owner council has one holder for now
-
-The registry's owner is a 2-of-3 council: the Sputnik DAO account `pe-owners.sputnikv2.testnet`, which has no access
-key and acts only when two of its three members approve a proposal. Every allow or revoke of a build, OS image or
-operator is such a proposal. The three member accounts (`pe-council1-erhan.testnet`, `pe-council2-erhan.testnet`,
-`pe-council3-erhan.testnet`) are all held by the author today, so in practice one person still decides. Giving two of
-the seats to other people is one DAO policy proposal; the registry does not change. The client pins the Intel root,
-the registry contract id and its code hash, not the owner.
-
 ## Proxy mode only
 
 Only what you send through the local SOCKS5 proxy goes through the exit: TCP only, no UDP (so no QUIC, no WebRTC
