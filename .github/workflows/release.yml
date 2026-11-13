@@ -1,0 +1,68 @@
+name: release
+# Runs when a GitHub release is published (tag vX.Y.Z, equal to the version in npm/package.json).
+# It builds the `provenexit` npm package from this checkout, checks it, and
+#   - attaches the package tarball and the two self-contained bundles to the release, with their SHA-256 sums
+#   - publishes the same package to GitHub Packages as @erhantrk/provenexit
+#   - publishes it to npmjs.com as `provenexit` with provenance (npm trusted publishing, no token stored here),
+#     only when the repository variable NPM_TRUSTED_PUBLISHING is "true"
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+jobs:
+  package:
+    name: build, check and publish the npm package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # attach files to the release
+      packages: write   # GitHub Packages
+      id-token: write   # npm trusted publishing (OIDC) and provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: the tag is the package version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="$(node -p "require('./npm/package.json').version")"
+          [ "$TAG" = "v$version" ] || { echo "release tag $TAG, npm/package.json has $version" >&2; exit 1; }
+      - run: npm ci
+      - run: npx tsc -b
+      - run: npm run build:npm
+      - name: the bundles load no package at run time
+        run: npm test -w client -- bundles-selfcontained
+      - name: pack
+        run: |
+          mkdir -p out
+          (cd npm && npm pack --pack-destination ../out)
+          cp npm/dist/provenexit.mjs npm/dist/provenexit-mcp.mjs out/
+          (cd out && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+      - name: the packed package verifies the recorded exit, installed alone in an empty directory
+        run: |
+          dir="$(mktemp -d)"
+          cp -r fixtures/live-exit "$dir/fixture"
+          cd "$dir" && npm init -y >/dev/null && npm install "$GITHUB_WORKSPACE"/out/provenexit-*.tgz
+          npx provenexit verify --fixture fixture | tee /dev/stderr | grep -q "VERIFIED (FIXTURE REPLAY"
+      - name: attach the files to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" out/* --clobber
+      - name: publish to npmjs.com (trusted publishing)
+        if: vars.NPM_TRUSTED_PUBLISHING == 'true'
+        run: |
+          npm install -g npm@latest   # trusted publishing needs npm 11.5.1 or newer
+          cd npm && npm publish --provenance --access public
+      - name: publish to GitHub Packages as @erhantrk/provenexit
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          cd npm
+          npm pkg set name=@erhantrk/provenexit
+          npm pkg set publishConfig.registry=https://npm.pkg.github.com
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > .npmrc
+          npm publish
