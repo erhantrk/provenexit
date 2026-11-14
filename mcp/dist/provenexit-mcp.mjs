@@ -77973,19 +77973,47 @@ async function listTxns(fetchFn, api, account, ms, maxPages) {
   }
   return out;
 }
+async function listOwnerCalls(fetchFn, api, account, ms) {
+  const deadline = Date.now() + ms;
+  const methods = [...EVENT_METHODS].filter((m) => m !== "register_instance_tdx");
+  const lists = await Promise.all(methods.map(async (m) => {
+    const url = `${api}/accounts/${encodeURIComponent(account)}/receipts?per_page=25&method=${m}`;
+    const j = await getJson(fetchFn, url, Math.max(500, deadline - Date.now()));
+    if (!Array.isArray(j.data))
+      throw new Error("NearBlocks: malformed reply");
+    return j.data.flatMap((r) => {
+      const ts = r.block?.block_timestamp ?? r.included_in_block_timestamp;
+      const method = r.actions?.[0]?.method;
+      if (r.outcome?.status !== true || method !== m || r.receiver_account_id !== account)
+        return [];
+      if (typeof r.transaction_hash !== "string" || typeof r.receipt_id !== "string" || typeof ts !== "string")
+        return [];
+      return [{ hash: r.transaction_hash, receiptId: r.receipt_id, method: m, caller: String(r.predecessor_account_id ?? ""), tsMs: Number(BigInt(ts) / 1000000n) }];
+    });
+  }));
+  return lists.flat();
+}
+function parseArgs(b64) {
+  if (typeof b64 !== "string")
+    return null;
+  try {
+    const v = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
+    return typeof v === "object" && v !== null && !Array.isArray(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+async function receiptArgs(fetchFn, rpc, receiptId, ms) {
+  const r = await rpcCall(fetchFn, rpc, "EXPERIMENTAL_receipt", { receipt_id: receiptId }, ms);
+  const actions2 = r.receipt?.Action?.actions;
+  const fc = Array.isArray(actions2) ? actions2[0]?.FunctionCall : void 0;
+  return parseArgs(fc?.args);
+}
 async function txDetail(fetchFn, rpc, t, ms) {
   const r = await rpcCall(fetchFn, rpc, "tx", { tx_hash: t.hash, sender_account_id: t.signer, wait_until: "FINAL" }, ms);
-  let args = null;
   const actions2 = r.transaction?.actions;
   const fc = Array.isArray(actions2) ? actions2[0]?.FunctionCall : void 0;
-  if (typeof fc?.args === "string") {
-    try {
-      const v = JSON.parse(Buffer.from(fc.args, "base64").toString("utf8"));
-      if (typeof v === "object" && v !== null && !Array.isArray(v))
-        args = v;
-    } catch {
-    }
-  }
+  const args = parseArgs(fc?.args);
   let burnt = r.transaction_outcome?.outcome?.gas_burnt;
   let total = typeof burnt === "number" ? burnt : NaN;
   const receipts = r.receipts_outcome;
@@ -78181,7 +78209,8 @@ async function getStatus(opts = {}) {
     return { owner: str2(owner), root: root.kind, code_hash: acct, full_access_keys: keys };
   })();
   const txnsP = withTimeout(listTxns(fetchFn, nearBlocks, cfg.registry, T.events, MAX_EVENT_PAGES), T.events + 500, "NearBlocks").catch(() => null);
-  const [online, verify, facts, txns] = await Promise.all([healthP, verifyP, regFacts.catch((e) => e), txnsP]);
+  const ownerP = withTimeout(listOwnerCalls(fetchFn, nearBlocks, cfg.registry, T.events), T.events + 500, "NearBlocks").catch(() => null);
+  const [online, verify, facts, txns, ownerCalls] = await Promise.all([healthP, verifyP, regFacts.catch((e) => e), txnsP, ownerP]);
   status.exit.online = online;
   status.replay = await replayP;
   let registryError = null;
@@ -78256,20 +78285,19 @@ async function getStatus(opts = {}) {
     } catch {
     }
   }
-  if (txns !== null) {
-    const wanted = txns.filter((t) => EVENT_METHODS.has(t.method)).slice(0, MAX_EVENTS2);
-    const details = await Promise.all(wanted.map((t) => t.method === "register_instance_tdx" ? Promise.resolve(null) : withTimeout(txDetail(fetchFn, archival, t, T.chain), T.chain + 500, "tx").catch(() => null)));
-    status.registry.events = wanted.map((t, i) => {
-      const a = details[i]?.args ?? null;
-      return {
-        kind: t.method,
-        hash: str2(a?.hash),
-        account: t.method === "register_instance_tdx" ? t.signer : str2(a?.account_id),
-        org: str2(a?.org_id),
-        tx: t.hash,
-        at: iso(t.tsMs)
-      };
-    });
+  if (txns !== null || ownerCalls !== null) {
+    const regs = (txns ?? []).filter((t) => t.method === "register_instance_tdx");
+    const owner = [...ownerCalls ?? []].sort((a, b) => b.tsMs - a.tsMs).slice(0, MAX_EVENTS2);
+    const args = await Promise.all(owner.map((o) => withTimeout(receiptArgs(fetchFn, archival, o.receiptId, T.chain), T.chain + 500, "receipt").catch(() => null)));
+    const events = [
+      ...regs.map((t) => ({ kind: t.method, hash: null, account: t.signer, org: null, by: t.signer, tx: t.hash, at: iso(t.tsMs), tsMs: t.tsMs })),
+      ...owner.map((o, i) => {
+        const a = args[i] ?? null;
+        return { kind: o.method, hash: str2(a?.hash), account: str2(a?.account_id), org: str2(a?.org_id), by: o.caller, tx: o.hash, at: iso(o.tsMs), tsMs: o.tsMs };
+      })
+    ];
+    events.sort((a, b) => b.tsMs - a.tsMs);
+    status.registry.events = events.slice(0, MAX_EVENTS2).map(({ tsMs: _t, ...e }) => e);
   }
   try {
     const count = await near.anchorCount();
