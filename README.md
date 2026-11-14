@@ -39,7 +39,7 @@ checks both before every new connection.
 | what | where |
 |---|---|
 | status site | <https://provenexit.vercel.app> (runs the 20 client checks against the live exit) |
-| npm | [`provenexit@0.1.4`](https://www.npmjs.com/package/provenexit): `npx provenexit verify` · `inspect` · `connect`; built and published by the [release workflow](.github/workflows/release.yml), files on the [release page](https://github.com/erhantrk/provenexit/releases) |
+| npm | [`provenexit@0.1.5`](https://www.npmjs.com/package/provenexit): `npx provenexit verify` · `inspect` · `connect`; built and published by the [release workflow](.github/workflows/release.yml), files on the [release page](https://github.com/erhantrk/provenexit/releases) |
 | MCP server for AI agents | `claude mcp add provenexit -- npx -y -p provenexit provenexit-mcp` |
 | exit | Intel TDX on Phala Cloud (`dstack-0.6.1`), running this image since 2026-11-12 20:05 UTC (paused between demo runs; online for judging), image `ghcr.io/erhantrk/provenexit-exit@sha256:74c6d1c5…2785` |
 | registry | [`vpnreg.pe-owner-erhan.testnet`](https://testnet.nearblocks.io/address/vpnreg.pe-owner-erhan.testnet): owned by a 2-of-3 council ([`pe-owners.sputnikv2.testnet`](https://testnet.nearblocks.io/address/pe-owners.sputnikv2.testnet), no keys), no access keys, reproducible build, code hash `C1hvenbr…`, source [verified on SourceScan](https://testnet.nearblocks.io/address/vpnreg.pe-owner-erhan.testnet?tab=contract) |

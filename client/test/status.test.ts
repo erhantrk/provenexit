@@ -21,6 +21,7 @@ const TX_ALLOW = "AllowTx11111111111111111111111111111111111";
 const TX_ANCHOR = "AnchorTx1111111111111111111111111111111111";
 const TX_DAO_REVOKE = "DaoRevokeTx111111111111111111111111111111";
 const DAO = "owners.sputnik.test.near";
+const COUNCIL = "council1.test.near";
 
 const listen = async (server: Server): Promise<string> => {
   await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
@@ -39,18 +40,15 @@ async function startChain(reg: RegistryReader & { getInstance: RegistryReader["g
     void (async () => {
       const send = (j: unknown): void => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(j)); };
       const url = new URL(req.url ?? "/", "http://x");
-      if (url.pathname.startsWith("/v3/accounts/") && url.pathname.endsWith("/receipts")) {
-        hits.push("nearblocks-receipts");
-        const rc = (tx: string, id: string, method: string, by: string, ms: number, ok = true): unknown => ({
-          transaction_hash: tx, receipt_id: id, predecessor_account_id: by, receiver_account_id: REGISTRY_ACCOUNT,
-          block: { block_timestamp: nsAt(ms) }, outcome: { status: ok }, actions: [{ action: "FUNCTION_CALL", method }],
+      if (url.pathname === `/v3/accounts/${DAO}/txns`) {
+        hits.push("nearblocks-dao");
+        // the council's transactions: a vote that executed the revoke, a vote that did not reach the registry
+        return send({
+          data: [
+            { transaction_hash: TX_DAO_REVOKE, block_timestamp: nsAt(now - 3000), signer_account_id: COUNCIL, receiver_account_id: DAO, outcomes: { status: true }, actions: [{ action: "FUNCTION_CALL", method: "act_proposal" }] },
+            { transaction_hash: "DaoVoteOnly", block_timestamp: nsAt(now - 4000), signer_account_id: COUNCIL, receiver_account_id: DAO, outcomes: { status: true }, actions: [{ action: "FUNCTION_CALL", method: "act_proposal" }] },
+          ],
         });
-        const all = [
-          rc("FailedTx", "RcFailed", "allow_compose", OWNER, now - 6000, false),
-          rc(TX_ALLOW, "RcAllow", "allow_compose", OWNER, now - 9000),
-          rc(TX_DAO_REVOKE, "RcDaoRevoke", "revoke_compose", DAO, now - 3000),
-        ];
-        return send({ data: all.filter((r) => (r as { actions: { method: string }[] }).actions[0]!.method === url.searchParams.get("method")) });
       }
       if (url.pathname.startsWith("/v3/accounts/")) {
         hits.push("nearblocks");
@@ -67,9 +65,16 @@ async function startChain(reg: RegistryReader & { getInstance: RegistryReader["g
       const p = body.params;
       hits.push(`${body.method}:${p.request_type ?? ""}:${p.method_name ?? ""}`);
       const ok = (result: unknown): void => send({ jsonrpc: "2.0", id: body.id, result });
-      if (body.method === "EXPERIMENTAL_receipt") {
-        const hash = p.receipt_id === "RcDaoRevoke" ? "ef".repeat(32) : "ab".repeat(32);
-        return ok({ receipt: { Action: { actions: [{ FunctionCall: { args: b64({ hash }) } }] } } });
+      if (body.method === "EXPERIMENTAL_tx_status") {
+        const executed = p.tx_hash === TX_DAO_REVOKE;
+        const fc = (method_name: string, args: unknown): unknown => ({ Action: { actions: [{ FunctionCall: { method_name, args: b64(args) } }] } });
+        return ok({
+          receipts: [
+            { receipt_id: "R1", predecessor_id: COUNCIL, receiver_id: DAO, receipt: fc("act_proposal", { id: 2, action: "VoteApprove" }) },
+            ...(executed ? [{ receipt_id: "R2", predecessor_id: DAO, receiver_id: REGISTRY_ACCOUNT, receipt: fc("revoke_compose", { hash: "ef".repeat(32) }) }] : []),
+          ],
+          receipts_outcome: [{ id: "R1", outcome: { status: { SuccessValue: "" } } }, { id: "R2", outcome: { status: { SuccessValue: "" } } }],
+        });
       }
       if (body.method === "tx") {
         return ok({
@@ -83,7 +88,7 @@ async function startChain(reg: RegistryReader & { getInstance: RegistryReader["g
       const args = JSON.parse(Buffer.from(p.args_base64 ?? "e30=", "base64").toString("utf8")) as Record<string, unknown>;
       let value: unknown;
       switch (p.method_name) {
-        case "get_owner": value = OWNER; break;
+        case "get_owner": value = DAO; break; // the owner is now a DAO; the allow_compose below was signed by the earlier owner
         case "get_root": value = await reg.getRoot(); break;
         case "is_compose_allowed": value = await reg.isComposeAllowed(args.hash as string); break;
         case "is_os_allowed": value = await reg.isOsAllowed(args.hash as string); break;
@@ -154,9 +159,9 @@ describe("getStatus: exit running and verified", () => {
     expect(s.verify.checks.at(-2)!.name).toContain("registry re-check");
     expect(s.verify.checks.at(-1)!.name).toContain("remote DNS");
     expect(s.instance).toMatchObject({ operator: OPERATOR, key_hash: X.keyHash, registration_tx: TX_REG, registration_gas_tgas: 6 });
-    expect(s.registry).toMatchObject({ account: REGISTRY_ACCOUNT, owner: OWNER, root: "MOCK", code_hash: "CodeHash11111111111111111111111111111111111", full_access_keys: 0, reproducible_build: null });
-    // newest first; the failed call is not listed; the revoke a DAO owner executed (a receipt inside the DAO's
-    // act_proposal transaction) is listed with its hash and the DAO as the caller
+    expect(s.registry).toMatchObject({ account: REGISTRY_ACCOUNT, owner: DAO, root: "MOCK", code_hash: "CodeHash11111111111111111111111111111111111", full_access_keys: 0, reproducible_build: null });
+    // newest first; the failed transaction is not listed; the revoke the DAO owner executed (inside its
+    // act_proposal transaction) is listed with its hash and the DAO as the caller; a vote that executed nothing is not
     expect(s.registry.events.map((e) => [e.kind, e.tx, e.by])).toEqual([
       ["revoke_compose", TX_DAO_REVOKE, DAO],
       ["register_instance_tdx", TX_REG, OPERATOR],
@@ -229,7 +234,7 @@ describe("getStatus: exit stopped", () => {
     expect(s.verify.checks.some((c) => c.ok)).toBe(false);
     expect(s.replay?.verdict).toBe("VERIFIED");
     expect(s.replay?.compose?.logging).toBe("none");
-    expect(s.registry.owner).toBe(OWNER);
+    expect(s.registry.owner).toBe(DAO);
   });
 });
 

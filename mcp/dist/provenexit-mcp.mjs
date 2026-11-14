@@ -77973,25 +77973,25 @@ async function listTxns(fetchFn, api, account, ms, maxPages) {
   }
   return out;
 }
-async function listOwnerCalls(fetchFn, api, account, ms) {
-  const deadline = Date.now() + ms;
-  const methods = [...EVENT_METHODS].filter((m) => m !== "register_instance_tdx");
-  const lists = await Promise.all(methods.map(async (m) => {
-    const url = `${api}/accounts/${encodeURIComponent(account)}/receipts?per_page=25&method=${m}`;
-    const j = await getJson(fetchFn, url, Math.max(500, deadline - Date.now()));
-    if (!Array.isArray(j.data))
-      throw new Error("NearBlocks: malformed reply");
-    return j.data.flatMap((r) => {
-      const ts = r.block?.block_timestamp ?? r.included_in_block_timestamp;
-      const method = r.actions?.[0]?.method;
-      if (r.outcome?.status !== true || method !== m || r.receiver_account_id !== account)
+async function listDaoCalls(fetchFn, api, rpc, owner, registry2, ms, chainMs) {
+  const txns = (await listTxns(fetchFn, api, owner, ms, 1)).filter((t) => t.method === "act_proposal");
+  const found = await Promise.all(txns.map(async (t) => {
+    const r = await withTimeout(rpcCall(fetchFn, rpc, "EXPERIMENTAL_tx_status", { tx_hash: t.hash, sender_account_id: t.signer, wait_until: "FINAL" }, chainMs), chainMs + 500, "tx").catch(() => null);
+    if (r === null)
+      return [];
+    const ok = new Set((r.receipts_outcome ?? []).filter((o) => typeof o.outcome?.status === "object" && o.outcome.status !== null && "SuccessValue" in o.outcome.status).map((o) => o.id));
+    return (r.receipts ?? []).flatMap((rc) => {
+      if (rc.predecessor_id !== owner || rc.receiver_id !== registry2 || !ok.has(rc.receipt_id))
         return [];
-      if (typeof r.transaction_hash !== "string" || typeof r.receipt_id !== "string" || typeof ts !== "string")
+      const actions2 = rc.receipt?.Action?.actions;
+      const fc = Array.isArray(actions2) ? actions2[0]?.FunctionCall : void 0;
+      const method = fc?.method_name;
+      if (typeof method !== "string" || !EVENT_METHODS.has(method) || method === "register_instance_tdx")
         return [];
-      return [{ hash: r.transaction_hash, receiptId: r.receipt_id, method: m, caller: String(r.predecessor_account_id ?? ""), tsMs: Number(BigInt(ts) / 1000000n) }];
+      return [{ hash: t.hash, method, args: parseArgs(fc?.args), caller: owner, tsMs: t.tsMs }];
     });
   }));
-  return lists.flat();
+  return found.flat();
 }
 function parseArgs(b64) {
   if (typeof b64 !== "string")
@@ -78002,12 +78002,6 @@ function parseArgs(b64) {
   } catch {
     return null;
   }
-}
-async function receiptArgs(fetchFn, rpc, receiptId, ms) {
-  const r = await rpcCall(fetchFn, rpc, "EXPERIMENTAL_receipt", { receipt_id: receiptId }, ms);
-  const actions2 = r.receipt?.Action?.actions;
-  const fc = Array.isArray(actions2) ? actions2[0]?.FunctionCall : void 0;
-  return parseArgs(fc?.args);
 }
 async function txDetail(fetchFn, rpc, t, ms) {
   const r = await rpcCall(fetchFn, rpc, "tx", { tx_hash: t.hash, sender_account_id: t.signer, wait_until: "FINAL" }, ms);
@@ -78209,8 +78203,8 @@ async function getStatus(opts = {}) {
     return { owner: str2(owner), root: root.kind, code_hash: acct, full_access_keys: keys };
   })();
   const txnsP = withTimeout(listTxns(fetchFn, nearBlocks, cfg.registry, T.events, MAX_EVENT_PAGES), T.events + 500, "NearBlocks").catch(() => null);
-  const ownerP = withTimeout(listOwnerCalls(fetchFn, nearBlocks, cfg.registry, T.events), T.events + 500, "NearBlocks").catch(() => null);
-  const [online, verify, facts, txns, ownerCalls] = await Promise.all([healthP, verifyP, regFacts.catch((e) => e), txnsP, ownerP]);
+  const daoP = regFacts.then((f) => f.owner === null ? [] : withTimeout(listDaoCalls(fetchFn, nearBlocks, archival, f.owner, cfg.registry, T.events, T.chain), T.events + T.chain + 1e3, "NearBlocks")).catch(() => null);
+  const [online, verify, facts, txns, daoCalls] = await Promise.all([healthP, verifyP, regFacts.catch((e) => e), txnsP, daoP]);
   status.exit.online = online;
   status.replay = await replayP;
   let registryError = null;
@@ -78285,16 +78279,25 @@ async function getStatus(opts = {}) {
     } catch {
     }
   }
-  if (txns !== null || ownerCalls !== null) {
-    const regs = (txns ?? []).filter((t) => t.method === "register_instance_tdx");
-    const owner = [...ownerCalls ?? []].sort((a, b) => b.tsMs - a.tsMs).slice(0, MAX_EVENTS2);
-    const args = await Promise.all(owner.map((o) => withTimeout(receiptArgs(fetchFn, archival, o.receiptId, T.chain), T.chain + 500, "receipt").catch(() => null)));
+  if (txns !== null || daoCalls !== null) {
+    const wanted = (txns ?? []).filter((t) => EVENT_METHODS.has(t.method)).slice(0, MAX_EVENTS2);
+    const details = await Promise.all(wanted.map((t) => t.method === "register_instance_tdx" ? Promise.resolve(null) : withTimeout(txDetail(fetchFn, archival, t, T.chain), T.chain + 500, "tx").catch(() => null)));
     const events = [
-      ...regs.map((t) => ({ kind: t.method, hash: null, account: t.signer, org: null, by: t.signer, tx: t.hash, at: iso(t.tsMs), tsMs: t.tsMs })),
-      ...owner.map((o, i) => {
-        const a = args[i] ?? null;
-        return { kind: o.method, hash: str2(a?.hash), account: str2(a?.account_id), org: str2(a?.org_id), by: o.caller, tx: o.hash, at: iso(o.tsMs), tsMs: o.tsMs };
-      })
+      ...wanted.map((t, i) => {
+        const a = details[i]?.args ?? null;
+        const account = t.method === "register_instance_tdx" ? t.signer : str2(a?.account_id);
+        return { kind: t.method, hash: str2(a?.hash), account, org: str2(a?.org_id), by: t.signer, tx: t.hash, at: iso(t.tsMs), tsMs: t.tsMs };
+      }),
+      ...(daoCalls ?? []).map((d) => ({
+        kind: d.method,
+        hash: str2(d.args?.hash),
+        account: str2(d.args?.account_id),
+        org: str2(d.args?.org_id),
+        by: d.caller,
+        tx: d.hash,
+        at: iso(d.tsMs),
+        tsMs: d.tsMs
+      }))
     ];
     events.sort((a, b) => b.tsMs - a.tsMs);
     status.registry.events = events.slice(0, MAX_EVENTS2).map(({ tsMs: _t, ...e }) => e);

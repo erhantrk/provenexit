@@ -239,39 +239,48 @@ interface TxDetail {
   gasTgas: number | null;
 }
 
-/** An owner call that reached the registry: signed by the owner directly, or executed by a DAO owner's proposal. */
-interface OwnerCall {
+/** An owner call a DAO owner executed on the registry (inside the DAO's `act_proposal` transaction). */
+interface DaoCall {
   hash: string;
-  receiptId: string;
   method: string;
-  /** The account that called the registry (the owner, e.g. the council DAO). */
+  args: Record<string, unknown> | null;
+  /** The DAO account that called the registry. */
   caller: string;
   tsMs: number;
 }
 
 /**
- * NearBlocks v3 `accounts/<id>/receipts?method=<m>` for each owner method, successful receipts only. Receipts, not
- * transactions: once the owner is a DAO, `revoke_compose` & co. run inside the DAO's `act_proposal` transaction and
- * never appear as a transaction's own method.
+ * Owner calls a DAO owner executed. Once the owner is a DAO, `revoke_compose` & co. run inside the DAO's
+ * `act_proposal` transaction, so the registry's own transaction list never shows them. One NearBlocks request (the
+ * owner's newest transactions), then archival `EXPERIMENTAL_tx_status` for each `act_proposal` to find the receipt
+ * the owner sent to the registry, its method, its arguments and whether it succeeded.
  */
-async function listOwnerCalls(fetchFn: typeof fetch, api: string, account: string, ms: number): Promise<OwnerCall[]> {
-  const deadline = Date.now() + ms;
-  const methods = [...EVENT_METHODS].filter((m) => m !== "register_instance_tdx");
-  const lists = await Promise.all(
-    methods.map(async (m) => {
-      const url = `${api}/accounts/${encodeURIComponent(account)}/receipts?per_page=25&method=${m}`;
-      const j = (await getJson(fetchFn, url, Math.max(500, deadline - Date.now()))) as { data?: unknown };
-      if (!Array.isArray(j.data)) throw new Error("NearBlocks: malformed reply");
-      return (j.data as Record<string, unknown>[]).flatMap((r): OwnerCall[] => {
-        const ts = (r.block as { block_timestamp?: unknown } | undefined)?.block_timestamp ?? r.included_in_block_timestamp;
-        const method = (r.actions as { method?: unknown }[] | undefined)?.[0]?.method;
-        if ((r.outcome as { status?: unknown } | undefined)?.status !== true || method !== m || r.receiver_account_id !== account) return [];
-        if (typeof r.transaction_hash !== "string" || typeof r.receipt_id !== "string" || typeof ts !== "string") return [];
-        return [{ hash: r.transaction_hash, receiptId: r.receipt_id, method: m, caller: String(r.predecessor_account_id ?? ""), tsMs: Number(BigInt(ts) / 1_000_000n) }];
+async function listDaoCalls(fetchFn: typeof fetch, api: string, rpc: string, owner: string, registry: string, ms: number, chainMs: number): Promise<DaoCall[]> {
+  const txns = (await listTxns(fetchFn, api, owner, ms, 1)).filter((t) => t.method === "act_proposal");
+  const found = await Promise.all(
+    txns.map(async (t): Promise<DaoCall[]> => {
+      const r = await withTimeout(
+        rpcCall(fetchFn, rpc, "EXPERIMENTAL_tx_status", { tx_hash: t.hash, sender_account_id: t.signer, wait_until: "FINAL" }, chainMs),
+        chainMs + 500,
+        "tx",
+      ).catch(() => null);
+      if (r === null) return [];
+      const ok = new Set(
+        ((r.receipts_outcome ?? []) as { id?: unknown; outcome?: { status?: unknown } }[])
+          .filter((o) => typeof o.outcome?.status === "object" && o.outcome.status !== null && "SuccessValue" in o.outcome.status)
+          .map((o) => o.id),
+      );
+      return ((r.receipts ?? []) as { receipt_id?: unknown; predecessor_id?: unknown; receiver_id?: unknown; receipt?: { Action?: { actions?: unknown } } }[]).flatMap((rc): DaoCall[] => {
+        if (rc.predecessor_id !== owner || rc.receiver_id !== registry || !ok.has(rc.receipt_id)) return [];
+        const actions = rc.receipt?.Action?.actions;
+        const fc = Array.isArray(actions) ? (actions[0] as { FunctionCall?: { method_name?: unknown; args?: unknown } } | undefined)?.FunctionCall : undefined;
+        const method = fc?.method_name;
+        if (typeof method !== "string" || !EVENT_METHODS.has(method) || method === "register_instance_tdx") return [];
+        return [{ hash: t.hash, method, args: parseArgs(fc?.args), caller: owner, tsMs: t.tsMs }];
       });
     }),
   );
-  return lists.flat();
+  return found.flat();
 }
 
 function parseArgs(b64: unknown): Record<string, unknown> | null {
@@ -282,14 +291,6 @@ function parseArgs(b64: unknown): Record<string, unknown> | null {
   } catch {
     return null;
   }
-}
-
-/** Archival `EXPERIMENTAL_receipt`: the receipt's first FunctionCall's JSON args. */
-async function receiptArgs(fetchFn: typeof fetch, rpc: string, receiptId: string, ms: number): Promise<Record<string, unknown> | null> {
-  const r = await rpcCall(fetchFn, rpc, "EXPERIMENTAL_receipt", { receipt_id: receiptId }, ms);
-  const actions = (r.receipt as { Action?: { actions?: unknown } } | undefined)?.Action?.actions;
-  const fc = Array.isArray(actions) ? (actions[0] as { FunctionCall?: { args?: unknown } } | undefined)?.FunctionCall : undefined;
-  return parseArgs(fc?.args);
 }
 
 /** Archival `tx`: first FunctionCall's JSON args, and total gas burnt (tx + all receipts) in Tgas. */
@@ -520,9 +521,12 @@ export async function getStatus(opts: StatusOptions = {}): Promise<Status> {
     return { owner: str(owner), root: root.kind, code_hash: acct, full_access_keys: keys };
   })();
   const txnsP = withTimeout(listTxns(fetchFn, nearBlocks, cfg.registry, T.events, MAX_EVENT_PAGES), T.events + 500, "NearBlocks").catch(() => null);
-  const ownerP = withTimeout(listOwnerCalls(fetchFn, nearBlocks, cfg.registry, T.events), T.events + 500, "NearBlocks").catch(() => null);
+  // owner calls a DAO owner executed (needs the owner's account id first; a plain-account owner yields none)
+  const daoP = regFacts
+    .then((f) => (f.owner === null ? [] : withTimeout(listDaoCalls(fetchFn, nearBlocks, archival, f.owner, cfg.registry, T.events, T.chain), T.events + T.chain + 1000, "NearBlocks")))
+    .catch(() => null);
 
-  const [online, verify, facts, txns, ownerCalls] = await Promise.all([healthP, verifyP, regFacts.catch((e: unknown) => e as Error), txnsP, ownerP]);
+  const [online, verify, facts, txns, daoCalls] = await Promise.all([healthP, verifyP, regFacts.catch((e: unknown) => e as Error), txnsP, daoP]);
   status.exit.online = online;
   status.replay = await replayP;
 
@@ -605,18 +609,22 @@ export async function getStatus(opts: StatusOptions = {}): Promise<Status> {
     }
   }
 
-  // 6. registry events (newest first): registrations from the transaction list; owner calls from the receipt list
-  //    (so calls a DAO owner executes are included), with call arguments from the archival RPC
-  if (txns !== null || ownerCalls !== null) {
-    const regs = (txns ?? []).filter((t) => t.method === "register_instance_tdx");
-    const owner = [...(ownerCalls ?? [])].sort((a, b) => b.tsMs - a.tsMs).slice(0, MAX_EVENTS);
-    const args = await Promise.all(owner.map((o) => withTimeout(receiptArgs(fetchFn, archival, o.receiptId, T.chain), T.chain + 500, "receipt").catch(() => null)));
+  // 6. registry events (newest first) with call arguments from the archival RPC: calls signed directly (the
+  //    registry's transaction list) plus owner calls a DAO owner executed (inside its act_proposal transactions)
+  if (txns !== null || daoCalls !== null) {
+    const wanted = (txns ?? []).filter((t) => EVENT_METHODS.has(t.method)).slice(0, MAX_EVENTS);
+    const details = await Promise.all(
+      wanted.map((t) => (t.method === "register_instance_tdx" ? Promise.resolve(null) : withTimeout(txDetail(fetchFn, archival, t, T.chain), T.chain + 500, "tx").catch(() => null))),
+    );
     const events: (RegistryEvent & { tsMs: number })[] = [
-      ...regs.map((t) => ({ kind: t.method, hash: null, account: t.signer, org: null, by: t.signer, tx: t.hash, at: iso(t.tsMs), tsMs: t.tsMs })),
-      ...owner.map((o, i) => {
-        const a = args[i] ?? null;
-        return { kind: o.method, hash: str(a?.hash), account: str(a?.account_id), org: str(a?.org_id), by: o.caller, tx: o.hash, at: iso(o.tsMs), tsMs: o.tsMs };
+      ...wanted.map((t, i) => {
+        const a = details[i]?.args ?? null;
+        const account = t.method === "register_instance_tdx" ? t.signer : str(a?.account_id);
+        return { kind: t.method, hash: str(a?.hash), account, org: str(a?.org_id), by: t.signer, tx: t.hash, at: iso(t.tsMs), tsMs: t.tsMs };
       }),
+      ...(daoCalls ?? []).map((d) => ({
+        kind: d.method, hash: str(d.args?.hash), account: str(d.args?.account_id), org: str(d.args?.org_id), by: d.caller, tx: d.hash, at: iso(d.tsMs), tsMs: d.tsMs,
+      })),
     ];
     events.sort((a, b) => b.tsMs - a.tsMs);
     status.registry.events = events.slice(0, MAX_EVENTS).map(({ tsMs: _t, ...e }) => e);
