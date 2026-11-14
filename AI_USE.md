@@ -16,8 +16,10 @@ an account, a key or a payment.
 | Testnet / cloud operations | **Claude** sessions acting as the "operator" | testnet account setup and the contract deploy/allowlist/signed calls, and the harmless Phala Cloud quote-dump test CVM on 2026-11-09. Every owner transaction was signed from Erhan's near-cli-rs keychain; no key was ever printed or given to an AI |
 | Review | **Claude** | the strict review passes recorded as `fix: day1 review`, `fix: day2 review`, `fix: day3 review` in `git log` |
 
-"Pre-hackathon" / "October baseline" in this file means commits `c2a35e4`..`9bd402e` (2026-10-23/24), the disclosed
-baseline described in the README's "Prior code" section and in [`docs/HISTORY.md`](docs/HISTORY.md); the judged work is `9bd402e` onward.
+"Pre-hackathon" / "October baseline" in this file means commits `c2a35e4`..`9bd402e` (2026-10-23/24), the first
+commits described in the README's "Prior code" section and in [`docs/HISTORY.md`](docs/HISTORY.md). They come after the
+2026-10-19 announcement, so they fall inside the hackathon window (HACKATHON.md Q-001); the work since 2026-11-01 is
+`9bd402e` onward.
 
 Humans: **Erhan Türker** — name, design decisions, threat model, review, accounts, keys, Phala account and billing,
 the submission form. The plan's guardrails

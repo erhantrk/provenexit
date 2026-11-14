@@ -5,9 +5,10 @@ listed in [VERIFY.md](VERIFY.md#the-on-chain-record).
 
 ## Prior code and the hackathon window
 
-- **Disclosed baseline:** commits `c2a35e4`..`9bd402e` (2026-10-23/24: after the hackathon's 2026-10-19
-  announcement, before its 2026-11-01 start) built the mock-root protocol, the NEAR registry, the VPN exit, a private
-  LLM router and registries on other chains. They are prior work and are not claimed as hackathon work. Their README
+- **First commits:** `c2a35e4`..`9bd402e` (2026-10-23/24: after the hackathon's 2026-10-19
+  announcement, before its 2026-11-01 build start) built the mock-root protocol, the NEAR registry, the VPN exit, a private
+  LLM router and registries on other chains. Per HACKATHON.md Q-001 code from the announcement on counts, so they fall
+  inside the hackathon window; they are disclosed here so the work since 2026-11-01 is easy to tell apart. Their README
   is [the baseline README at `9bd402e`](https://github.com/erhantrk/provenexit/blob/9bd402e70b0f909c07f88244d363913f29cc1096/README.md);
   it describes code that is no longer in the tree, and its commands do not run on the current tree.
 - **Hackathon work:** everything after `9bd402e` (commits from 2026-11-11; the first real quote is from 2026-11-09): the real Intel TDX path (dstack event log, DCAP in

@@ -127,13 +127,18 @@ Built for the NEAR hackathon (2026-11). Tracks: Privacy & Private AI (main) · A
 
 ## Prior code
 
-Commits `c2a35e4`..`9bd402e` (2026-10-23/24, before the hackathon started on 2026-11-01) are disclosed prior work:
-the mock-root protocol, the NEAR registry, the VPN exit, plus a private LLM router and registries on other chains
-that were removed from the tree on 2026-11-12. Their README is
-[the baseline README at `9bd402e`](https://github.com/erhantrk/provenexit/blob/9bd402e70b0f909c07f88244d363913f29cc1096/README.md).
-The hackathon work is everything after `9bd402e`: the real Intel TDX path (DCAP in the client and on chain, the
+The hackathon window opened with the announcement on 2026-10-19
+([HACKATHON.md](https://nearhackathon.com/HACKATHON.md) Q-001: code from then counts, earlier commits are baseline), so
+every commit in this repository falls inside it; nothing here predates the window.
+
+The first commits, `c2a35e4`..`9bd402e` (2026-10-23/24, before the 2026-11-01 build start), built the mock-root
+protocol, the NEAR registry and the VPN exit, plus a private LLM router and registries on other chains that were
+removed from the tree on 2026-11-12. Their README is
+[the README at `9bd402e`](https://github.com/erhantrk/provenexit/blob/9bd402e70b0f909c07f88244d363913f29cc1096/README.md).
+Everything after `9bd402e` is the work since 2026-11-01: the real Intel TDX path (DCAP in the client and on chain, the
 dstack event log, the compose policy), the live exit, the reproducible image and the keyless registry
-([diff](https://github.com/erhantrk/provenexit/compare/9bd402e...main)). Details: [docs/HISTORY.md](docs/HISTORY.md).
+([diff](https://github.com/erhantrk/provenexit/compare/9bd402e...main)). Tags: `pre-hackathon` marks the first commit
+(`c2a35e4`), `hackathon-submission` the submitted version. Details: [docs/HISTORY.md](docs/HISTORY.md).
 
 ## AI use
 
